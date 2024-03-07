@@ -1,0 +1,46 @@
+#%%
+import h5py
+import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+import pyStatSTEM.classes as ps
+import pyStatSTEM
+# matplotlib.use('Tkagg')
+
+#%%
+# READ DATA FROM FILE
+# requried variable: raw image, fitted model (for comparison)
+
+path_to_data="../Example_Au.mat"
+# path_to_data="./Examples/Example_PtIr.mat"
+legacyStatSTEM = pyStatSTEM.io.read_legacyInputStatSTEM(path_to_data)
+inputStatSTEM = legacyStatSTEM["input"]
+outputStatSTEM = legacyStatSTEM["output"]
+atomcountsStatSTEM = legacyStatSTEM["atomcounting"]
+image = inputStatSTEM["obs"]
+model = outputStatSTEM['model']
+
+# %%
+# START THE FITTING PROCESS
+# initialize ImageProcess object with image
+# for find_peak, use distance threshold = 15 px, intensity threshold = 0.05 maximum
+# call fit_gaussian to fit
+# plot_image plots raw image, processed image, fitted coordinate, fitted image
+
+I = ps.ImageProcess(image)
+I.find_peak(th_dist=15, th_inten=0.05, b_user_confirm=True)
+I.fit_gaussian(idiv_sig=True)
+I.plot_image()
+
+
+#%%
+# COMPARE WITH PREVIOUS RESULT
+
+fig, ax = plt.subplots(1,2)
+ax[0].imshow(model-image)
+ax[1].imshow(I.image_fitted[0]-I.image[0])
+print('MSE original: ', np.array((model-image)**2).mean() ,'\n',
+      'MSE python: ', np.array((I.image_fitted[0]-I.image[0])**2).mean())
+fig.dpi = 300
+
+# %%
