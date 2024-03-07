@@ -1,5 +1,5 @@
 # Welcome to QEM
-### This is the python version of StatSTEM
+### This is the Python version of StatSTEM
 
 
 

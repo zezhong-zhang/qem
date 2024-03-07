@@ -3,7 +3,8 @@ import matplotlib.pyplot as plt
 from cv2 import GaussianBlur, moments
 from skimage import segmentation
 from .DM import dm_load
-
+from skimage.feature import canny
+from scipy import ndimage as ndi
 # from numba import jit, njit, prange
 
 
@@ -158,9 +159,6 @@ class Detector:
         return self.binary_mask
 
     def edge_mask(self):
-        from skimage.feature import canny
-        from scipy import ndimage as ndi
-
         edges = canny(self.detector_smooth, sigma=3)
         plt.imshow(edges, cmap="gray")
         fill_detector = ndi.binary_fill_holes(edges)

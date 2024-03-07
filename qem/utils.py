@@ -90,7 +90,7 @@ def ifft2d(array):
     return np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(array)))
 
 
-def onclick(event, tolerance):
+def onclick(event, peaks_locations, tolerance):
     # Check if the click is a double click
     if event.dblclick:
         y = event.ydata

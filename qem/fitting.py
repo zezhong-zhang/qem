@@ -1,20 +1,17 @@
-import numpy as np
+import jax
 import matplotlib.pyplot as plt
-from skimage.feature import peak_local_max
-from .utils import InteractivePlot
-from .model import (
-    voigt_sum,
-    gaussian_sum,
-    butterworth_window,
-)
+import numpy as np
+import optax
+from jax import numpy as jnp
 from jax import value_and_grad
 from jax.example_libraries import optimizers
-from tqdm import tqdm
 # from scipy.ndimage import center_of_mass
 from jaxopt import OptaxSolver
-from jax import numpy as jnp
-import optax
-import jax
+from skimage.feature import peak_local_max
+from tqdm import tqdm
+
+from .model import butterworth_window, gaussian_sum, voigt_sum
+from .utils import InteractivePlot
 
 
 class ImageModelFitting:
