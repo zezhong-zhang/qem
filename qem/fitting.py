@@ -39,7 +39,7 @@ class ImageModelFitting:
     @property
     def window(self):
         if self.fit_local:
-            window = butterworth_window(self.local_shape, 0.4, 5)
+            window = butterworth_window(self.local_shape, 0.5, 1)
         else:
             window = butterworth_window(self.image.shape, 0.5, 10)
         return window
@@ -259,6 +259,7 @@ class ImageModelFitting:
         tol=1e-4,
         patch_size=100,
         buffer_size=None,
+        stride_size=None,
         plot=False,
     ):
         self.fit_local = True
@@ -269,24 +270,24 @@ class ImageModelFitting:
             width, _, _ = (
                 self.guess_radius()
             )  # Assuming width is a property of your class
-            buffer_size = 3 * int(width)
-        # stride_size = int(patch_size / 2)
+            buffer_size = 5 * int(width)
+        stride_size = int(patch_size / 2)
         # create a sqaure patch with patch_size
-        for i in tqdm(range(0, self.nx, patch_size)):
-            for j in tqdm(range(0, self.ny, patch_size)):
+        for i in tqdm(range(0, self.nx, stride_size)):
+            for j in tqdm(range(0, self.ny, stride_size)):
                 # get the region of the image based on the patch_size and buffer_size
                 # the buffer_size is on both sides of the patch
-                left = max(i - buffer_size, 0)
-                right = min(i + patch_size + buffer_size, self.nx)
-                top = max(j - buffer_size, 0)
-                bottom = min(j + patch_size + buffer_size, self.ny)
+                left = max(i -half_patch - buffer_size, 0)
+                right = min(i + half_patch + buffer_size, self.nx)
+                top = max(j - half_patch - buffer_size, 0)
+                bottom = min(j + half_patch + buffer_size, self.ny)
                 image_region = self.image[left:right, top:bottom]
                 self.local_shape = image_region.shape
 
-                center_left = max(i, 0)
-                center_right = min(i + patch_size, self.nx)
-                center_top = max(j, 0)
-                center_bottom = min(j + patch_size, self.ny)
+                center_left = max(i- half_patch, 0)
+                center_right = min(i + half_patch, self.nx)
+                center_top = max(j- half_patch, 0)
+                center_bottom = min(j + half_patch, self.ny)
                 # get the region of the coordinates
                 region_atoms = atom_positions[
                     np.where(
@@ -331,15 +332,7 @@ class ImageModelFitting:
                     global_prediction[left:right, top:bottom] - local_prediction
                 )
                 local_target = image_region - local_residual
-                local_params = self.region_gradient(
-                    local_target,
-                    local_params,
-                    local_X,
-                    local_Y,
-                    step_size=step_size,
-                    maxiter=maxiter,
-                    tol=tol,
-                )
+                local_params = self.optimize(local_target, local_params, local_X, local_Y, maxiter, tol, step_size)
 
                 if plot:
                     plt.subplots(1, 3, figsize=(15, 5))
@@ -407,22 +400,19 @@ class ImageModelFitting:
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
 
-    def fit(self, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
-        # if self.params is None:
-        params = self.init_params()
-        # elif len(self.params['pos_x']) != self.num_coordinates:
-        #     params = self.init_params()
-        # else:
-        #     params = self.params
-        # use the jaxopt to optimize the parameters using the BFGS
+    def optimize(self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
         opt = optax.adam(step_size)
         solver = OptaxSolver(
             opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
         )
-        # solver = jaxopt.LevenbergMarquardt(self.residual, maxiter=1000, tol=tol)
-        # solver = jaxopt.GradientDescent(fun=self.loss, maxiter=500)
-        res = solver.run(params, image=self.image, X=self.X, Y=self.Y)
+        res = solver.run(params, image=image, X=X, Y=Y)
         params = res[0]
+        return params
+
+
+    def fit_global(self, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
+        params = self.init_params()
+        params = self.optimize(self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose)
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
 
