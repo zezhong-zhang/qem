@@ -271,10 +271,12 @@ class ImageModelFitting:
                 self.guess_radius()
             )  # Assuming width is a property of your class
             buffer_size = 5 * int(width)
-        stride_size = int(patch_size / 2)
+        if stride_size is None:
+            stride_size = int(patch_size / 2)
         # create a sqaure patch with patch_size
-        for i in tqdm(range(0, self.nx, stride_size)):
-            for j in tqdm(range(0, self.ny, stride_size)):
+        half_patch = int(patch_size / 2)    
+        for i in tqdm(range(half_patch, self.nx, stride_size)):
+            for j in tqdm(range(half_patch, self.ny, stride_size)):
                 # get the region of the image based on the patch_size and buffer_size
                 # the buffer_size is on both sides of the patch
                 left = max(i -half_patch - buffer_size, 0)
@@ -383,19 +385,12 @@ class ImageModelFitting:
                 # update the parameters only to the central atoms according to the mask_central
                 for key, value in local_params.items():
                     if key not in ["background", "ratio"]:
-                        i_x, i_y = local_params["pos_x"].astype(int), local_params["pos_y"].astype(int)
-                        i_x = np.minimum(np.maximum(i_x - left, 0), right-left-1)
-                        i_y = np.minimum(np.maximum(i_y - top, 0), bottom-top-1)
-                        weight = self.window[i_x, i_y]
-                        update  = params[key][index_region_atoms] - value
-                        params[key][index_region_atoms] -= update * weight
-                        # value_central = value[mask_central]
+                        value_central = value[mask_central]
                         # check if the params[key] is jax array
-                        # params[key][index_central_atoms] = value_central
+                        params[key][index_central_atoms] = value_central
                         # params[key][index_region_atoms] = value
                     else:
-                        weight = len(index_region_atoms)/self.num_coordinates
-                        params[key] = value*weight + params[key]*(1-weight)
+                        params[key] = value
         # params = self.global_optimize(params)
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
