@@ -17,6 +17,8 @@ setup(
         "h5py>=2.0",
         "tqdm>=4.19.4",
         "scikit-image>=0.14.2",
+        "optax",
+        "numba",
     ],
     python_requires='>=3.6',
     extras_require={
@@ -30,6 +32,7 @@ setup(
             "hyperspy",
             "jupyterlab",
             "plotly",
+            "jaxopt"
         ],
     },
     tests_require=["pytest", "pytest-cov"],

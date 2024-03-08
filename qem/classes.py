@@ -10,7 +10,7 @@ from multiprocessing import Pool
 import timeit
 import math
 from numba import jit
-from qem.archieve.model_numba import gaussian,gaussian_sum_same_sigma, gaussian_sum_different_sigma, calc_fit_outcome, loss
+# from qem.archieve.model_numba import gaussian,gaussian_sum_same_sigma, gaussian_sum_different_sigma, calc_fit_outcome, loss
 from tqdm import tqdm
 # import partial
 
