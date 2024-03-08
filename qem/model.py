@@ -223,3 +223,13 @@ def gaussian_filter_jax(image: jnp.ndarray, sigma: float) -> jnp.ndarray:
     # Convolve the image with the Gaussian kernel
     filtered_image = convolve2d(image, kernel, mode='same')
     return filtered_image
+
+def mask_grads(grads, keys_to_mask):
+    """A pre-update function that masks out gradients for specified keys."""
+    # Extract gradients from the optimizer state    
+    # Zero out gradients for the keys to mask
+    masked_grads = {k: np.zeros_like(grads[k]) if k in keys_to_mask else grads[k] for k in grads}
+
+    # Update the state with masked gradients
+
+    return masked_grads

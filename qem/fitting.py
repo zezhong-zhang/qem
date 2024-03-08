@@ -10,7 +10,7 @@ from jaxopt import OptaxSolver
 from skimage.feature import peak_local_max
 from tqdm import tqdm
 
-from .model import butterworth_window, gaussian_sum, voigt_sum, gaussian_filter_jax
+from .model import butterworth_window, gaussian_sum, voigt_sum, mask_grads
 from .utils import InteractivePlot, make_mask_circle_centre, find_duplicate_row_indices, remove_close_coordinates
 
 class ImageModelFitting:
@@ -360,122 +360,129 @@ class ImageModelFitting:
             stride_size = int(patch_size / 2)
         # create a sqaure patch with patch_size
         half_patch = int(patch_size / 2)    
-        for i in tqdm(range(half_patch, self.nx, stride_size)):
-            for j in tqdm(range(half_patch, self.ny, stride_size)):
-                # get the region of the image based on the patch_size and buffer_size
-                # the buffer_size is on both sides of the patch
-                left = max(i -half_patch - buffer_size, 0)
-                right = min(i + half_patch + buffer_size, self.nx)
-                top = max(j - half_patch - buffer_size, 0)
-                bottom = min(j + half_patch + buffer_size, self.ny)
-                image_region = self.image[left:right, top:bottom]
-                self.local_shape = image_region.shape
+        for loop_idx in range(2):
+            for i in tqdm(range(half_patch, self.nx, stride_size)):
+                for j in tqdm(range(half_patch, self.ny, stride_size)):
+                    # get the region of the image based on the patch_size and buffer_size
+                    # the buffer_size is on both sides of the patch
+                    left = max(i -half_patch - buffer_size, 0)
+                    right = min(i + half_patch + buffer_size, self.nx)
+                    top = max(j - half_patch - buffer_size, 0)
+                    bottom = min(j + half_patch + buffer_size, self.ny)
+                    image_region = self.image[left:right, top:bottom]
+                    self.local_shape = image_region.shape
 
-                center_left = max(i- half_patch, 0)
-                center_right = min(i + half_patch, self.nx)
-                center_top = max(j- half_patch, 0)
-                center_bottom = min(j + half_patch, self.ny)
-                # get the region of the coordinates
-                region_atoms = atom_positions[
-                    np.where(
-                        (atom_positions[:, 0] > left)
-                        & (atom_positions[:, 0] < right)
-                        & (atom_positions[:, 1] > top)
-                        & (atom_positions[:, 1] < bottom)
+                    center_left = max(i- half_patch, 0)
+                    center_right = min(i + half_patch, self.nx)
+                    center_top = max(j- half_patch, 0)
+                    center_bottom = min(j + half_patch, self.ny)
+                    # get the region of the coordinates
+                    region_atoms = atom_positions[
+                        np.where(
+                            (atom_positions[:, 0] > left)
+                            & (atom_positions[:, 0] < right)
+                            & (atom_positions[:, 1] > top)
+                            & (atom_positions[:, 1] < bottom)
+                        )
+                    ]
+                    central_atoms = atom_positions[
+                        np.where(
+                            (atom_positions[:, 0] > center_left)
+                            & (atom_positions[:, 0] < center_right)
+                            & (atom_positions[:, 1] > center_top)
+                            & (atom_positions[:, 1] < center_bottom)
+                        )
+                    ]
+                    # get the buffer atoms as the difference between the region_atoms and the central_atoms
+                    local_X, local_Y = (
+                        self.X[left:right, top:bottom],
+                        self.Y[left:right, top:bottom],
                     )
-                ]
-                central_atoms = atom_positions[
-                    np.where(
-                        (atom_positions[:, 0] > center_left)
-                        & (atom_positions[:, 0] < center_right)
-                        & (atom_positions[:, 1] > center_top)
-                        & (atom_positions[:, 1] < center_bottom)
-                    )
-                ]
-                # get the buffer atoms as the difference between the region_atoms and the central_atoms
-                local_X, local_Y = (
-                    self.X[left:right, top:bottom],
-                    self.Y[left:right, top:bottom],
-                )
-                if len(central_atoms) == 0:
-                    continue
-                matches = (self.coordinates[:, None, :] == region_atoms).all(-1).any(1)
-                index_region_atoms = np.where(matches)[0]
-                matches = (self.coordinates[:, None, :] == central_atoms).all(-1).any(1)
-                index_central_atoms = np.where(matches)[0]
-                mask_central = np.isin(index_region_atoms, index_central_atoms)
-                local_params = {
-                    key: value[index_region_atoms]
-                    for key, value in params.items()
-                    if key not in ["background", "ratio"]
-                }
-                local_params["background"] = params["background"]
-                if "ratio" in params:
-                    local_params["ratio"] = params["ratio"]
+                    if len(central_atoms) == 0:
+                        continue
+                    matches = (self.coordinates[:, None, :] == region_atoms).all(-1).any(1)
+                    index_region_atoms = np.where(matches)[0]
+                    matches = (self.coordinates[:, None, :] == central_atoms).all(-1).any(1)
+                    index_central_atoms = np.where(matches)[0]
+                    mask_central = np.isin(index_region_atoms, index_central_atoms)
+                    local_params = {
+                        key: value[index_region_atoms]
+                        for key, value in params.items()
+                        if key not in ["background", "ratio"]
+                    }
+                    local_params["background"] = params["background"]
+                    if "ratio" in params:
+                        local_params["ratio"] = params["ratio"]
 
-                global_prediction = self.predict(params, self.X, self.Y)
-                local_prediction = self.predict(local_params, local_X, local_Y)
-                local_residual = (
-                    global_prediction[left:right, top:bottom] - local_prediction
-                )
-                local_target = image_region - local_residual
-                local_params = self.optimize(local_target, local_params, local_X, local_Y, maxiter, tol, step_size)
-
-                if plot:
-                    plt.subplots(1, 3, figsize=(15, 5))
-                    plt.subplot(1, 3, 1)
-                    plt.imshow(image_region, cmap="gray")
-                    # plt.imshow(image_region, cmap="gray")
-                    plt.scatter(
-                        region_atoms[:, 1] - top,
-                        region_atoms[:, 0] - left,
-                        color="b",
-                        s=1,
+                    global_prediction = self.predict(params, self.X, self.Y)
+                    local_prediction = self.predict(local_params, local_X, local_Y)
+                    local_residual = (
+                        global_prediction[left:right, top:bottom] - local_prediction
                     )
-                    plt.scatter(
-                        region_atoms[:, 1][mask_central] - top,
-                        region_atoms[:, 0][mask_central] - left,
-                        color="r",
-                        s=1,
-                    )
-                    # get equal aspect ratio
-                    plt.gca().set_aspect("equal", adjustable="box")
-                    # plt.gca().invert_yaxis()
-                    plt.subplot(1, 3, 2)
-                    prediction = self.predict(local_params, local_X, local_Y)
-                    plt.imshow(prediction, cmap="gray")
-                    # mask = (local_params["pos_x"] > left) & (local_params["pos_x"] < right) & (local_params["pos_y"] > top) & (local_params["pos_y"] < bottom)
-                    plt.scatter(
-                        local_params["pos_y"] - top,
-                        local_params["pos_x"] - left,
-                        color="b",
-                        s=1,
-                    )
-                    plt.scatter(
-                        local_params["pos_y"][mask_central] - top,
-                        local_params["pos_x"][mask_central] - left,
-                        color="r",
-                        s=1,
-                    )
-                    # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
-                    plt.gca().set_aspect("equal", adjustable="box")
-                    plt.subplot(1, 3, 3)
-                    plt.imshow(local_target - prediction, cmap="gray")
-                    # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
-                    plt.gca().set_aspect("equal", adjustable="box")
-
-                    # plt.gca().invert_yaxis()
-                    plt.show()
-
-                # update the parameters only to the central atoms according to the mask_central
-                for key, value in local_params.items():
-                    if key not in ["background", "ratio"]:
-                        value_central = value[mask_central]
-                        # check if the params[key] is jax array
-                        params[key][index_central_atoms] = value_central
-                        # params[key][index_region_atoms] = value
+                    local_target = image_region - local_residual
+                    # local_params = self.optimize(local_target, local_params, local_X, local_Y, maxiter, tol, step_size)
+                    if loop_idx == 0:
+                        local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = [])
                     else:
-                        params[key] = value
+                        local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background', 'ratio','sigma'])
+
+                    if plot:
+                        plt.subplots(1, 3, figsize=(15, 5))
+                        plt.subplot(1, 3, 1)
+                        plt.imshow(image_region, cmap="gray")
+                        # plt.imshow(image_region, cmap="gray")
+                        plt.scatter(
+                            region_atoms[:, 1] - top,
+                            region_atoms[:, 0] - left,
+                            color="b",
+                            s=1,
+                        )
+                        plt.scatter(
+                            region_atoms[:, 1][mask_central] - top,
+                            region_atoms[:, 0][mask_central] - left,
+                            color="r",
+                            s=1,
+                        )
+                        # get equal aspect ratio
+                        plt.gca().set_aspect("equal", adjustable="box")
+                        # plt.gca().invert_yaxis()
+                        plt.subplot(1, 3, 2)
+                        prediction = self.predict(local_params, local_X, local_Y)
+                        plt.imshow(prediction, cmap="gray")
+                        # mask = (local_params["pos_x"] > left) & (local_params["pos_x"] < right) & (local_params["pos_y"] > top) & (local_params["pos_y"] < bottom)
+                        plt.scatter(
+                            local_params["pos_y"] - top,
+                            local_params["pos_x"] - left,
+                            color="b",
+                            s=1,
+                        )
+                        plt.scatter(
+                            local_params["pos_y"][mask_central] - top,
+                            local_params["pos_x"][mask_central] - left,
+                            color="r",
+                            s=1,
+                        )
+                        # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
+                        plt.gca().set_aspect("equal", adjustable="box")
+                        plt.subplot(1, 3, 3)
+                        plt.imshow(local_target - prediction, cmap="gray")
+                        # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
+                        plt.gca().set_aspect("equal", adjustable="box")
+
+                        # plt.gca().invert_yaxis()
+                        plt.show()
+
+                    # update the parameters only to the central atoms according to the mask_central
+                    for key, value in local_params.items():
+                        if key not in ["background", "ratio"]:
+                            value_central = value[mask_central]
+                            # check if the params[key] is jax array
+                            params[key][index_central_atoms] = value_central
+                            # params[key][index_region_atoms] = value
+                        else:
+                            params[key] = value
+            # have a linear estimator of the background and height of the gaussian peaks
+            
         # params = self.global_optimize(params)
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
@@ -483,123 +490,69 @@ class ImageModelFitting:
     def optimize(self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
         opt = optax.adam(step_size)
         solver = OptaxSolver(
-            opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
-        )
+                opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
+            )
         res = solver.run(params, image=image, X=X, Y=Y)
         params = res[0]
         return params
 
 
+    
     def fit_global(self, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
         params = self.init_params()
         params = self.optimize(self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose)
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
 
-    def region_gradient(
+
+
+    def fit_gradient(
         self,
-        image_region,
-        local_params,
-        local_X,
-        local_Y,
+        image,
+        params,
+        X,
+        Y,
         step_size=0.001,
-        maxiter=1000,
+        maxiter=10000,
         tol=1e-4,
-        plot=False,
-        verbose=False,
+        keys_to_mask=None,
     ):
-        # Initialize the optimizer
         opt_init, opt_update, get_params = optimizers.adam(
             step_size=step_size, b1=0.9, b2=0.999
         )
-        opt_state = opt_init(local_params)
+        opt_state = opt_init(params)
+
+        def step(step_index,opt_state, params, image, X, Y, keys_to_mask=[]):
+            loss, grads = value_and_grad(self.loss)(params, image, X, Y)
+            masked_grads = mask_grads(grads, keys_to_mask)
+            opt_state = opt_update(step_index, masked_grads, opt_state)
+            return loss, opt_state
+
         # Initialize the loss
         loss = np.inf
         loss_list = []
-        # loss_list = []
         # Loop over the number of iterations
         for i in range(maxiter):
-            # Update the parameters
+            # Update the parameters   
             new_params = get_params(opt_state)
-            loss_new, opt_state = self.step(
-                i, opt_state, opt_update, new_params, image_region, local_X, local_Y
-            )
+            loss_new, opt_state = step(i, opt_state, new_params, image, X, Y, keys_to_mask)  
+
             # Check if the loss has converged
             if np.abs(loss - loss_new) < tol * loss:
                 break
             # Update the loss
             loss = loss_new
             loss_list.append(loss)
+
             # Print the loss every 10 iterations
-
-            if i % 10 == 0 and verbose:
+            if i % 10 == 0:
                 print(f"Iteration {i}: loss = {loss:.6f}")
-        if plot:
-            plt.plot(loss_list, "o-")
-            plt.xlabel("Iteration")
-            plt.ylabel("Loss")
-            plt.show()
+        plt.plot(loss_list, "o-")
+        plt.xlabel("Iteration")
+        plt.ylabel("Loss")
         # Update the model
-        new_params = get_params(opt_state)
         return new_params
-
-    def step(self, step_index, opt_state, opt_update, new_params, image, X, Y):
-        loss, grads = value_and_grad(self.loss)(new_params, image, X, Y)
-        opt_state = opt_update(step_index, grads, opt_state)
-        return loss, opt_state
-
-    def fit_gradient(
-        self,
-        step_size=0.001,
-        maxiter=1000,
-        tol=1e-4,
-        model="gaussian",
-        optimizer="adam",
-    ):
-        # Detect the peaks
-        self.model = model
-        params = self.init_params()
-        # Initialize the optimizer
-        # if optimizer == "LBFGS":
-        #     solver = jaxopt.LBFGS(self.loss, maxiter=maxiter)
-        #     res = solver.run(params)
-        #     params = res[0]
-
-        if optimizer == "adam":
-            opt_init, opt_update, get_params = optimizers.adam(
-                step_size=step_size, b1=0.9, b2=0.999
-            )
-            opt_state = opt_init(params)
-
-            # Initialize the loss
-            loss = np.inf
-            loss_list = []
-            # Loop over the number of iterations
-            for i in range(maxiter):
-                new_params = get_params(opt_state)
-                # Update the parameters
-                loss_new, opt_state = self.step(
-                    i, opt_state, opt_update, new_params, self.image, self.X, self.Y
-                )
-
-                # Check if the loss has converged
-                if np.abs(loss - loss_new) < tol * loss:
-                    break
-                # Update the loss
-                loss = loss_new
-                loss_list.append(loss)
-
-                # Print the loss every 10 iterations
-                if i % 10 == 0:
-                    print(f"Iteration {i}: loss = {loss:.6f}")
-            plt.plot(loss_list, "o-")
-            plt.xlabel("Iteration")
-            plt.ylabel("Loss")
-            # Update the model
-            params = get_params(opt_state)
-        self.update_params(params)
-        self.prediction = self.predict(params, self.X, self.Y)
-
+    
     def l1_loss_smooth(self, predictions, targets, beta=1.0):
 
         loss = 0
