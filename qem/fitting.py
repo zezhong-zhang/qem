@@ -5,14 +5,13 @@ import optax
 from jax import numpy as jnp
 from jax import value_and_grad
 from jax.example_libraries import optimizers
-# from scipy.ndimage import center_of_mass
+from scipy.ndimage import center_of_mass
 from jaxopt import OptaxSolver
 from skimage.feature import peak_local_max
 from tqdm import tqdm
 
-from .model import butterworth_window, gaussian_sum, voigt_sum
-from .utils import InteractivePlot
-
+from .model import butterworth_window, gaussian_sum, voigt_sum, gaussian_filter_jax
+from .utils import InteractivePlot, make_mask_circle_centre, find_duplicate_row_indices, remove_close_coordinates
 
 class ImageModelFitting:
     def __init__(self, image: np.array, pixel_size=1):
@@ -71,6 +70,10 @@ class ImageModelFitting:
         self.coordinates = peaks_locations
         return self.coordinates
 
+    def remove_close_coordinates(self, threshold=10):
+        self.coordinates = remove_close_coordinates(self.coordinates, threshold)
+        return self.coordinates
+
     def add_or_remove_peaks(self, peaks_locations, min_distance=10, image=None):
         if image is None:
             image = self.image
@@ -95,10 +98,11 @@ class ImageModelFitting:
         self.coordinates = coordinates[mask]
         return self.coordinates
 
-    def center_of_mass(self, num_peak=5):
+
+    def refine_center_of_mass(self, plot=False):
         # do center of mass for each atom
         r, _, _ = self.guess_radius()
-        windows_size = int(r) * 2
+        windows_size = int(r) *2
         for i in range(self.num_coordinates):
             x, y = self.coordinates[i]
             x = int(x)
@@ -108,36 +112,117 @@ class ImageModelFitting:
                 x - windows_size : x + windows_size + 1,
                 y - windows_size : y + windows_size + 1,
             ]
-            possible_shifts = np.zeros((num_peak, 2))
-            region_rest = region.copy()
-            for i in range(num_peak):
-                possible_shifts[i, 0], possible_shifts[i, 1] = np.unravel_index(
-                    np.argmax(region_rest), np.shape(region_rest)
-                )
-                left = max(int(possible_shifts[i, 0]) - int(r), 0)
-                right = min(
-                    int(possible_shifts[i, 0]) + int(r) + 1, windows_size * 2 + 1
-                )
-                top = max(int(possible_shifts[i, 1]) - int(r), 0)
-                bottom = min(
-                    int(possible_shifts[i, 1]) + int(r) + 1, windows_size * 2 + 1
-                )
-                region_rest[left:right, top:bottom] = 0
-            # get the closest peak of possible_shifts to the center
-            local_x, local_y = possible_shifts[
-                np.argmin(np.linalg.norm(possible_shifts - windows_size, axis=1))
-            ]
-            # local_x, local_y = center_of_mass(region)
-            # plt.imshow(region, cmap="gray")
-            # plt.scatter(local_y, local_x, color='red',s = 2)
-            # plt.scatter(y%1+windows_size,x%1+windows_size, color='blue',s = 2)
-            # plt.show()
-            # plt.pause(1.0)
+            mask = make_mask_circle_centre(region, r)
+            region = (region-region.min())/(region.std())
+            region = region * mask
+            local_x, local_y = center_of_mass(region)
             self.coordinates[i] = [
                 x - windows_size + local_x,
                 y - windows_size + local_y,
             ]
+            if plot:
+                plt.imshow(region, cmap="gray")
+                plt.scatter(local_y, local_x, color='red',s = 2)
+                plt.scatter(y%1+windows_size,x%1+windows_size, color='blue',s = 2)
+                plt.show()
+                plt.pause(1.0)
         return self.coordinates
+
+    # def refine_local_max(self, plot=False, min_distance=10):
+    #         windows_size = min_distance *5
+    #         peak_total = np.array([], dtype=int).reshape(0, 2)
+    #         for i in range(self.num_coordinates):
+    #             x, y = self.coordinates[i]
+    #             x = int(x)
+    #             y = int(y)
+    #             left = max(x - windows_size, 0)
+    #             right = min(x + windows_size+1, self.nx)
+    #             top = max(y - windows_size, 0)
+    #             bottom = min(y + windows_size+1, self.ny)
+    #             # calculate the mask for distance < r
+    #             region = self.image[left : right, top : bottom]
+    #             peaks_locations = peak_local_max(
+    #                 region,
+    #                 min_distance=int(0.8*min_distance),
+    #                 threshold_rel=0.3,
+    #                 exclude_border=True,
+    #             )
+    #             if peaks_locations.shape[0] > 0:
+    #                 # select the peak position that is closest to the center
+    #                 # distance = peaks_locations - np.array([windows_size, windows_size])
+    #                 # distance = np.sqrt((distance**2).sum(axis=1))
+    #                 # peak_select = peaks_locations[np.argmin(distance)]
+    #                 # self.coordinates[i] = np.array([x - windows_size + peak_select[0], y - windows_size + peak_select[1]])
+    #                 # append the peaks_locations to the peak_total
+    #                 peak_total = np.append(peak_total, peaks_locations + np.array([x - windows_size, y - windows_size]), axis=0)
+    #             if plot:
+    #                 plt.imshow(region, cmap="gray")
+    #                 plt.scatter(y%1+windows_size,x%1+windows_size, color='blue',s = 2)
+    #                 if peaks_locations.shape[0] > 0:
+    #                     plt.scatter(peaks_locations[:,1], peaks_locations[:,0], color='red',s = 2)
+    #                 plt.show()
+    #                 plt.pause(1.0)
+    #         self.coordinates = np.unique(peak_total, axis=0)
+    #         # self.coordinates = self.refine_duplicate_peaks()
+    #         return self.coordinates
+
+
+
+
+    # def refine_duplicate_peaks(self):
+    #     duplicate_index = find_duplicate_row_indices(self.coordinates)
+    #     # get the good peaks that are not duplicate
+    #     good_peaks = np.delete(self.coordinates, duplicate_index, axis=0).astype(int)
+    #     r, _, _ = self.guess_radius()
+    #     windows_size = int(r) *5
+    #     for x,y in self.coordinates[duplicate_index]:
+    #         x = int(x)
+    #         y = int(y)
+    #         # calculate the mask for distance < r
+    #         region = self.image[
+    #             x - windows_size : x + windows_size + 1,
+    #             y - windows_size : y + windows_size + 1,
+    #         ]
+    #         mask_neighbour = (good_peaks[:, 0] > x -  2* windows_size ) & (good_peaks[:, 0] < x + 2*windows_size) & (good_peaks[:, 1] > y - 2*windows_size) & (good_peaks[:, 1] < y + 2*windows_size)
+    #         peaks_local = good_peaks[mask_neighbour]
+    #         peaks_local = peaks_local - np.array([x - windows_size, y - windows_size])
+
+    #         peaks_local_update = self.add_or_remove_peaks(
+    #         peaks_local, min_distance=int(r), image=region
+    #         )
+    #         local_peaks_locations = peaks_local_update + np.array([x -2* windows_size, y -2* windows_size])
+    #         # update the good_peaks
+    #         good_peaks = np.append(good_peaks, local_peaks_locations, axis=0)
+    #         good_peaks = np.unique(good_peaks, axis=0)                
+    #         # peaks_locations = peak_local_max(
+    #         #     region,
+    #         #     min_distance=int(0.5*r),
+    #         #     threshold_rel=0.2,
+    #         #     exclude_border=False,
+    #         # )
+    #         # if peaks_locations.shape[0] > 0:
+    #         #     # select the peak position that is closest to the center
+    #         #     distance = peaks_locations - np.array([windows_size, windows_size])
+    #         #     distance = np.sqrt((distance**2).sum(axis=1))
+    #         #     peaks_locations_global = peaks_locations + np.array([x - windows_size, y - windows_size])
+    #         #     # select the peak that is not in the self.coordinates and closest to the center
+    #         #     mask = ~(peaks_locations_global[:, None] == good_peaks).all(-1).any(-1)
+
+    #         #     if mask.any():
+    #         #         peak_select = peaks_locations_global[mask][np.argmin(distance[mask])]
+    #         #         peak_select_local = peak_select - np.array([x - windows_size, y - windows_size])
+    #         #         good_peaks = np.append(good_peaks, [peak_select], axis=0)
+    #         # if plot:
+    #         #     plt.imshow(region, cmap="gray")
+    #         #     # plot the peaks of neighbouring within the region
+    #         #     mask_neighbour = (self.coordinates[:, 0] > x - 2* windows_size ) & (self.coordinates[:, 0] < x + 2*windows_size) & (self.coordinates[:, 1] > y - 2*windows_size) & (self.coordinates[:, 1] < y + 2*windows_size)
+    #         #     plt.scatter(self.coordinates[mask_neighbour][:, 1] - (y - windows_size), self.coordinates[mask_neighbour][:, 0] - (x - windows_size), color='green',s = 2)
+    #         #     if peak_select_local.shape[0] > 0:
+    #         #         plt.scatter(peak_select_local[1], peak_select_local[0], color='red',s = 3)
+    #         #     plt.show()
+    #         #     plt.pause(1.0)    
+    #     return good_peaks
+
 
     def plot(self, image="original"):
         plt.figure()
@@ -530,11 +615,8 @@ class ImageModelFitting:
         # Compute the sum of the Gaussians
         prediction = self.predict(params, X, Y)
         diff = image - prediction
-        # x = jnp.linspace(-2, 2, 10)
-        # window = jax.scipy.stats.norm.pdf(x) * jax.scipy.stats.norm.pdf(x[:, None])
-        # diff = jax.scipy.signal.convolve2d(diff, window, mode="same")
-
         diff = diff * self.window
+        # diff = gaussian_filter_jax(diff, 2.0)
 
         # dammping the difference near the edge
         mse = np.std(diff)

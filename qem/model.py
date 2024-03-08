@@ -1,8 +1,9 @@
-import jax.numpy as jnp
-from jax import jit, lax, vmap
-from numba import jit as njit
-import numpy as np
 import jax
+import jax.numpy as jnp
+import numpy as np
+from jax import jit, lax, vmap
+from jax.scipy.signal import convolve2d
+from numba import jit as njit
 
 
 @jit
@@ -197,3 +198,28 @@ def butterworth_window(shape, cutoff_radius_ftr, order):
     window = np.outer(window_y, window_x)
 
     return window
+
+@jax.jit
+def gaussian_kernel(sigma: float) -> jnp.ndarray:
+    """
+    Creates a 2D Gaussian kernel with the given size and sigma.
+    """
+    x = jnp.arange(-20 // 2, 20 // 2 + 1.)
+    y = jnp.arange(-20 // 2, 20 // 2 + 1.)
+    xx, yy = jnp.meshgrid(x, y)
+    kernel = jnp.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+    kernel = kernel / jnp.sum(kernel)
+    return kernel
+
+@jax.jit
+def gaussian_filter_jax(image: jnp.ndarray, sigma: float) -> jnp.ndarray:
+    """
+    Applies Gaussian filter to a 2D image.
+    """
+    # x = jnp.linspace(-2, 2, 10)
+    # window = jax.scipy.stats.norm.pdf(x) * jax.scipy.stats.norm.pdf(x[:, None])
+    # diff = jax.scipy.signal.convolve2d(diff, window, mode="same")
+    kernel = gaussian_kernel(sigma)
+    # Convolve the image with the Gaussian kernel
+    filtered_image = convolve2d(image, kernel, mode='same')
+    return filtered_image

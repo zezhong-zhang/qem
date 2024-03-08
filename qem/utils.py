@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import sys
 from functools import partial
-
+from numba import jit
 
 def plot_image(image, x_labels, y_labels, colormap="gray", colorbar=True):
     """
@@ -203,3 +203,100 @@ def apply_threshold(image, image_ref, threshold):
         m = np.amax(image_ref[i])
         img[i, :, :] = np.where(image_ref[i] < threshold[i] * m, 0, image[i])
     return img
+
+@jit(nopython=True)
+def make_mask_circle_centre(arr, radius):
+    """Create a circular mask with same shape as arr
+
+    The circle is centered on the center of the array,
+    with the circle having True values.
+
+    Similar to _make_circular_mask, but simpler and potentially
+    faster.
+
+    Numba jit compatible.
+
+    Parameters
+    ----------
+    arr : NumPy array
+        Must be 2 dimensions
+    radius : scalar
+        Radius of the circle
+
+    Returns
+    -------
+    mask : NumPy array
+        Boolean array
+
+    Example
+    -------
+    >>> import atomap.atom_finding_refining as afr
+    >>> arr = np.random.randint(100, size=(20, 20))
+    >>> mask = afr._make_mask_circle_centre(arr, 10)
+
+    """
+    # if len(arr.shape) != 2:
+    #     raise ValueError("arr must be 2D, not {0}".format(len(arr.shape)))
+    imageSizeX, imageSizeY = arr.shape
+    centerX = (arr.shape[0] - 1) / 2
+    centerY = (arr.shape[1] - 1) / 2
+
+    x = np.expand_dims(np.arange(-centerX, imageSizeX - centerX), axis=1)
+    y = np.arange(-centerY, imageSizeY - centerY)
+    mask = x**2 + y **2 < radius**2
+    return mask
+
+def find_duplicate_row_indices(array):
+    """
+    Find the indices of duplicate rows in a NumPy array.
+
+    Parameters:
+    - array: NumPy array to check for duplicate rows.
+
+    Returns:
+    - idx_duplicates: NumPy array of indices of the duplicate rows.
+    """
+    # Step 1: Find indices of unique rows
+    _, idx_unique = np.unique(array, axis=0, return_index=True)
+
+    # Step 2: Initialize a mask assuming all are duplicates
+    mask = np.ones(len(array), dtype=bool)
+
+    # Step 3: Mark unique rows as not duplicates
+    mask[idx_unique] = False
+
+    # Step 4: Find indices of duplicates
+    idx_duplicates = np.where(mask)[0]
+
+    return idx_duplicates
+
+
+# @jit(nopython=True, parallel=True)
+def remove_close_coordinates(coordinates, threshold):
+    """
+    Remove coordinates that are within a specified threshold distance of each other.
+
+    Parameters:
+    - threshold: The distance below which coordinates are considered too close and should be removed.
+    """
+
+    # Create a boolean mask initialized to keep all coordinates
+    keep_mask = np.ones(len(coordinates), dtype=bool)
+
+    # Calculate the absolute differences in x and y coordinates
+    for i, coord in enumerate(coordinates):
+        if not keep_mask[i]:
+            # Already marked for removal
+            continue
+
+        # Compute absolute differences for all coordinates with the current one
+        diffs = np.abs(coordinates - coord)
+
+        # Find coordinates too close in either x or y (excluding the current one)
+        too_close_mask = (diffs[:, 0] < threshold) & (diffs[:, 1] < threshold) & (np.arange(len(coordinates)) != i)
+
+        # Update the keep mask
+        keep_mask[too_close_mask] = False
+
+    # Filter coordinates based on the keep mask
+    return coordinates[keep_mask]
