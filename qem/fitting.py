@@ -44,21 +44,21 @@ class ImageModelFitting:
         self.X, self.Y = np.meshgrid(x, y, indexing="ij")
 
     @property
-        def window(self):
-            """
-            Returns the window used for fitting.
+    def window(self):
+        """
+        Returns the window used for fitting.
 
-            If `fit_local` is True, a Butterworth window is created with the shape of `local_shape`.
-            If `fit_local` is False, a Butterworth window is created with the shape of `image.shape`.
+        If `fit_local` is True, a Butterworth window is created with the shape of `local_shape`.
+        If `fit_local` is False, a Butterworth window is created with the shape of `image.shape`.
 
-            Returns:
-                numpy.ndarray: The Butterworth window used for fitting.
-            """
-            if self.fit_local:
-                window = butterworth_window(self.local_shape, 0.5, 10)
-            else:
-                window = butterworth_window(self.image.shape, 0.5, 10)
-            return window
+        Returns:
+            numpy.ndarray: The Butterworth window used for fitting.
+        """
+        if self.fit_local:
+            window = butterworth_window(self.local_shape, 0.5, 10)
+        else:
+            window = butterworth_window(self.image.shape, 0.5, 10)
+        return window
 
     def import_coordinates(self, coordinates, atom_type=None):
         """
@@ -621,12 +621,12 @@ class ImageModelFitting:
             bool: True if all parameters have converged within the tolerance, False otherwise.
         """
         # Loop through current parameters and their previous values
-        for key, (current_val, pre_val) in zip(params.keys(), params.items(), pre_params.items()):
+        for key, value in params.items():
             if key not in pre_params:
                 continue  # Skip keys that are not in pre_params
             
             # Calculate the update difference
-            update = np.abs(current_val - pre_val)
+            update = np.abs(value - pre_params[key])
             
             # Check convergence based on parameter type
             if key in ["pos_x", "pos_y"]:
@@ -637,7 +637,7 @@ class ImageModelFitting:
                     return False
             else:
                 # Avoid division by zero and calculate relative update
-                value_with_offset = current_val + 1e-10
+                value_with_offset = value + 1e-10
                 rate = np.abs(update / value_with_offset).max()
                 print(f"Convergence rate for {key} = {rate}")
                 if rate > tol:
