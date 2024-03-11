@@ -6,13 +6,25 @@ from jax.scipy.signal import convolve2d
 from numba import jit as njit
 
 
-@jit
+@njit
 def gaussian_local(X, Y, pos_x, pos_y, height, width):
     # Unpack the parameters
-    gauss = height * jnp.exp(
+    gauss = height * np.exp(
         -(
             (X[:, :, None] - pos_x[None, None, :] % 1) ** 2
             + (Y[:, :, None] - pos_y[None, None, :] % 1) ** 2
+        )
+        / (2 * width**2)
+    )
+    return gauss
+
+@njit
+def gaussian_global(X, Y, pos_x, pos_y, height, width):
+    # Unpack the parameters
+    gauss = height * np.exp(
+        -(
+            (X[:, :, None] - pos_x[None, None, :]) ** 2
+            + (Y[:, :, None] - pos_y[None, None, :]) ** 2
         )
         / (2 * width**2)
     )
@@ -36,46 +48,6 @@ def add_gauss_to_total_sum(total_sum, pos_x, pos_y, gaussian_local, windows_size
             local_left:local_right, local_top:local_bottom, i
         ]
     return total_sum
-
-
-def add_gauss_to_total_sum_jax(total_sum, pos_x, pos_y, gaussian_local, window_size):
-    # Correct type casting
-    pos_x = pos_x.astype(jnp.int32)
-    pos_y = pos_y.astype(jnp.int32)
-
-    def update_total_sum(i, total_sum):
-        left = max(pos_y[i] - window_size, 0)
-        right = min(pos_y[i] + window_size + 1, total_sum.shape[0])
-        top = max(pos_x[i] - window_size, 0)
-        bottom = min(pos_x[i] + window_size + 1, total_sum.shape[1])
-
-        local_left = left - pos_y[i] + window_size
-        local_right = right - pos_y[i] + window_size
-        local_top = top - pos_x[i] + window_size
-        local_bottom = bottom - pos_x[i] + window_size
-
-        update_slice = gaussian_local[local_left:local_right, local_top:local_bottom, i]
-
-        # Define the indices where updates are applied, ensuring they are within the bounds of total_sum
-        ix, iy = jnp.meshgrid(
-            jnp.arange(left, right), jnp.arange(top, bottom), indexing="ij"
-        )
-        indices = jnp.stack([ix.flatten(), iy.flatten()], axis=-1)
-
-        # Flatten the update_slice to match the indices
-        updates = update_slice.flatten()
-
-        # Use JAX's functional update to add values at specified indices
-        updated_sum = total_sum.at[indices[:, 0], indices[:, 1]].add(updates)
-        return updated_sum
-
-    # Loop through each position to update the total_sum
-    # Note: This loop is for illustration. In practice, consider vectorizing your computations with vmap or similar.
-    for i in range(len(pos_x)):
-        total_sum = update_total_sum(i, total_sum)
-
-    return total_sum
-
 
 @jit
 def gaussian_sum(X, Y, pos_x, pos_y, height, width, background):
