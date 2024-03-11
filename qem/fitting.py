@@ -1,4 +1,8 @@
+import copy
+import logging
+import warnings
 from curses import window
+
 import jax
 import matplotlib.pyplot as plt
 import numpy as np
@@ -6,17 +10,31 @@ import optax
 from jax import numpy as jnp
 from jax import value_and_grad
 from jax.example_libraries import optimizers
-from scipy.ndimage import center_of_mass
 from jaxopt import OptaxSolver
-from skimage.feature import peak_local_max
-from tqdm import tqdm
-import copy
-import logging
+from scipy.ndimage import center_of_mass
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
-import warnings
-from .model import butterworth_window, gaussian_sum, voigt_sum, mask_grads, gaussian_local, add_gaussian_at_positions, gaussian_global
-from .utils import InteractivePlot, make_mask_circle_centre, find_duplicate_row_indices, remove_close_coordinates,get_random_indices_in_batches,find_element_indices
+from skimage.feature import peak_local_max
+from tqdm import tqdm
+
+from .model import (
+    add_gaussian_at_positions,
+    butterworth_window,
+    gaussian_global,
+    gaussian_local,
+    gaussian_sum,
+    mask_grads,
+    voigt_sum,
+)
+from .utils import (
+    InteractivePlot,
+    find_duplicate_row_indices,
+    find_element_indices,
+    get_random_indices_in_batches,
+    make_mask_circle_centre,
+    remove_close_coordinates,
+)
+
 
 class ImageModelFitting:
     def __init__(self, image: np.array, pixel_size=1):
@@ -138,11 +156,10 @@ class ImageModelFitting:
         self.coordinates = coordinates[mask]
         return self.coordinates
 
-
     def refine_center_of_mass(self, plot=False):
         # do center of mass for each atom
         r, _, _ = self.guess_radius()
-        windows_size = int(r) *2
+        windows_size = int(r) * 2
         for i in range(self.num_coordinates):
             x, y = self.coordinates[i]
             x = int(x)
@@ -153,7 +170,7 @@ class ImageModelFitting:
                 y - windows_size : y + windows_size + 1,
             ]
             mask = make_mask_circle_centre(region, r)
-            region = (region-region.min())/(region.max()-region.min())
+            region = (region - region.min()) / (region.max() - region.min())
             region = region * mask
             local_x, local_y = center_of_mass(region)
             self.coordinates[i] = [
@@ -162,8 +179,10 @@ class ImageModelFitting:
             ]
             if plot:
                 plt.imshow(region, cmap="gray")
-                plt.scatter(local_y, local_x, color='red',s = 2)
-                plt.scatter(y%1+windows_size,x%1+windows_size, color='blue',s = 2)
+                plt.scatter(local_y, local_x, color="red", s=2)
+                plt.scatter(
+                    y % 1 + windows_size, x % 1 + windows_size, color="blue", s=2
+                )
                 plt.show()
                 plt.pause(1.0)
         return self.coordinates
@@ -206,9 +225,6 @@ class ImageModelFitting:
     #         # self.coordinates = self.refine_duplicate_peaks()
     #         return self.coordinates
 
-
-
-
     # def refine_duplicate_peaks(self):
     #     duplicate_index = find_duplicate_row_indices(self.coordinates)
     #     # get the good peaks that are not duplicate
@@ -233,7 +249,7 @@ class ImageModelFitting:
     #         local_peaks_locations = peaks_local_update + np.array([x -2* windows_size, y -2* windows_size])
     #         # update the good_peaks
     #         good_peaks = np.append(good_peaks, local_peaks_locations, axis=0)
-    #         good_peaks = np.unique(good_peaks, axis=0)                
+    #         good_peaks = np.unique(good_peaks, axis=0)
     #         # peaks_locations = peak_local_max(
     #         #     region,
     #         #     min_distance=int(0.5*r),
@@ -260,9 +276,8 @@ class ImageModelFitting:
     #         #     if peak_select_local.shape[0] > 0:
     #         #         plt.scatter(peak_select_local[1], peak_select_local[0], color='red',s = 3)
     #         #     plt.show()
-    #         #     plt.pause(1.0)    
+    #         #     plt.pause(1.0)
     #     return good_peaks
-
 
     def plot(self, image="original"):
         plt.figure()
@@ -343,11 +358,11 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, atom_size = 0.7, guess_radius = False):
+    def init_params(self, atom_size=0.7, guess_radius=False):
         if guess_radius:
             width = self.guess_radius()[0]
         else:
-            width = (atom_size / self.pixel_size)
+            width = atom_size / self.pixel_size
         # self.center_of_mass()
         pos_x = self.coordinates[:, 0]
         pos_y = self.coordinates[:, 1]
@@ -378,36 +393,53 @@ class ImageModelFitting:
 
         return params
 
-    def fit_region(self, params, fitting_region, update_region, maxiter=1000, tol=1e-4, step_size=0.01, plot=False,verbose=False):
-        left,right,top,bottom = fitting_region
-        center_left,center_right,center_top,center_bottom = update_region
+    def fit_region(
+        self,
+        params,
+        fitting_region,
+        update_region,
+        maxiter=1000,
+        tol=1e-4,
+        step_size=0.01,
+        plot=False,
+        verbose=False,
+    ):
+        left, right, top, bottom = fitting_region
+        center_left, center_right, center_top, center_bottom = update_region
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         # get the region of the image based on the patch_size and buffer_size
         # the buffer_size is on both sides of the patch
 
-        image_region = self.image[top:bottom,left:right]
+        image_region = self.image[top:bottom, left:right]
         self.local_shape = image_region.shape
 
         # get the region of the coordinates
 
-        mask_region = (pos_x > left) & (pos_x < right) & (pos_y > top) & (pos_y < bottom)
-        mask_center = (pos_x > center_left) & (pos_x < center_right) & (pos_y > center_top) & (pos_y < center_bottom)
+        mask_region = (
+            (pos_x > left) & (pos_x < right) & (pos_y > top) & (pos_y < bottom)
+        )
+        mask_center = (
+            (pos_x > center_left)
+            & (pos_x < center_right)
+            & (pos_y > center_top)
+            & (pos_y < center_bottom)
+        )
         region_indices = np.where(mask_region)[0]
         center_indices = np.where(mask_center)[0]
         if len(center_indices) == 0:
-            return params , None
+            return params, None
         index_center_in_region = np.isin(region_indices, center_indices).squeeze()
         # index_center_in_region = find_element_indices(region_indices, center_indices)
 
         # get the buffer atoms as the difference between the region_atoms and the central_atoms
         local_X, local_Y = (
-            self.X[top:bottom,left:right],
-            self.Y[top:bottom,left:right],
+            self.X[top:bottom, left:right],
+            self.Y[top:bottom, left:right],
         )
         if mask_center.sum() == 0:
-            return params , None
-        
+            return params, None
+
         local_params = {
             key: value[mask_region]
             for key, value in params.items()
@@ -419,11 +451,18 @@ class ImageModelFitting:
 
         global_prediction = self.predict(params, self.X, self.Y)
         local_prediction = self.predict(local_params, local_X, local_Y)
-        local_residual = (
-            global_prediction[top:bottom,left:right] - local_prediction
-        )
+        local_residual = global_prediction[top:bottom, left:right] - local_prediction
         local_target = image_region - local_residual
-        local_params = self.optimize(local_target, local_params, local_X, local_Y, maxiter, tol, step_size, verbose)
+        local_params = self.optimize(
+            local_target,
+            local_params,
+            local_X,
+            local_Y,
+            maxiter,
+            tol,
+            step_size,
+            verbose,
+        )
         # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background'])
         for key, value in local_params.items():
             if key not in ["background", "ratio"]:
@@ -483,7 +522,7 @@ class ImageModelFitting:
             # plt.gca().invert_yaxis()
             plt.show()
         return params, local_params
-    
+
     def fit_patch(
         self,
         params,
@@ -495,8 +534,8 @@ class ImageModelFitting:
         stride_size=None,
         plot=False,
         verbose=False,
-        mode = "sequential",
-        num_random_patches = 10,
+        mode="sequential",
+        num_random_patches=10,
     ):
         self.fit_local = True
         if buffer_size is None:
@@ -511,7 +550,7 @@ class ImageModelFitting:
         if mode == "sequential":
             x_i = np.arange(half_patch, self.nx, stride_size)
             y_i = np.arange(half_patch, self.ny, stride_size)
-            ii,jj = np.meshgrid(x_i, y_i, indexing='xy')
+            ii, jj = np.meshgrid(x_i, y_i, indexing="xy")
             ii = ii.ravel()
             jj = jj.ravel()
         elif mode == "random":
@@ -520,7 +559,7 @@ class ImageModelFitting:
 
         for index in tqdm(range(len(ii))):
             i, j = ii[index], jj[index]
-            left = max(i -half_patch - buffer_size, 0)
+            left = max(i - half_patch - buffer_size, 0)
             right = min(i + half_patch + buffer_size, self.nx)
             top = max(j - half_patch - buffer_size, 0)
             bottom = min(j + half_patch + buffer_size, self.ny)
@@ -540,20 +579,33 @@ class ImageModelFitting:
             center_bottom = bottom - buffer_size if bottom < self.ny else self.ny
             if verbose:
                 print(f"left = {left}, right = {right}, top = {top}, bottom = {bottom}")
-                print(f"center_left = {center_left}, center_right = {center_right}, center_top = {center_top}, center_bottom = {center_bottom}")
-            params, local_params = self.fit_region(params, [left, right, top, bottom],[center_left,center_right,center_top,center_bottom], maxiter, tol, step_size, plot,verbose)
+                print(
+                    f"center_left = {center_left}, center_right = {center_right}, center_top = {center_top}, center_bottom = {center_bottom}"
+                )
+            params, local_params = self.fit_region(
+                params,
+                [left, right, top, bottom],
+                [center_left, center_right, center_top, center_bottom],
+                maxiter,
+                tol,
+                step_size,
+                plot,
+                verbose,
+            )
             if self.same_width:
-                params['sigma'][:] =  params['sigma'].mean()
+                params["sigma"][:] = params["sigma"].mean()
         # have a linear estimator of the background and height of the gaussian peaks
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
         return params
 
-    def optimize(self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
+    def optimize(
+        self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False
+    ):
         opt = optax.adam(step_size)
         solver = OptaxSolver(
-                opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
-            )
+            opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
+        )
         res = solver.run(params, image=image, X=X, Y=Y)
         params = res[0]
         return params
@@ -568,23 +620,32 @@ class ImageModelFitting:
         rows = []
         cols = []
         data = []
-        window_size = int(sigma.mean() * 5)      
-        x = np.arange(-window_size, window_size+1, 1)
-        y = np.arange(-window_size, window_size+1, 1)
-        local_X, local_Y = np.meshgrid(x,y, indexing='xy')
+        window_size = int(sigma.mean() * 5)
+        x = np.arange(-window_size, window_size + 1, 1)
+        y = np.arange(-window_size, window_size + 1, 1)
+        local_X, local_Y = np.meshgrid(x, y, indexing="xy")
         gauss_local = gaussian_local(local_X, local_Y, pos_x, pos_y, height, sigma)
 
         for i in range(self.num_coordinates):
-            global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[i].astype(int)
-            mask = (global_X >= 0) & (global_X < self.nx) & (global_Y >= 0) & (global_Y < self.ny)
+            global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[
+                i
+            ].astype(int)
+            mask = (
+                (global_X >= 0)
+                & (global_X < self.nx)
+                & (global_Y >= 0)
+                & (global_Y < self.ny)
+            )
             flat_index = global_Y[mask].flatten() * self.nx + global_X[mask].flatten()
             rows.extend(flat_index)
             cols.extend(np.tile(i, flat_index.shape[0]))
-            data.extend(gauss_local[:,:,i][mask].ravel())
+            data.extend(gauss_local[:, :, i][mask].ravel())
         rows.extend(self.Y.flatten() * self.nx + self.X.flatten())
-        cols.extend(np.tile(self.num_coordinates, self.nx*self.ny))
-        data.extend(np.ones(self.nx*self.ny))
-        design_matrix = coo_matrix((data, (rows, cols)), shape=(self.nx*self.ny, self.num_coordinates+1))
+        cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
+        data.extend(np.ones(self.nx * self.ny))
+        design_matrix = coo_matrix(
+            (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates + 1)
+        )
         # create the target as the image
         b = self.image.ravel()
         # solve the linear equation
@@ -595,33 +656,43 @@ class ImageModelFitting:
                 warnings.simplefilter("always")
                 solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
                 # Check if any of the caught warnings are related to a singular matrix
-                if w and any("singular matrix" in str(warning.message) for warning in w):
-                    print("Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated.")
+                if w and any(
+                    "singular matrix" in str(warning.message) for warning in w
+                ):
+                    print(
+                        "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
+                    )
                     return params
         except np.linalg.LinAlgError as e:
             # Catch exceptions for a singular matrix problem
-            if 'Singular matrix' in str(e):
+            if "Singular matrix" in str(e):
                 print("Error: Singular matrix encountered.")
             else:
                 raise
-        
+
         # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
         # update the background and height
         height_scale = solution[:-1]
         if np.NaN in height_scale:
-            logging.warning("The height has NaN, the linear estimator is not valid, parameters are not updated")
+            logging.warning(
+                "The height has NaN, the linear estimator is not valid, parameters are not updated"
+            )
             return params
         else:
             params["background"] = solution[-1] if solution[-1] > 0 else 0.0
-            mask = height_scale * params["height"] < 0 
+            mask = height_scale * params["height"] < 0
             if mask.any():
-                logging.warning("The height has negative value, I will make it positive but be careful with the result")
+                logging.warning(
+                    "The height has negative value, I will make it positive but be careful with the result"
+                )
                 height_scale[mask] = -1
-            params["height"] = height_scale * params["height"] 
+            params["height"] = height_scale * params["height"]
         return params
 
-    def fit_global(self,params, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
-        params = self.optimize(self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose)
+    def fit_global(self, params, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
+        params = self.optimize(
+            self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
+        )
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
         return params
@@ -630,10 +701,10 @@ class ImageModelFitting:
         """
         Checks if the parameters have converged within a specified tolerance.
 
-        This function iterates over each parameter in `params` and its corresponding 
-        value in `pre_params` to determine if the change (update) is within a specified 
-        tolerance level, `tol`. For position parameters ('pos_x', 'pos_y'), it checks if 
-        the absolute update exceeds 1. For other parameters ('height', 'sigma', 'gamma', 
+        This function iterates over each parameter in `params` and its corresponding
+        value in `pre_params` to determine if the change (update) is within a specified
+        tolerance level, `tol`. For position parameters ('pos_x', 'pos_y'), it checks if
+        the absolute update exceeds 1. For other parameters ('height', 'sigma', 'gamma',
         'ratio', 'background'), it checks if the relative update exceeds `tol`.
 
         Parameters:
@@ -648,10 +719,10 @@ class ImageModelFitting:
         for key, value in params.items():
             if key not in pre_params:
                 continue  # Skip keys that are not in pre_params
-            
+
             # Calculate the update difference
             update = np.abs(value - pre_params[key])
-            
+
             # Check convergence based on parameter type
             if key in ["pos_x", "pos_y"]:
                 max_update = update.max()
@@ -667,18 +738,30 @@ class ImageModelFitting:
                 if rate > tol:
                     print("Convergence not reached")
                     return False
-                    
+
         print("Convergence reached")
         return True
-                    
-    def fit_random_batch(self, params, num_epoch =2, batch_size=500, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False, plot = False):
+
+    def fit_random_batch(
+        self,
+        params,
+        num_epoch=2,
+        batch_size=500,
+        maxiter=1000,
+        tol=1e-4,
+        step_size=0.01,
+        verbose=False,
+        plot=False,
+    ):
         self.fit_local = False
         self.converged = False
         while self.converged is False and num_epoch > 0:
             params = self.linear_estimator(params)
             num_epoch -= 1
             pre_params = copy.deepcopy(params)
-            random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
+            random_batches = get_random_indices_in_batches(
+                self.num_coordinates, batch_size
+            )
             image = self.image
             X = self.X
             Y = self.Y
@@ -695,11 +778,11 @@ class ImageModelFitting:
                     select_params["ratio"] = params["ratio"]
                 global_prediction = self.predict(params, self.X, self.Y)
                 local_prediction = self.predict(select_params, self.X, self.Y)
-                local_residual = (
-                    global_prediction - local_prediction
-                )
+                local_residual = global_prediction - local_prediction
                 local_target = image - local_residual
-                select_params = self.optimize(local_target, select_params, X, Y, maxiter, tol, step_size, verbose)
+                select_params = self.optimize(
+                    local_target, select_params, X, Y, maxiter, tol, step_size, verbose
+                )
                 for key, value in select_params.items():
                     if key not in ["background", "ratio"]:
                         # check if the params[key] is jax array
@@ -708,7 +791,7 @@ class ImageModelFitting:
                     else:
                         params[key] = value
                 if self.same_width:
-                    params['sigma'][:] =  params['sigma'].mean()
+                    params["sigma"][:] = params["sigma"].mean()
                 if plot:
                     plt.subplots(1, 3, figsize=(15, 5))
                     plt.subplot(1, 3, 1)
@@ -736,7 +819,6 @@ class ImageModelFitting:
         self.prediction = self.predict(params, self.X, self.Y)
         return params
 
-
     def fit_gradient(
         self,
         image,
@@ -753,7 +835,7 @@ class ImageModelFitting:
         )
         opt_state = opt_init(params)
 
-        def step(step_index,opt_state, params, image, X, Y, keys_to_mask=[]):
+        def step(step_index, opt_state, params, image, X, Y, keys_to_mask=[]):
             loss, grads = value_and_grad(self.loss)(params, image, X, Y)
             masked_grads = mask_grads(grads, keys_to_mask)
             opt_state = opt_update(step_index, masked_grads, opt_state)
@@ -764,9 +846,11 @@ class ImageModelFitting:
         loss_list = []
         # Loop over the number of iterations
         for i in range(maxiter):
-            # Update the parameters   
+            # Update the parameters
             new_params = get_params(opt_state)
-            loss_new, opt_state = step(i, opt_state, new_params, image, X, Y, keys_to_mask)  
+            loss_new, opt_state = step(
+                i, opt_state, new_params, image, X, Y, keys_to_mask
+            )
 
             # Check if the loss has converged
             if np.abs(loss - loss_new) < tol * loss:
@@ -783,7 +867,7 @@ class ImageModelFitting:
         plt.ylabel("Loss")
         # Update the model
         return new_params
-    
+
     def l1_loss_smooth(self, predictions, targets, beta=1.0):
 
         loss = 0
@@ -803,7 +887,7 @@ class ImageModelFitting:
         # diff = gaussian_filter_jax(diff, 2.0)
 
         # dammping the difference near the edge
-        mse = jnp.sqrt(jnp.mean(diff ** 2))
+        mse = jnp.sqrt(jnp.mean(diff**2))
         L1 = jnp.mean(jnp.abs(diff))
         # get the mse of binning differece
         # bin_size = 20
@@ -820,8 +904,8 @@ class ImageModelFitting:
         prediction = self.predict(params, X, Y)
         diff = prediction - image
         return diff
-    
-    def predict_local(self,params):
+
+    def predict_local(self, params):
         if self.fit_background:
             background = params["background"]
         else:
@@ -832,15 +916,20 @@ class ImageModelFitting:
         sigma = params["sigma"]
         if self.same_width:
             sigma = sigma.mean()
-        windos_size = int(sigma.max()*5)
-        x = np.arange(-windos_size, windos_size+1, 1)
-        y = np.arange(-windos_size, windos_size+1, 1)
-        X, Y = np.meshgrid(x,y, indexing='xy')
+        windos_size = int(sigma.max() * 5)
+        x = np.arange(-windos_size, windos_size + 1, 1)
+        y = np.arange(-windos_size, windos_size + 1, 1)
+        X, Y = np.meshgrid(x, y, indexing="xy")
         gauss_local = gaussian_local(X, Y, pos_x, pos_y, height, sigma)
         gauss_local = np.array(gauss_local)
-        prediction = add_gaussian_at_positions(np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size) + background
+        prediction = (
+            add_gaussian_at_positions(
+                np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
+            )
+            + background
+        )
         return prediction
-    
+
     def predict(self, params, X, Y):
         if self.fit_background:
             background = params["background"]

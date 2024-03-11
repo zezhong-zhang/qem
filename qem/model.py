@@ -18,6 +18,7 @@ def gaussian_local(X, Y, pos_x, pos_y, height, width):
     )
     return gauss
 
+
 @njit
 def gaussian_global(X, Y, pos_x, pos_y, height, width):
     # Unpack the parameters
@@ -44,10 +45,11 @@ def add_gaussian_at_positions(total_sum, pos_x, pos_y, gaussian_local, windows_s
         local_right = right - pos_x[i] + windows_size
         local_top = top - pos_y[i] + windows_size
         local_bottom = bottom - pos_y[i] + windows_size
-        total_sum[top:bottom,left:right] += gaussian_local[
+        total_sum[top:bottom, left:right] += gaussian_local[
             local_top:local_bottom, local_left:local_right, i
         ]
     return total_sum
+
 
 @jit
 def gaussian_sum(X, Y, pos_x, pos_y, height, width, background):
@@ -171,17 +173,19 @@ def butterworth_window(shape, cutoff_radius_ftr, order):
 
     return window
 
+
 @jax.jit
 def gaussian_kernel(sigma: float) -> jnp.ndarray:
     """
     Creates a 2D Gaussian kernel with the given size and sigma.
     """
-    x = jnp.arange(-20 // 2, 20 // 2 + 1.)
-    y = jnp.arange(-20 // 2, 20 // 2 + 1.)
+    x = jnp.arange(-20 // 2, 20 // 2 + 1.0)
+    y = jnp.arange(-20 // 2, 20 // 2 + 1.0)
     xx, yy = jnp.meshgrid(x, y)
     kernel = jnp.exp(-(xx**2 + yy**2) / (2 * sigma**2))
     kernel = kernel / jnp.sum(kernel)
     return kernel
+
 
 @jax.jit
 def gaussian_filter_jax(image: jnp.ndarray, sigma: float) -> jnp.ndarray:
@@ -193,14 +197,17 @@ def gaussian_filter_jax(image: jnp.ndarray, sigma: float) -> jnp.ndarray:
     # diff = jax.scipy.signal.convolve2d(diff, window, mode="same")
     kernel = gaussian_kernel(sigma)
     # Convolve the image with the Gaussian kernel
-    filtered_image = convolve2d(image, kernel, mode='same')
+    filtered_image = convolve2d(image, kernel, mode="same")
     return filtered_image
+
 
 def mask_grads(grads, keys_to_mask):
     """A pre-update function that masks out gradients for specified keys."""
-    # Extract gradients from the optimizer state    
+    # Extract gradients from the optimizer state
     # Zero out gradients for the keys to mask
-    masked_grads = {k: np.zeros_like(grads[k]) if k in keys_to_mask else grads[k] for k in grads}
+    masked_grads = {
+        k: np.zeros_like(grads[k]) if k in keys_to_mask else grads[k] for k in grads
+    }
 
     # Update the state with masked gradients
 
