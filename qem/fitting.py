@@ -1,3 +1,4 @@
+from curses import window
 import jax
 import matplotlib.pyplot as plt
 import numpy as np
@@ -9,12 +10,20 @@ from scipy.ndimage import center_of_mass
 from jaxopt import OptaxSolver
 from skimage.feature import peak_local_max
 from tqdm import tqdm
+import copy
 
-from .model import butterworth_window, gaussian_sum, voigt_sum, mask_grads
-from .utils import InteractivePlot, make_mask_circle_centre, find_duplicate_row_indices, remove_close_coordinates
+from .model import butterworth_window, gaussian_sum, voigt_sum, mask_grads, gaussian_local, add_gauss_to_total_sum, gaussian_global
+from .utils import InteractivePlot, make_mask_circle_centre, find_duplicate_row_indices, remove_close_coordinates,get_random_indices_in_batches,find_element_indices
 
 class ImageModelFitting:
     def __init__(self, image: np.array, pixel_size=1):
+        """
+        Initialize the Fitting class.
+
+        Args:
+            image (np.array): The input image as a numpy array.
+            pixel_size (float, optional): The size of each pixel. Defaults to 1.
+        """
 
         if len(image.shape) == 2:
             self.nx, self.ny = image.shape
@@ -22,7 +31,6 @@ class ImageModelFitting:
         self.device = "cpu"
         self.image = image.astype(np.float32)
         self.local_shape = image.shape
-        # self.image = (image - image.min()) / (image.max() - image.min())
         self.pixel_size = pixel_size
         self.atom_type = None
         self.coordinates = None
@@ -36,14 +44,31 @@ class ImageModelFitting:
         self.X, self.Y = np.meshgrid(x, y, indexing="ij")
 
     @property
-    def window(self):
-        if self.fit_local:
-            window = butterworth_window(self.local_shape, 0.5, 1)
-        else:
-            window = butterworth_window(self.image.shape, 0.5, 10)
-        return window
+        def window(self):
+            """
+            Returns the window used for fitting.
+
+            If `fit_local` is True, a Butterworth window is created with the shape of `local_shape`.
+            If `fit_local` is False, a Butterworth window is created with the shape of `image.shape`.
+
+            Returns:
+                numpy.ndarray: The Butterworth window used for fitting.
+            """
+            if self.fit_local:
+                window = butterworth_window(self.local_shape, 0.5, 10)
+            else:
+                window = butterworth_window(self.image.shape, 0.5, 10)
+            return window
 
     def import_coordinates(self, coordinates, atom_type=None):
+        """
+        Import the coordinates of the atomic columns.
+
+        Args:
+            coordinates (np.array): The coordinates of the atomic columns.
+            atom_type (np.array, optional): The type of each atomic column. Defaults to None.
+        """
+
         if coordinates is not None:
 
             self.coordinates = coordinates
@@ -55,6 +80,18 @@ class ImageModelFitting:
     def find_peaks(
         self, atom_size=1, threshold_rel=0.2, exclude_border=False, image=None
     ):
+        """
+        Find the peaks in the image.
+
+        Args:
+            atom_size (int, optional): The size of the atomic columns. Defaults to 1.
+            threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
+            exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
+            image (np.array, optional): The input image. Defaults to None.
+
+        Returns:
+            np.array: The coordinates of the peaks.
+        """
         if image is None:
             image = self.image
         min_distance = int(atom_size / self.pixel_size)
@@ -113,7 +150,7 @@ class ImageModelFitting:
                 y - windows_size : y + windows_size + 1,
             ]
             mask = make_mask_circle_centre(region, r)
-            region = (region-region.min())/(region.std())
+            region = (region-region.min())/(region.max()-region.min())
             region = region * mask
             local_x, local_y = center_of_mass(region)
             self.coordinates[i] = [
@@ -303,9 +340,8 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, gauss_ratio=0.9):
+    def init_params(self):
         width = self.guess_radius()[0]
-        model = self.model
         # self.center_of_mass()
         coord = np.array(self.coordinates)
         index = (coord).astype(int)
@@ -313,32 +349,138 @@ class ImageModelFitting:
         height = self.image[index[:, 0], index[:, 1]].ravel() - background
         # get the lowest 20% of the intensity as the background
         width = np.tile(width, self.num_coordinates)
-        if model == "gaussian":
+        if self.model == "gaussian":
             # Initialize the parameters
             params = {
                 "pos_x": coord[:, 0],  # x position
                 "pos_y": coord[:, 1],  # y position
                 "height": height,  # height
-                "width": width,  # width
+                "sigma": width,  # width
             }
-        elif model == "voigt":
+        elif self.model == "voigt":
             # Initialize the parameters
             params = {
                 "pos_x": coord[:, 0],  # x position
                 "pos_y": coord[:, 1],  # y position
                 "height": height,  # height
-                "width": width,  # width
+                "sigma": width,  # width
                 "gamma": width / np.log(2),  # width
-                "ratio": gauss_ratio,  # ratio
+                "ratio": 0.9,  # ratio
             }
         if self.fit_background:
             params["background"] = background
 
         return params
 
-    def segment_and_fit(
+    def fit_region(self, params, fitting_region, update_region, maxiter=1000, tol=1e-4, step_size=0.01, plot=False,verbose=False):
+        left,right,top,bottom = fitting_region
+        center_left,center_right,center_top,center_bottom = update_region
+        pos_x = params["pos_x"]
+        pos_y = params["pos_y"]
+        # get the region of the image based on the patch_size and buffer_size
+        # the buffer_size is on both sides of the patch
+
+        image_region = self.image[left:right, top:bottom]
+        self.local_shape = image_region.shape
+
+        # get the region of the coordinates
+
+        mask_region = (pos_x > left) & (pos_x < right) & (pos_y > top) & (pos_y < bottom)
+        mask_center = (pos_x > center_left) & (pos_x < center_right) & (pos_y > center_top) & (pos_y < center_bottom)
+        region_indices = np.where(mask_region)[0]
+        center_indices = np.where(mask_center)[0]
+        if len(center_indices) == 0:
+            return params , None
+        index_center_in_region = np.isin(region_indices, center_indices).squeeze()
+        # index_center_in_region = find_element_indices(region_indices, center_indices)
+
+        # get the buffer atoms as the difference between the region_atoms and the central_atoms
+        local_X, local_Y = (
+            self.X[left:right, top:bottom],
+            self.Y[left:right, top:bottom],
+        )
+        if mask_center.sum() == 0:
+            return params , None
+        
+        local_params = {
+            key: value[mask_region]
+            for key, value in params.items()
+            if key not in ["background", "ratio"]
+        }
+        local_params["background"] = params["background"]
+        if "ratio" in params:
+            local_params["ratio"] = params["ratio"]
+
+        global_prediction = self.predict(params, self.X, self.Y)
+        local_prediction = self.predict(local_params, local_X, local_Y)
+        local_residual = (
+            global_prediction[left:right, top:bottom] - local_prediction
+        )
+        local_target = image_region - local_residual
+        local_params = self.optimize(local_target, local_params, local_X, local_Y, maxiter, tol, step_size, verbose)
+        # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background'])
+        for key, value in local_params.items():
+            if key not in ["background", "ratio"]:
+                value_central = value[index_center_in_region]
+                # check if the params[key] is jax array
+                params[key][mask_center] = value_central
+                # params[key][index_region_atoms] = value
+            else:
+                params[key] = value
+        # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = [])
+        # else:
+        #     local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background', 'ratio','sigma'])
+
+        if plot:
+            plt.subplots(1, 3, figsize=(15, 5))
+            plt.subplot(1, 3, 1)
+            plt.imshow(image_region, cmap="gray")
+            # plt.imshow(image_region, cmap="gray")
+            plt.scatter(
+                pos_y[mask_region] - top,
+                pos_x[mask_region] - left,
+                color="b",
+                s=1,
+            )
+            plt.scatter(
+                pos_y[mask_center] - top,
+                pos_x[mask_center] - left,
+                color="r",
+                s=1,
+            )
+            # get equal aspect ratio
+            plt.gca().set_aspect("equal", adjustable="box")
+            # plt.gca().invert_yaxis()
+            plt.subplot(1, 3, 2)
+            prediction = self.predict(local_params, local_X, local_Y)
+            plt.imshow(prediction, cmap="gray")
+            # mask = (local_params["pos_x"] > left) & (local_params["pos_x"] < right) & (local_params["pos_y"] > top) & (local_params["pos_y"] < bottom)
+            plt.scatter(
+                pos_y[mask_region] - top,
+                pos_x[mask_region] - left,
+                color="b",
+                s=1,
+            )
+            plt.scatter(
+                pos_y[mask_center] - top,
+                pos_x[mask_center] - left,
+                color="r",
+                s=1,
+            )
+            # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
+            plt.gca().set_aspect("equal", adjustable="box")
+            plt.subplot(1, 3, 3)
+            plt.imshow(local_target - prediction, cmap="gray")
+            # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
+            plt.gca().set_aspect("equal", adjustable="box")
+
+            # plt.gca().invert_yaxis()
+            plt.show()
+        return params, local_params
+    
+    def fit_patch(
         self,
-        model="gaussian",
+        params,
         step_size=0.01,
         maxiter=1000,
         tol=1e-4,
@@ -346,11 +488,11 @@ class ImageModelFitting:
         buffer_size=None,
         stride_size=None,
         plot=False,
+        verbose=False,
+        mode = "sequential",
+        num_random_patches = 10,
     ):
         self.fit_local = True
-        self.model = model
-        params = self.init_params()
-        atom_positions = self.coordinates
         if buffer_size is None:
             width, _, _ = (
                 self.guess_radius()
@@ -359,133 +501,47 @@ class ImageModelFitting:
         if stride_size is None:
             stride_size = int(patch_size / 2)
         # create a sqaure patch with patch_size
-        half_patch = int(patch_size / 2)    
-        for loop_idx in range(2):
-            for i in tqdm(range(half_patch, self.nx, stride_size)):
-                for j in tqdm(range(half_patch, self.ny, stride_size)):
-                    # get the region of the image based on the patch_size and buffer_size
-                    # the buffer_size is on both sides of the patch
-                    left = max(i -half_patch - buffer_size, 0)
-                    right = min(i + half_patch + buffer_size, self.nx)
-                    top = max(j - half_patch - buffer_size, 0)
-                    bottom = min(j + half_patch + buffer_size, self.ny)
-                    image_region = self.image[left:right, top:bottom]
-                    self.local_shape = image_region.shape
+        half_patch = int(patch_size / 2)
+        if mode == "sequential":
+            x_i = np.arange(half_patch, self.nx, stride_size)
+            y_i = np.arange(half_patch, self.ny, stride_size)
+            ii,jj = np.meshgrid(x_i, y_i, indexing='ij')
+            ii = ii.ravel()
+            jj = jj.ravel()
+        elif mode == "random":
+            ii = np.random.randint(half_patch, self.nx - half_patch, num_random_patches)
+            jj = np.random.randint(half_patch, self.ny - half_patch, num_random_patches)
 
-                    center_left = max(i- half_patch, 0)
-                    center_right = min(i + half_patch, self.nx)
-                    center_top = max(j- half_patch, 0)
-                    center_bottom = min(j + half_patch, self.ny)
-                    # get the region of the coordinates
-                    region_atoms = atom_positions[
-                        np.where(
-                            (atom_positions[:, 0] > left)
-                            & (atom_positions[:, 0] < right)
-                            & (atom_positions[:, 1] > top)
-                            & (atom_positions[:, 1] < bottom)
-                        )
-                    ]
-                    central_atoms = atom_positions[
-                        np.where(
-                            (atom_positions[:, 0] > center_left)
-                            & (atom_positions[:, 0] < center_right)
-                            & (atom_positions[:, 1] > center_top)
-                            & (atom_positions[:, 1] < center_bottom)
-                        )
-                    ]
-                    # get the buffer atoms as the difference between the region_atoms and the central_atoms
-                    local_X, local_Y = (
-                        self.X[left:right, top:bottom],
-                        self.Y[left:right, top:bottom],
-                    )
-                    if len(central_atoms) == 0:
-                        continue
-                    matches = (self.coordinates[:, None, :] == region_atoms).all(-1).any(1)
-                    index_region_atoms = np.where(matches)[0]
-                    matches = (self.coordinates[:, None, :] == central_atoms).all(-1).any(1)
-                    index_central_atoms = np.where(matches)[0]
-                    mask_central = np.isin(index_region_atoms, index_central_atoms)
-                    local_params = {
-                        key: value[index_region_atoms]
-                        for key, value in params.items()
-                        if key not in ["background", "ratio"]
-                    }
-                    local_params["background"] = params["background"]
-                    if "ratio" in params:
-                        local_params["ratio"] = params["ratio"]
+        for index in tqdm(range(len(ii))):
+            i, j = ii[index], jj[index]
+            left = max(i -half_patch - buffer_size, 0)
+            right = min(i + half_patch + buffer_size, self.nx)
+            top = max(j - half_patch - buffer_size, 0)
+            bottom = min(j + half_patch + buffer_size, self.ny)
 
-                    global_prediction = self.predict(params, self.X, self.Y)
-                    local_prediction = self.predict(local_params, local_X, local_Y)
-                    local_residual = (
-                        global_prediction[left:right, top:bottom] - local_prediction
-                    )
-                    local_target = image_region - local_residual
-                    # local_params = self.optimize(local_target, local_params, local_X, local_Y, maxiter, tol, step_size)
-                    if loop_idx == 0:
-                        local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = [])
-                    else:
-                        local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background', 'ratio','sigma'])
+            if left < buffer_size:
+                left = 0
+            if right > self.nx - buffer_size:
+                right = self.nx
+            if top < buffer_size:
+                top = 0
+            if bottom > self.ny - buffer_size:
+                bottom = self.ny
 
-                    if plot:
-                        plt.subplots(1, 3, figsize=(15, 5))
-                        plt.subplot(1, 3, 1)
-                        plt.imshow(image_region, cmap="gray")
-                        # plt.imshow(image_region, cmap="gray")
-                        plt.scatter(
-                            region_atoms[:, 1] - top,
-                            region_atoms[:, 0] - left,
-                            color="b",
-                            s=1,
-                        )
-                        plt.scatter(
-                            region_atoms[:, 1][mask_central] - top,
-                            region_atoms[:, 0][mask_central] - left,
-                            color="r",
-                            s=1,
-                        )
-                        # get equal aspect ratio
-                        plt.gca().set_aspect("equal", adjustable="box")
-                        # plt.gca().invert_yaxis()
-                        plt.subplot(1, 3, 2)
-                        prediction = self.predict(local_params, local_X, local_Y)
-                        plt.imshow(prediction, cmap="gray")
-                        # mask = (local_params["pos_x"] > left) & (local_params["pos_x"] < right) & (local_params["pos_y"] > top) & (local_params["pos_y"] < bottom)
-                        plt.scatter(
-                            local_params["pos_y"] - top,
-                            local_params["pos_x"] - left,
-                            color="b",
-                            s=1,
-                        )
-                        plt.scatter(
-                            local_params["pos_y"][mask_central] - top,
-                            local_params["pos_x"][mask_central] - left,
-                            color="r",
-                            s=1,
-                        )
-                        # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
-                        plt.gca().set_aspect("equal", adjustable="box")
-                        plt.subplot(1, 3, 3)
-                        plt.imshow(local_target - prediction, cmap="gray")
-                        # plt.scatter(local_params["pos_y"][mask] - top, local_params["pos_x"][mask] - left, color='red',s = 1)
-                        plt.gca().set_aspect("equal", adjustable="box")
-
-                        # plt.gca().invert_yaxis()
-                        plt.show()
-
-                    # update the parameters only to the central atoms according to the mask_central
-                    for key, value in local_params.items():
-                        if key not in ["background", "ratio"]:
-                            value_central = value[mask_central]
-                            # check if the params[key] is jax array
-                            params[key][index_central_atoms] = value_central
-                            # params[key][index_region_atoms] = value
-                        else:
-                            params[key] = value
-            # have a linear estimator of the background and height of the gaussian peaks
-            
-        # params = self.global_optimize(params)
+            center_left = left + buffer_size if left > 0 else 0
+            center_right = right - buffer_size if right < self.nx else self.nx
+            center_top = top + buffer_size if top > 0 else 0
+            center_bottom = bottom - buffer_size if bottom < self.ny else self.ny
+            if verbose:
+                print(f"left = {left}, right = {right}, top = {top}, bottom = {bottom}")
+                print(f"center_left = {center_left}, center_right = {center_right}, center_top = {center_top}, center_bottom = {center_bottom}")
+            params, local_params = self.fit_region(params, [left, right, top, bottom],[center_left,center_right,center_top,center_bottom], maxiter, tol, step_size, plot,verbose)
+            if self.same_width:
+                params['sigma'][:] =  params['sigma'].mean()
+        # have a linear estimator of the background and height of the gaussian peaks
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
+        return params
 
     def optimize(self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
         opt = optax.adam(step_size)
@@ -496,6 +552,48 @@ class ImageModelFitting:
         params = res[0]
         return params
 
+    def linear_estimator(self, params):
+        from scipy.sparse import coo_matrix
+        from scipy.sparse.linalg import spsolve, cg,lsqr
+        # create the design matrix as array of gaussian peaks + background
+        pos_x = params["pos_x"]
+        pos_y = params["pos_y"]
+        sigma = params["sigma"]
+        height = params["height"]
+        rows = []
+        cols = []
+        data = []
+        window_size = int(sigma.mean() * 5)      
+        x = np.arange(-window_size, window_size+1, 1)
+        y = np.arange(-window_size, window_size+1, 1)
+        local_X, local_Y = np.meshgrid(x,y)
+        gauss_local = gaussian_local(local_X, local_Y, pos_x, pos_y, height, sigma)
+
+        for i in range(self.num_coordinates):
+            global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[i].astype(int)
+            mask = (global_X >= 0) & (global_X < self.nx) & (global_Y >= 0) & (global_Y < self.ny)
+            flat_index = global_X[mask].flatten() * self.ny + global_Y[mask].flatten()
+            rows.extend(flat_index)
+            cols.extend(np.tile(i, flat_index.shape[0]))
+            data.extend(gauss_local[:,:,i][mask].ravel())
+        rows.extend(self.X.flatten() * self.ny + self.Y.flatten())
+        cols.extend(np.tile(self.num_coordinates, self.nx*self.ny))
+        data.extend(np.ones(self.nx*self.ny))
+        design_matrix = coo_matrix((data, (rows, cols)), shape=(self.nx*self.ny, self.num_coordinates+1))
+        # create the target as the image
+        b = self.image.ravel()
+        # solve the linear equation
+        # solution = lsqr(design_matrix, b)[0]
+        solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
+        # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
+        # update the background and height
+        params["background"] = solution[-1] if solution[-1] > 0 else 0
+        height_scale = solution[:-1]
+        height_scale[height_scale < 0] = 1
+        height_scale[height_scale > 2] = 2
+        height_scale[height_scale < 0.5] = 0.5
+        params["height"] = height_scale * params["height"] 
+        return params
 
     
     def fit_global(self, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
@@ -504,6 +602,114 @@ class ImageModelFitting:
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
 
+    def convergence(self, params, pre_params, tol=1e-2):
+        """
+        Checks if the parameters have converged within a specified tolerance.
+
+        This function iterates over each parameter in `params` and its corresponding 
+        value in `pre_params` to determine if the change (update) is within a specified 
+        tolerance level, `tol`. For position parameters ('pos_x', 'pos_y'), it checks if 
+        the absolute update exceeds 1. For other parameters ('height', 'sigma', 'gamma', 
+        'ratio', 'background'), it checks if the relative update exceeds `tol`.
+
+        Parameters:
+            params (dict): Current values of the parameters.
+            pre_params (dict): Previous values of the parameters.
+            tol (float, optional): Tolerance level for convergence. Default is 1e-2.
+
+        Returns:
+            bool: True if all parameters have converged within the tolerance, False otherwise.
+        """
+        # Loop through current parameters and their previous values
+        for key, (current_val, pre_val) in zip(params.keys(), params.items(), pre_params.items()):
+            if key not in pre_params:
+                continue  # Skip keys that are not in pre_params
+            
+            # Calculate the update difference
+            update = np.abs(current_val - pre_val)
+            
+            # Check convergence based on parameter type
+            if key in ["pos_x", "pos_y"]:
+                max_update = update.max()
+                print(f"Convergence rate for {key} = {max_update}")
+                if max_update > 1:
+                    print("Convergence not reached")
+                    return False
+            else:
+                # Avoid division by zero and calculate relative update
+                value_with_offset = current_val + 1e-10
+                rate = np.abs(update / value_with_offset).max()
+                print(f"Convergence rate for {key} = {rate}")
+                if rate > tol:
+                    print("Convergence not reached")
+                    return False
+                    
+        print("Convergence reached")
+        return True
+                    
+    def fit_random_batch(self, params, num_epoch =2, batch_size=500, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False, plot = False):
+        self.fit_local = False
+        self.converged = False
+        while self.converged is False and num_epoch > 0:
+            num_epoch -= 1
+            pre_params = copy.deepcopy(params)
+            random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
+            image = self.image
+            X = self.X
+            Y = self.Y
+            for index in tqdm(random_batches, desc="Fitting random batch"):
+                mask = np.zeros(self.num_coordinates, dtype=bool)
+                mask[index] = True
+                select_params = {
+                    key: value[mask]
+                    for key, value in params.items()
+                    if key not in ["background", "ratio"]
+                }
+                select_params["background"] = params["background"]
+                if "ratio" in params:
+                    select_params["ratio"] = params["ratio"]
+                global_prediction = self.predict(params, self.X, self.Y)
+                local_prediction = self.predict(select_params, self.X, self.Y)
+                local_residual = (
+                    global_prediction - local_prediction
+                )
+                local_target = image - local_residual
+                select_params = self.optimize(local_target, select_params, X, Y, maxiter, tol, step_size, verbose)
+                for key, value in select_params.items():
+                    if key not in ["background", "ratio"]:
+                        # check if the params[key] is jax array
+                        params[key][mask] = value
+
+                    else:
+                        params[key] = value
+                if self.same_width:
+                    params['sigma'][:] =  params['sigma'].mean()
+                if plot:
+                    plt.subplots(1, 3, figsize=(15, 5))
+                    plt.subplot(1, 3, 1)
+                    plt.imshow(local_target, cmap="gray")
+                    # plt.scatter(
+                    #     params["pos_y"], params["pos_x"], color="b", s=1
+                    # )
+                    plt.scatter(
+                        params["pos_y"][index], params["pos_x"][index], color="r", s=1
+                    )
+                    plt.gca().set_aspect("equal", adjustable="box")
+                    plt.subplot(1, 3, 2)
+                    prediction = self.predict(select_params, X, Y)
+                    plt.imshow(prediction, cmap="gray")
+                    plt.scatter(
+                        select_params["pos_y"], select_params["pos_x"], color="b", s=1
+                    )
+                    plt.gca().set_aspect("equal", adjustable="box")
+                    plt.subplot(1, 3, 3)
+                    plt.imshow(local_target - prediction, cmap="gray")
+                    plt.gca().set_aspect("equal", adjustable="box")
+                    plt.show()
+            self.converged = self.convergence(params, pre_params, tol)
+        self.update_params(params)
+        self.prediction = self.predict(params, self.X, self.Y)
+        return params
 
 
     def fit_gradient(
@@ -572,7 +778,7 @@ class ImageModelFitting:
         # diff = gaussian_filter_jax(diff, 2.0)
 
         # dammping the difference near the edge
-        mse = np.std(diff)
+        mse = jnp.sqrt(jnp.mean(diff ** 2))
         L1 = jnp.mean(jnp.abs(diff))
         # get the mse of binning differece
         # bin_size = 20
@@ -589,7 +795,27 @@ class ImageModelFitting:
         prediction = self.predict(params, X, Y)
         diff = prediction - image
         return diff
-
+    
+    def predict_local(self,params):
+        if self.fit_background:
+            background = params["background"]
+        else:
+            background = 0
+        pos_x = params["pos_x"]
+        pos_y = params["pos_y"]
+        height = params["height"]
+        sigma = params["sigma"]
+        if self.same_width:
+            sigma = sigma.mean()
+        windos_size = int(sigma.max()*3)
+        x = np.arange(-windos_size, windos_size+1, 1)
+        y = np.arange(-windos_size, windos_size+1, 1)
+        X, Y = np.meshgrid(x,y)
+        gauss_local = gaussian_local(X, Y, pos_x, pos_y, height, sigma)
+        gauss_local = np.array(gauss_local)
+        prediction = add_gauss_to_total_sum(np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size) + background
+        return prediction
+    
     def predict(self, params, X, Y):
         if self.fit_background:
             background = params["background"]
@@ -598,50 +824,13 @@ class ImageModelFitting:
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         height = params["height"]
-        sigma = params["width"]
+        sigma = params["sigma"]
         if self.same_width:
             sigma = sigma.mean()
 
         if self.model == "gaussian":
             # if self.num_coordinates<1000:
             prediction = gaussian_sum(X, Y, pos_x, pos_y, height, sigma, background)
-            # else:
-            #     windos_size = int(sigma.max()*3)
-            #     x = np.arange(-windos_size, windos_size+1, 1)
-            #     y = np.arange(-windos_size, windos_size+1, 1)
-            #     X, Y = np.meshgrid(x,y)
-            #     gauss_local = gaussian_local(X, Y, pos_x, pos_y, height, sigma)
-            #     # if the type of the pos_x is jax trace array
-            #     # if isinstance(pos_x, jax.core.Tracer):
-            #     #     gauss_local = np.array(gauss_local.val)
-            #     #     pos_x = np.array(pos_x.val)
-            #     #     pos_y = np.array(pos_y.val)
-            #     #     background = background.val
-            #     # elif isinstance(pos_x, np.ndarray):
-            #     #     gauss_local = np.array(gauss_local)
-            #     #     pos_x = np.array(pos_x)
-            #     #     pos_y = np.array(pos_y)
-            #     prediction = add_gauss_to_total_sum_jax(jnp.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size) + background
-            # # the the residual size devide by the batch size
-            # batch_size = 100
-            # res_size = len(pos_x) % batch_size
-            # # get the the number of batches
-            # num_batches = len(pos_x) // batch_size
-            # # get the size of all the batches
-            # total_batch = num_batches * batch_size
-            # prediction = gaussian_sum_batched(
-            # X, Y, pos_x[:total_batch], pos_y[:total_batch], height[:total_batch], sigma, background
-            # )
-            # if res_size > 0:
-            #     prediction += gaussian_sum(
-            #         X,
-            #         Y,
-            #         pos_x[total_batch:],
-            #         pos_y[total_batch:],
-            #         height[total_batch:],
-            #         sigma,
-            #         0,
-            #     )
 
         elif self.model == "voigt":
             gamma = params["gamma"]
@@ -666,7 +855,7 @@ class ImageModelFitting:
         self.pos_x = params["pos_x"] * self.pixel_size
         self.pos_y = params["pos_y"] * self.pixel_size
         self.height = params["height"]
-        self.sigma = params["width"] * self.pixel_size
+        self.sigma = params["sigma"] * self.pixel_size
         if self.fit_background:
             self.background = params["background"]
         else:
