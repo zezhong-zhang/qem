@@ -32,20 +32,20 @@ def gaussian_global(X, Y, pos_x, pos_y, height, width):
 
 
 @njit(nopython=True, parallel=True)
-def add_gauss_to_total_sum(total_sum, pos_x, pos_y, gaussian_local, windows_size):
+def add_gaussian_at_positions(total_sum, pos_x, pos_y, gaussian_local, windows_size):
     pos_x = pos_x.astype(np.int32)
     pos_y = pos_y.astype(np.int32)
     for i in range(len(pos_x)):
-        left = max(pos_y[i] - windows_size, 0)
-        right = min(pos_y[i] + windows_size + 1, total_sum.shape[0])
-        top = max(pos_x[i] - windows_size, 0)
-        bottom = min(pos_x[i] + windows_size + 1, total_sum.shape[1])
-        local_left = left - pos_y[i] + windows_size
-        local_right = right - pos_y[i] + windows_size
-        local_top = top - pos_x[i] + windows_size
-        local_bottom = bottom - pos_x[i] + windows_size
-        total_sum[left:right, top:bottom] += gaussian_local[
-            local_left:local_right, local_top:local_bottom, i
+        left = max(pos_x[i] - windows_size, 0)
+        right = min(pos_x[i] + windows_size + 1, total_sum.shape[1])
+        top = max(pos_y[i] - windows_size, 0)
+        bottom = min(pos_y[i] + windows_size + 1, total_sum.shape[0])
+        local_left = left - pos_x[i] + windows_size
+        local_right = right - pos_x[i] + windows_size
+        local_top = top - pos_y[i] + windows_size
+        local_bottom = bottom - pos_y[i] + windows_size
+        total_sum[top:bottom,left:right] += gaussian_local[
+            local_top:local_bottom, local_left:local_right, i
         ]
     return total_sum
 
