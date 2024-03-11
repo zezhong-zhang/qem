@@ -285,7 +285,7 @@ class Benchmark:
             full_path = os.path.join(folder_path, file_path)
             plt.savefig(full_path, dpi=300)
 
-    def scs_relative_error(self):
+    def scs_error(self, relative = True):
         volume_qem = self.scs_qem
         volume_statstem = self.scs_statstem
         if volume_qem.shape != volume_statstem.shape:
@@ -302,8 +302,9 @@ class Benchmark:
                 ]
             )
             volume_statstem = volume_statstem[index_statstem_in_qem]
-        mask = (volume_statstem > np.percentile(volume_statstem, 0.1)) & (
-            volume_statstem < np.percentile(volume_statstem, 99.9)
-        )
-        error = (volume_statstem - volume_qem) / volume_qem
+        mask = (volume_statstem>np.percentile(volume_statstem, 0.1)) & (volume_statstem<np.percentile(volume_statstem, 99.9))
+        if relative:
+            error = (volume_statstem-volume_qem)/volume_qem
+        else:
+            error = volume_statstem-volume_qem
         return error[mask].mean(), error[mask].std()
