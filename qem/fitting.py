@@ -11,7 +11,10 @@ from jaxopt import OptaxSolver
 from skimage.feature import peak_local_max
 from tqdm import tqdm
 import copy
-
+import logging
+from scipy.sparse import coo_matrix
+from scipy.sparse.linalg import spsolve
+import warnings
 from .model import butterworth_window, gaussian_sum, voigt_sum, mask_grads, gaussian_local, add_gaussian_at_positions, gaussian_global
 from .utils import InteractivePlot, make_mask_circle_centre, find_duplicate_row_indices, remove_close_coordinates,get_random_indices_in_batches,find_element_indices
 
@@ -340,8 +343,11 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self):
-        width = self.guess_radius()[0]
+    def init_params(self, atom_size = 0.7, guess_radius = False):
+        if guess_radius:
+            width = self.guess_radius()[0]
+        else:
+            width = (atom_size / self.pixel_size)
         # self.center_of_mass()
         pos_x = self.coordinates[:, 0]
         pos_y = self.coordinates[:, 1]
@@ -553,8 +559,7 @@ class ImageModelFitting:
         return params
 
     def linear_estimator(self, params):
-        from scipy.sparse import coo_matrix
-        from scipy.sparse.linalg import spsolve, cg,lsqr
+
         # create the design matrix as array of gaussian peaks + background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
@@ -584,18 +589,37 @@ class ImageModelFitting:
         b = self.image.ravel()
         # solve the linear equation
         # solution = lsqr(design_matrix, b)[0]
-        solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
+        try:
+            # Attempt to solve the linear system
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
+                # Check if any of the caught warnings are related to a singular matrix
+                if w and any("singular matrix" in str(warning.message) for warning in w):
+                    print("Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated.")
+                    return params
+        except np.linalg.LinAlgError as e:
+            # Catch exceptions for a singular matrix problem
+            if 'Singular matrix' in str(e):
+                print("Error: Singular matrix encountered.")
+            else:
+                raise
+        
         # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
         # update the background and height
-        params["background"] = solution[-1] if solution[-1] > 0 else 0.0
         height_scale = solution[:-1]
-        height_scale[height_scale < 0] = 1
-        height_scale[height_scale > 2] = 2
-        height_scale[height_scale < 0.5] = 0.5
-        params["height"] = height_scale * params["height"] 
+        if np.NaN in height_scale:
+            logging.warning("The height has NaN, the linear estimator is not valid, parameters are not updated")
+            return params
+        else:
+            params["background"] = solution[-1] if solution[-1] > 0 else 0.0
+            mask = height_scale * params["height"] < 0 
+            if mask.any():
+                logging.warning("The height has negative value, I will make it positive but be careful with the result")
+                height_scale[mask] = -1
+            params["height"] = height_scale * params["height"] 
         return params
 
-    
     def fit_global(self,params, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
         params = self.optimize(self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose)
         self.update_params(params)
