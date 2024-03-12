@@ -52,7 +52,7 @@ def add_gaussian_at_positions(total_sum, pos_x, pos_y, gaussian_local, windows_s
 
 
 @jit
-def gaussian_sum(X, Y, pos_x, pos_y, height, width, background):
+def gaussian_parallel(X, Y, pos_x, pos_y, height, width, background):
     # Unpack the parameters
     sum = (
         jnp.sum(
@@ -126,7 +126,7 @@ def gaussian_sum_batched(X, Y, pos_x, pos_y, height, width, background):
 
 
 @jit
-def voigt_sum(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
+def voigt_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
     R2 = (X[:, :, None] - pos_x[None, None, :]) ** 2 + (
         Y[:, :, None] - pos_y[None, None, :]
     ) ** 2
