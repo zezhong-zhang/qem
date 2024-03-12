@@ -82,31 +82,11 @@ class Benchmark:
             )
 
     @time_it
-    def refine(
-        self,
-        atom_size=0.5,
-        tol=1e-2,
-        maxiter=100,
-        step_size=1e-2,
-        num_epoch=10,
-        batch_size=1000,
-        verbose=False,
-        plot=True,
-        guess_radius=False,
-    ):
-        model = ImageModelFitting(self.image, pixel_size=self.dx)
-        model.import_coordinates(coordinates=self.input_coordinates / self.dx - 1)
-        params = model.init_params(atom_size=atom_size, guess_radius=guess_radius)
-        params = model.fit_random_batch(
-            params,
-            tol=tol,
-            maxiter=maxiter,
-            step_size=step_size,
-            num_epoch=num_epoch,
-            batch_size=batch_size,
-            verbose=verbose,
-            plot=plot,
-        )
+    def refine(self, atom_size = None, tol = 1e-2, maxiter = 100, step_size = 1e-2, num_epoch = 10, batch_size = 1000, verbose = False, plot = True, guess_radius = False):
+        model=ImageModelFitting(self.image, pixel_size=self.dx)
+        model.import_coordinates(coordinates=self.input_coordinates/self.dx-1)
+        params = model.init_params(atom_size=atom_size)
+        params = model.fit_random_batch(params, tol=tol, maxiter=maxiter, step_size=step_size, num_epoch=num_epoch, batch_size=batch_size, verbose=verbose, plot=plot)
         self.model_qem = model.prediction
         self.scs_qem = model.volume
         self.pos_x = model.pos_x
@@ -220,17 +200,20 @@ class Benchmark:
         pos_x_statstem = pos_x_statstem[index_statstem_in_qem]
         pos_y_statstem = pos_y_statstem[index_statstem_in_qem]
         volume_statstem = volume_statstem[index_statstem_in_qem]
+        
 
-        plt.subplots(figsize=(15, 5))
-        plt.subplot(1, 3, 1)
-        im = plt.scatter(pos_x, pos_y, c=volume_qem, s=100)
+        plt.subplots(figsize=(15,5))
+        plt.subplot(1,3,1)
+        im = plt.scatter(pos_x, pos_y, c=volume_qem, s=2)
         # make aspect ratio equal
-        plt.gca().set_aspect("equal", adjustable="box")
+        plt.gca().invert_yaxis()
+        plt.gca().set_aspect('equal', adjustable='box')
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"QEM refined scs ($\AA^2$)")
         plt.tight_layout()
-        plt.subplot(1, 3, 2)
-        im = plt.scatter(pos_x_statstem, pos_y_statstem, c=volume_statstem, s=100)
+        plt.subplot(1,3,2)
+        im = plt.scatter(pos_x_statstem,pos_y_statstem, c=volume_statstem, s=2)
+        plt.gca().invert_yaxis()
         plt.clim(volume_qem.min(), volume_qem.max())
         # make aspect ratio equal
         plt.gca().set_aspect("equal", adjustable="box")
@@ -238,9 +221,10 @@ class Benchmark:
         plt.title(r"Matlab StatSTEM refined scs ($\AA^2$)")
         plt.tight_layout()
 
-        plt.subplot(1, 3, 3)
-        im = plt.scatter(pos_x, pos_y, c=volume_statstem - volume_qem, s=100)
-        plt.gca().set_aspect("equal", adjustable="box")
+        plt.subplot(1,3,3)
+        im = plt.scatter(pos_x, pos_y, c=volume_statstem-volume_qem, s=2)
+        plt.gca().invert_yaxis()
+        plt.gca().set_aspect('equal', adjustable='box')
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"difference refined scs ($\AA^2$)")
         plt.tight_layout()
