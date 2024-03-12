@@ -834,8 +834,8 @@ class ImageModelFitting:
         diff = diff * self.window
         # dammping the difference near the edge
         mse = jnp.sqrt(jnp.mean(diff**2))
-        # L1 = jnp.mean(jnp.abs(diff))
-        return mse  # + L1
+        L1 = jnp.mean(jnp.abs(diff))
+        return mse + L1
 
     def residual(self, params, image, X, Y):
         # Compute the sum of the Gaussians
