@@ -98,7 +98,7 @@ class ImageModelFitting:
     @property
     def atom_types(self):
         if self._atom_types is None:
-            self._atom_types = np.zeros(self.num_coordinates)
+            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self._atom_types
 
     def find_peaks(
@@ -285,8 +285,13 @@ class ImageModelFitting:
         background = np.percentile(self.image, 20)
         height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
         # get the lowest 20% of the intensity as the background
-        width = np.tile(width, self.num_coordinates)
-        ratio = np.tile(0.9, self.num_coordinates)
+        if self.same_width:
+            unique_types = np.unique(self.atom_types)
+            width = np.tile(width, len(unique_types))
+            ratio = np.tile(0.9, len(unique_types))
+        else:
+            width = np.tile(width, self.num_coordinates)
+            ratio = np.tile(0.9, self.num_coordinates)
         if self.model == "gaussian":
             # Initialize the parameters
             params = {
@@ -310,19 +315,6 @@ class ImageModelFitting:
 
         return params
 
-    def fit_region(
-        self,
-        params,
-        fitting_region,
-        update_region,
-        maxiter=1000,
-        tol=1e-4,
-        step_size=0.01,
-        plot=False,
-        verbose=False,
-    ):
-        left, right, top, bottom = fitting_region
-        center_left, center_right, center_top, center_bottom = update_region
     def fit_region(
         self,
         params,
@@ -369,15 +361,7 @@ class ImageModelFitting:
         )
         if mask_center.sum() == 0:
             return params, None
-
-        local_params = {
-            key: value[mask_region]
-            for key, value in params.items()
-            if key not in ["background", "ratio"]
-        }
-        local_params["background"] = params["background"]
-        if "ratio" in params:
-            local_params["ratio"] = params["ratio"]
+        local_params = self.select_params(params, mask_region)
         self.atoms_selected = mask_region
         global_prediction = self.predict(params, self.X, self.Y)
         local_prediction = self.predict(local_params, local_X, local_Y)
@@ -395,14 +379,7 @@ class ImageModelFitting:
         )
         local_prediction_new = self.predict(local_params, local_X, local_Y)
         # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background'])
-        for key, value in local_params.items():
-            if key not in ["background"]:
-                value_central = value[index_center_in_region]
-                # check if the params[key] is jax array
-                params[key][mask_center] = value_central
-                # params[key][index_region_atoms] = value
-            else:
-                params[key] = value
+        params = self.update_from_local_params(params, local_params)
         # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = [])
         # else:
         #     local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background', 'ratio','sigma'])
@@ -610,18 +587,16 @@ class ImageModelFitting:
             return params
         else:
             params["background"] = solution[-1] if solution[-1] > 0 else 0.0
-            mask = height_scale * params["height"] < 0
-            if mask.any():
+            total_negative_mask = height_scale * params["height"] < 0
+            if total_negative_mask.any():
                 logging.warning(
-                    "The height has negative value, I will make it positive but be careful with the result"
+                    "The height has negative values, the linear estimator is not valid. I will make it positive but be careful with the results."
                 )
-                logging.warning(
-                    "The height has negative value, I will make it positive but be careful with the result"
-                )
-                height_scale[mask] = -1
-            height_scale[height_scale > 2] = 2
-            height_scale[height_scale < 0.5] = 0.5
-            params["height"] = height_scale * params["height"]
+                input_negative_mask = params["height"] < 0
+                scale_neagtive_mask = height_scale < 0
+                height_scale[scale_neagtive_mask] = 1
+                params["height"][input_negative_mask] = -params["height"][input_negative_mask]
+            params["height"] = height_scale* params["height"]
         return params
 
     def fit_global(self, params, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
@@ -677,6 +652,36 @@ class ImageModelFitting:
         print("Convergence reached")
         return True
 
+    def update_by_atom_types(self, params):
+        output_params = copy.deepcopy(params)
+        for key in ["sigma", "gamma", "ratio"]:
+            if key in params:
+                if len(params['pos_x']) < self.num_coordinates:
+                    atom_types = self.atom_types[self.atoms_selected]
+                else:
+                    atom_types = self.atom_types
+                output_params[key] = params[key][atom_types]
+        return output_params
+
+    def select_params(self, params, mask):
+        if self.same_width:
+            select_params = {
+                key: value[mask]
+                for key, value in params.items()
+                if key in ["pos_x", "pos_y", "height"]
+            }
+            for key in params.keys():
+                if key in ["sigma", "gamma", "ratio", "background"]:
+                    select_params[key] = params[key]
+        else:
+            select_params = {
+                key: value[mask]
+                for key, value in params.items()
+                if key not in ["background"]
+                }
+            select_params["background"] = params["background"]
+        return select_params
+
     def fit_random_batch(
         self,
         params,
@@ -703,13 +708,8 @@ class ImageModelFitting:
             for index in tqdm(random_batches, desc="Fitting random batch"):
                 mask = np.zeros(self.num_coordinates, dtype=bool)
                 mask[index] = True
-                select_params = {
-                    key: value[mask]
-                    for key, value in params.items()
-                    if key not in ["background"]
-                }
+                select_params = self.select_params(params, mask)
                 self.atoms_selected = mask
-                select_params["background"] = params["background"]
                 global_prediction = self.predict(params, self.X, self.Y)
                 local_prediction = self.predict(select_params, self.X, self.Y)
                 local_residual = global_prediction - local_prediction
@@ -717,16 +717,7 @@ class ImageModelFitting:
                 select_params = self.optimize(
                     local_target, select_params, X, Y, maxiter, tol, step_size, verbose
                 )
-                select_params = self.optimize(
-                    local_target, select_params, X, Y, maxiter, tol, step_size, verbose
-                )
-                for key, value in select_params.items():
-                    if key not in ["background"]:
-                        # check if the params[key] is jax array
-                        params[key][mask] = value
-
-                    else:
-                        params[key] = value
+                params = self.update_from_local_params(params, select_params)
                 if plot:
                     plt.subplots(1, 3, figsize=(15, 5))
                     plt.subplot(1, 3, 1)
@@ -751,6 +742,21 @@ class ImageModelFitting:
             self.converged = self.convergence(params, pre_params, tol)
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
+        return params
+
+    def update_from_local_params(self, params, local_params):
+        for key, value in local_params.items():
+            value = np.array(value)
+            if self.same_width:
+                if key in ["pos_x", "pos_y", "height"]:
+                    params[key][self.atoms_selected] = value
+                else:
+                    params[key] = value
+            else:
+                if key not in ["background"]:
+                    params[key][self.atoms_selected] = value
+                else:
+                    params[key] = value
         return params
 
     def fit_gradient(
@@ -813,24 +819,24 @@ class ImageModelFitting:
 
         return loss.mean()
 
-    def average_according_to_type(self, params, atom_types):
-        unique_types = np.unique(atom_types)
-        for atom_type in unique_types:
-            mask = atom_types == atom_type
-            mask = mask.squeeze()
-            for key, value in params.items():
-                is_jax_traced = isinstance(params[key], jax.numpy.ndarray)
-                if key in ["sigma", "gamma", "ratio"]:
-                    if is_jax_traced:
-                        # Calculate the mean only for the masked values using JAX
-                        mean_value = jnp.mean(value[mask])
-                        # Use JAX's indexing to update the values
-                        params[key] = value.at[mask].set(mean_value)
-                    else:
-                        # For non-JAX arrays, we can proceed with NumPy operations
-                        mean_value = np.mean(value[mask])
-                        params[key][mask] = mean_value
-        return params
+    # def average_according_to_type(self, params, atom_types):
+    #     unique_types = np.unique(atom_types)
+    #     for atom_type in unique_types:
+    #         mask = atom_types == atom_type
+    #         mask = mask.squeeze()
+    #         for key, value in params.items():
+    #             is_jax_traced = isinstance(params[key], jax.numpy.ndarray)
+    #             if key in ["sigma", "gamma", "ratio"]:
+    #                 if is_jax_traced:
+    #                     # Calculate the mean only for the masked values using JAX
+    #                     mean_value = jnp.mean(value[mask])
+    #                     # Use JAX's indexing to update the values
+    #                     params[key] = value.at[mask].set(mean_value)
+    #                 else:
+    #                     # For non-JAX arrays, we can proceed with NumPy operations
+    #                     mean_value = np.mean(value[mask])
+    #                     params[key][mask] = mean_value
+    #     return params
 
     def loss(self, params, image, X, Y):
         # Compute the sum of the Gaussians
@@ -853,6 +859,8 @@ class ImageModelFitting:
             background = params["background"]
         else:
             background = 0
+        if self.same_width:
+            params = self.update_by_atom_types(params)
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         height = params["height"]
@@ -883,14 +891,10 @@ class ImageModelFitting:
             background = params["background"]
         else:
             background = 0
-
         if self.same_width:
-            if len(params["sigma"]) < self.num_coordinates:
-                atom_types = self.atom_types[self.atoms_selected]
-            else:
-                atom_types = self.atom_types
-            params = self.average_according_to_type(params, atom_types)
+            params = self.update_by_atom_types(params)
 
+        
         if self.model == "gaussian":
             # if self.num_coordinates<1000:
             prediction = gaussian_parallel(
@@ -918,9 +922,12 @@ class ImageModelFitting:
         return prediction
 
     def update_params(self, params):
+        if self.same_width:
+            params = self.update_by_atom_types(params)
         self.pos_x = params["pos_x"] * self.pixel_size
         self.pos_y = params["pos_y"] * self.pixel_size
         self.height = params["height"]
+        
         self.sigma = params["sigma"] * self.pixel_size
         if self.fit_background:
             self.background = params["background"]
