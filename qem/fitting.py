@@ -116,13 +116,10 @@ class ImageModelFitting:
         Args:
             coordinates (np.array): The coordinates of the atomic columns.
         """
-
-        if coordinates is not None:
-
-            self.coordinates = coordinates
+        self.coordinates = coordinates
 
     def find_peaks(
-        self, atom_size=1, threshold_rel=0.2, exclude_border=False, image=None
+        self, atom_size=1, threshold_rel=0.2, threshold_abs = None, exclude_border=False, image=None
     ):
         """
         Find the peaks in the image.
@@ -143,12 +140,14 @@ class ImageModelFitting:
             image,
             min_distance=min_distance,
             threshold_rel=threshold_rel,
+            threshold_abs=threshold_abs,
             exclude_border=exclude_border,
         )
         peaks_locations = self.add_or_remove_peaks(
             peaks_locations[:,[1,0]], min_distance=min_distance, image=self.image
         )
         self.coordinates = peaks_locations
+        self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self.coordinates
 
     def remove_close_coordinates(self, threshold=10):
@@ -179,16 +178,16 @@ class ImageModelFitting:
         self.coordinates = coordinates[mask]
         return self.coordinates
 
-    def plot(self, image="original"):
+    def plot(self, image="input"):
         plt.figure()
         # x = np.arange(self.nx) * self.pixel_size
         # y = np.arange(self.ny) * self.pixel_size
-        if image == "original":
+        if image == "input":
             plt.imshow(self.image, cmap="gray")
             plt.scatter(
                 self.coordinates[:, 0], self.coordinates[:, 1], color="red", s=1
             )
-        elif image == "prediction":
+        elif image == "model":
             plt.imshow(self.model, cmap="gray")
             plt.scatter(
                 self.pos_x / self.pixel_size,
@@ -264,8 +263,8 @@ class ImageModelFitting:
         else:
             width = self.guess_radius()[0]
         # self.center_of_mass()
-        pos_x = self.coordinates[:, 0]
-        pos_y = self.coordinates[:, 1]
+        pos_x = copy.deepcopy(self.coordinates[:, 0])
+        pos_y = copy.deepcopy(self.coordinates[:, 1])
         background = np.percentile(self.image, 20)
         height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
         # get the lowest 20% of the intensity as the background
@@ -303,8 +302,8 @@ class ImageModelFitting:
         diff = diff * self.window
         # dammping the difference near the edge
         mse = jnp.sqrt(jnp.mean(diff**2))
-        L1 = jnp.mean(jnp.abs(diff))
-        return mse + L1
+        # L1 = jnp.mean(jnp.abs(diff))
+        return mse #+ L1
 
     def residual(self, params, image, X, Y):
         # Compute the sum of the Gaussians
@@ -453,7 +452,7 @@ class ImageModelFitting:
             #     )
             #     mask = (height_scale < 0.5) & (height_scale > 0)
             #     height_scale[mask] = 0.5
-                
+
             if (height_scale * params["height"] < 0).any():
                 logging.warning(
                     "The height has negative values, the linear estimator is not valid. I will make it positive but be careful with the results."
@@ -530,6 +529,7 @@ class ImageModelFitting:
         params = self.optimize(
             self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
         )
+        params = self.update_params_on_atom_type(params)
         self.update_params(params)
         self.model = self.predict(params, self.X, self.Y)
         return params
@@ -537,11 +537,11 @@ class ImageModelFitting:
     def fit_random_batch(
         self,
         params,
-        num_epoch=2,
+        num_epoch=5,
         batch_size=500,
-        maxiter=1000,
-        tol=1e-4,
-        step_size=0.01,
+        maxiter=50,
+        tol=1e-3,
+        step_size=1e-2,
         verbose=False,
         plot=False,
     ):
@@ -569,6 +569,7 @@ class ImageModelFitting:
                 select_params = self.optimize(
                     local_target, select_params, X, Y, maxiter, tol, step_size, verbose
                 )
+                select_params = self.project_params(select_params)
                 params = self.update_from_local_params(params, select_params, mask)
                 if plot:
                     plt.subplots(1, 3, figsize=(15, 5))
@@ -660,13 +661,8 @@ class ImageModelFitting:
             step_size,
             verbose,
         )
-        local_prediction_new = self.predict(local_params, local_X, local_Y)
-        # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background'])
         params = self.update_from_local_params(params, local_params, mask_center, index_center_in_region)
-        # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = [])
-        # else:
-        #     local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background', 'ratio','sigma'])
-
+        # params = self.update_from_local_params(params, local_params, mask_region)
         if plot:
             plt.subplots(1, 3, figsize=(15, 5))
             plt.subplot(1, 3, 1)
@@ -689,7 +685,7 @@ class ImageModelFitting:
             # plt.gca().invert_yaxis()
             plt.subplot(1, 3, 2)
 
-            plt.imshow(local_prediction_new, cmap="gray")
+            plt.imshow(local_prediction, cmap="gray")
             # mask = (local_params["pos_x"] > left) & (local_params["pos_x"] < right) & (local_params["pos_y"] > top) & (local_params["pos_y"] < bottom)
             plt.scatter(
                 pos_x[mask_region] - left,
@@ -706,7 +702,7 @@ class ImageModelFitting:
             # plt.scatter(local_params["pos_x"][mask] - left, local_params["pos_y"][mask] - top, color='red',s = 1)
             plt.gca().set_aspect("equal", adjustable="box")
             plt.subplot(1, 3, 3)
-            plt.imshow(local_target - local_prediction_new, cmap="gray")
+            plt.imshow(local_target - local_prediction, cmap="gray")
             # plt.scatter(local_params["pos_x"][mask] - left, local_params["pos_y"][mask] - top, color='red',s = 1)
             plt.gca().set_aspect("equal", adjustable="box")
 
@@ -728,7 +724,6 @@ class ImageModelFitting:
         mode="sequential",
         num_random_patches=10,
     ):
-        self.update_params_on_atom_type(params)
         self.fit_local = True
         if buffer_size is None:
             width, _, _ = (
@@ -746,9 +741,9 @@ class ImageModelFitting:
             ii = ii.ravel()
             jj = jj.ravel()
         elif mode == "random":
-            ii = np.random.randint(half_patch, self.nx - half_patch, num_random_patches)
-            jj = np.random.randint(half_patch, self.ny - half_patch, num_random_patches)
-        
+            ii = np.random.randint(half_patch, max(self.nx - half_patch, patch_size), num_random_patches)
+            jj = np.random.randint(half_patch, max(self.ny - half_patch, patch_size), num_random_patches)
+        params = self.linear_estimator(params)
         for index in tqdm(range(len(ii))):
             i, j = ii[index], jj[index]
             left = max(i - half_patch - buffer_size, 0)
@@ -859,7 +854,7 @@ class ImageModelFitting:
                 weight = mask.sum() / self.num_coordinates
                 update = value - params[key]
                 params[key] += update*weight
-                params[key] = value
+                # params[key] = value
         return params
     
     def update_params_on_atom_type(self, params):
@@ -896,3 +891,21 @@ class ImageModelFitting:
             self.gamma = params["gamma"] * self.pixel_size
             self.ratio = params["ratio"]
         self.params = params
+
+    def project_params(self, params):
+        for key, value in params.items():
+            if key == "pos_x":
+                params[key] = jnp.clip(value, 0, self.nx - 1)
+            elif key == "pos_y":
+                params[key] = jnp.clip(value, 0, self.ny - 1)
+            elif key == "height":
+                params[key] = jnp.clip(value, 0, np.sum(self.image))
+            elif key == "sigma":
+                params[key] = jnp.clip(value, 1, min(self.nx, self.ny) / 2)
+            elif key == "gamma":
+                params[key] = jnp.clip(value, 1, min(self.nx, self.ny) / 2)
+            elif key == "ratio":
+                params[key] = jnp.clip(value, 0, 1)
+            elif key == "background":
+                params[key] = jnp.clip(value, 0, np.max(self.image))
+        return params

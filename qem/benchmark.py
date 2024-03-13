@@ -82,9 +82,9 @@ class Benchmark:
             )
 
     @time_it
-    def refine(self, atom_size = None, tol = 1e-2, maxiter = 100, step_size = 1e-2, num_epoch = 10, batch_size = 1000, verbose = False, plot = True, guess_radius = False):
+    def refine(self, atom_size = None, tol = 1e-2, maxiter = 50, step_size = 1e-2, num_epoch = 10, batch_size = 1000, verbose = False, plot = True, guess_radius = False):
         model=ImageModelFitting(self.image, pixel_size=self.dx)
-        model.import_coordinates(coordinates=self.input_coordinates/self.dx-1)
+        model.import_coordinates(coordinates=self.input_coordinates/self.dx)
         params = model.init_params(atom_size=atom_size)
         params = model.fit_random_batch(params, tol=tol, maxiter=maxiter, step_size=step_size, num_epoch=num_epoch, batch_size=batch_size, verbose=verbose, plot=plot)
         self.model_qem = model.model
