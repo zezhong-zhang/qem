@@ -36,7 +36,10 @@ from qem.utils import (
     get_random_indices_in_batches,
 )
 from scipy.ndimage import center_of_mass
+import numpy as np
+import logging
 
+logging.basicConfig(level=logging.INFO)
 class ImageModelFitting:
     def __init__(self, image: np.array, pixel_size=1):
         """
@@ -159,42 +162,6 @@ class ImageModelFitting:
         self.coordinates = coordinates[mask]
         return self.coordinates
 
-    # def refine_center_of_mass(self, plot=False):
-    #     # do center of mass for each atom
-    #     r, _, _ = self.guess_radius()
-    #     windows_size = int(r) * 2
-    #     pre_coordinates = self.coordinates
-    #     current_coordinates = self.coordinates
-    #     converged = False
-    #     while converged is False:
-    #         for i in tqdm(range(self.num_coordinates)):
-    #             x, y = pre_coordinates[i]
-    #             x = int(x)
-    #             y = int(y)
-    #             # calculate the mask for distance < r
-    #             region = self.image[
-    #                 x - windows_size : x + windows_size + 1,
-    #                 y - windows_size : y + windows_size + 1,
-    #             ]
-    #             mask = make_mask_circle_centre(region, r)
-    #             region = region * mask
-    #             region = (region - region.min()) / (region.max() - region.min())
-    #             local_x, local_y = center_of_mass(region)
-    #             current_coordinates[i] = [
-    #                 x - windows_size + local_x,
-    #                 y - windows_size + local_y,
-    #             ]
-    #             if plot:
-    #                 plt.imshow(region, cmap="gray")
-    #                 plt.scatter(local_y, local_x, color="red", s=2)
-    #                 plt.scatter(
-    #                     y % 1 + windows_size, x % 1 + windows_size, color="blue", s=2
-    #                 )
-    #                 plt.show()
-    #                 plt.pause(1.0)
-    #         converged = np.abs(current_coordinates - pre_coordinates).max() < 0.5
-    #     return current_coordinates
-
     def plot(self, image="original"):
         plt.figure()
         # x = np.arange(self.nx) * self.pixel_size
@@ -285,13 +252,8 @@ class ImageModelFitting:
         background = np.percentile(self.image, 20)
         height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
         # get the lowest 20% of the intensity as the background
-        if self.same_width:
-            unique_types = np.unique(self.atom_types)
-            width = np.tile(width, len(unique_types))
-            ratio = np.tile(0.9, len(unique_types))
-        else:
-            width = np.tile(width, self.num_coordinates)
-            ratio = np.tile(0.9, self.num_coordinates)
+        width = np.tile(width, self.num_coordinates)
+        ratio = np.tile(0.9, self.num_coordinates)
         if self.model == "gaussian":
             # Initialize the parameters
             params = {
@@ -379,7 +341,8 @@ class ImageModelFitting:
         )
         local_prediction_new = self.predict(local_params, local_X, local_Y)
         # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background'])
-        params = self.update_from_local_params(params, local_params)
+        params = self.update_from_local_params(params, local_params, mask_center, index_center_in_region)
+        params = self.update_params_on_atom_type(params)
         # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = [])
         # else:
         #     local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background', 'ratio','sigma'])
@@ -486,8 +449,8 @@ class ImageModelFitting:
             center_top = top + buffer_size if top > 0 else 0
             center_bottom = bottom - buffer_size if bottom < self.ny else self.ny
             if verbose:
-                print(f"left = {left}, right = {right}, top = {top}, bottom = {bottom}")
-                print(
+                logging.info(f"left = {left}, right = {right}, top = {top}, bottom = {bottom}")
+                logging.info(
                     f"center_left = {center_left}, center_right = {center_right}, center_top = {center_top}, center_bottom = {center_bottom}"
                 )
             params, local_params = self.fit_region(
@@ -566,14 +529,14 @@ class ImageModelFitting:
                 if w and any(
                     "singular matrix" in str(warning.message) for warning in w
                 ):
-                    print(
+                    logging.warning(
                         "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
                     )
                     return params
         except np.linalg.LinAlgError as e:
             # Catch exceptions for a singular matrix problem
             if "Singular matrix" in str(e):
-                print("Error: Singular matrix encountered.")
+                logging.warning("Error: Singular matrix encountered.")
             else:
                 raise
 
@@ -587,8 +550,19 @@ class ImageModelFitting:
             return params
         else:
             params["background"] = solution[-1] if solution[-1] > 0 else 0.0
-            total_negative_mask = height_scale * params["height"] < 0
-            if total_negative_mask.any():
+            # if (height_scale>2).any():
+            #     logging.warning(
+            #         "The height has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
+            #     )
+            #     height_scale[height_scale>2] =2
+            # if (height_scale < 0.5).any():
+            #     logging.warning(
+            #         "The height has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
+            #     )
+            #     mask = (height_scale < 0.5) & (height_scale > 0)
+            #     height_scale[mask] = 0.5
+                
+            if (height_scale * params["height"] < 0).any():
                 logging.warning(
                     "The height has negative values, the linear estimator is not valid. I will make it positive but be careful with the results."
                 )
@@ -636,50 +610,29 @@ class ImageModelFitting:
             # Check convergence based on parameter type
             if key in ["pos_x", "pos_y"]:
                 max_update = update.max()
-                print(f"Convergence rate for {key} = {max_update}")
+                logging.info(f"Convergence rate for {key} = {max_update}")
                 if max_update > 1:
-                    print("Convergence not reached")
+                    logging.info("Convergence not reached")
                     return False
             else:
                 # Avoid division by zero and calculate relative update
                 value_with_offset = value + 1e-10
                 rate = np.abs(update / value_with_offset).max()
-                print(f"Convergence rate for {key} = {rate}")
+                logging.info(f"Convergence rate for {key} = {rate}")
                 if rate > tol:
-                    print("Convergence not reached")
+                    logging.info("Convergence not reached")
                     return False
 
-        print("Convergence reached")
+        logging.info("Convergence reached")
         return True
 
-    def update_by_atom_types(self, params):
-        output_params = copy.deepcopy(params)
-        for key in ["sigma", "gamma", "ratio"]:
-            if key in params:
-                if len(params['pos_x']) < self.num_coordinates:
-                    atom_types = self.atom_types[self.atoms_selected]
-                else:
-                    atom_types = self.atom_types
-                output_params[key] = params[key][atom_types]
-        return output_params
-
     def select_params(self, params, mask):
-        if self.same_width:
-            select_params = {
-                key: value[mask]
-                for key, value in params.items()
-                if key in ["pos_x", "pos_y", "height"]
+        select_params = {
+            key: value[mask]
+            for key, value in params.items()
+            if key not in ["background"]
             }
-            for key in params.keys():
-                if key in ["sigma", "gamma", "ratio", "background"]:
-                    select_params[key] = params[key]
-        else:
-            select_params = {
-                key: value[mask]
-                for key, value in params.items()
-                if key not in ["background"]
-                }
-            select_params["background"] = params["background"]
+        select_params["background"] = params["background"]
         return select_params
 
     def fit_random_batch(
@@ -709,7 +662,6 @@ class ImageModelFitting:
                 mask = np.zeros(self.num_coordinates, dtype=bool)
                 mask[index] = True
                 select_params = self.select_params(params, mask)
-                self.atoms_selected = mask
                 global_prediction = self.predict(params, self.X, self.Y)
                 local_prediction = self.predict(select_params, self.X, self.Y)
                 local_residual = global_prediction - local_prediction
@@ -717,11 +669,11 @@ class ImageModelFitting:
                 select_params = self.optimize(
                     local_target, select_params, X, Y, maxiter, tol, step_size, verbose
                 )
-                params = self.update_from_local_params(params, select_params)
+                params = self.update_from_local_params(params, select_params, mask)
                 if plot:
                     plt.subplots(1, 3, figsize=(15, 5))
                     plt.subplot(1, 3, 1)
-                    plt.imshow(global_prediction, cmap="gray")
+                    plt.imshow(image, cmap="gray")
                     # plt.scatter(
                     #     params["pos_x"], params["pos_y"], color="b", s=1
                     # )
@@ -739,24 +691,46 @@ class ImageModelFitting:
                     plt.imshow(image - global_prediction, cmap="gray")
                     plt.gca().set_aspect("equal", adjustable="box")
                     plt.show()
+            params = self.update_params_on_atom_type(params)
+            params = self.linear_estimator(params)
             self.converged = self.convergence(params, pre_params, tol)
         self.update_params(params)
         self.prediction = self.predict(params, self.X, self.Y)
         return params
 
-    def update_from_local_params(self, params, local_params):
+    def update_from_local_params(self, params, local_params, mask=None, mask_local=None):
         for key, value in local_params.items():
             value = np.array(value)
-            if self.same_width:
-                if key in ["pos_x", "pos_y", "height"]:
-                    params[key][self.atoms_selected] = value
+            if key not in ["background"]:
+                if mask_local is None:
+                    params[key][mask] = value
                 else:
-                    params[key] = value
+                    params[key][mask] = value[mask_local]
             else:
-                if key not in ["background"]:
-                    params[key][self.atoms_selected] = value
-                else:
-                    params[key] = value
+                weight = mask.sum() / self.num_coordinates
+                update = value - params[key]
+                params[key] += update*weight
+                params[key] = value
+        return params
+    
+    def update_params_on_atom_type(self, params):
+        if self.same_width:
+            unique_types = np.unique(self.atom_types)
+            for atom_type in unique_types:
+                mask = self.atom_types == atom_type
+                mask = mask.squeeze()
+                for key, value in params.items():
+                    is_jax_traced = isinstance(params[key], jax.numpy.ndarray)
+                    if key in ["sigma", "gamma", "ratio"]:
+                        if is_jax_traced:
+                            # Calculate the mean only for the masked values using JAX
+                            mean_value = jnp.mean(value[mask])
+                            # Use JAX's indexing to update the values
+                            params[key] = value.at[mask].set(mean_value)
+                        else:
+                            # For non-JAX arrays, we can proceed with NumPy operations
+                            mean_value = np.mean(value[mask])
+                            params[key][mask] = mean_value
         return params
 
     def fit_gradient(
@@ -801,7 +775,7 @@ class ImageModelFitting:
 
             # Print the loss every 10 iterations
             if i % 10 == 0:
-                print(f"Iteration {i}: loss = {loss:.6f}")
+                logging.info(f"Iteration {i}: loss = {loss:.6f}")
         plt.plot(loss_list, "o-")
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
@@ -859,8 +833,6 @@ class ImageModelFitting:
             background = params["background"]
         else:
             background = 0
-        if self.same_width:
-            params = self.update_by_atom_types(params)
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         height = params["height"]
@@ -891,10 +863,6 @@ class ImageModelFitting:
             background = params["background"]
         else:
             background = 0
-        if self.same_width:
-            params = self.update_by_atom_types(params)
-
-        
         if self.model == "gaussian":
             # if self.num_coordinates<1000:
             prediction = gaussian_parallel(
@@ -922,8 +890,6 @@ class ImageModelFitting:
         return prediction
 
     def update_params(self, params):
-        if self.same_width:
-            params = self.update_by_atom_types(params)
         self.pos_x = params["pos_x"] * self.pixel_size
         self.pos_y = params["pos_y"] * self.pixel_size
         self.height = params["height"]
