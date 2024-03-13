@@ -35,7 +35,7 @@ from qem.utils import (
     remove_close_coordinates,
     get_random_indices_in_batches,
 )
-
+from scipy.ndimage import center_of_mass
 
 class ImageModelFitting:
     def __init__(self, image: np.array, pixel_size=1):
@@ -126,7 +126,7 @@ class ImageModelFitting:
             exclude_border=exclude_border,
         )
         peaks_locations = self.add_or_remove_peaks(
-            peaks_locations, min_distance=min_distance, image=self.image
+            peaks_locations[:,[1,0]], min_distance=min_distance, image=self.image
         )
         self.coordinates = peaks_locations
         return self.coordinates
@@ -159,36 +159,41 @@ class ImageModelFitting:
         self.coordinates = coordinates[mask]
         return self.coordinates
 
-    def refine_center_of_mass(self, plot=False):
-        # do center of mass for each atom
-        r, _, _ = self.guess_radius()
-        windows_size = int(r) * 2
-        for i in range(self.num_coordinates):
-            x, y = self.coordinates[i]
-            x = int(x)
-            y = int(y)
-            # calculate the mask for distance < r
-            region = self.image[
-                x - windows_size : x + windows_size + 1,
-                y - windows_size : y + windows_size + 1,
-            ]
-            mask = make_mask_circle_centre(region, r)
-            region = (region - region.min()) / (region.max() - region.min())
-            region = region * mask
-            local_x, local_y = center_of_mass(region)
-            self.coordinates[i] = [
-                x - windows_size + local_x,
-                y - windows_size + local_y,
-            ]
-            if plot:
-                plt.imshow(region, cmap="gray")
-                plt.scatter(local_y, local_x, color="red", s=2)
-                plt.scatter(
-                    y % 1 + windows_size, x % 1 + windows_size, color="blue", s=2
-                )
-                plt.show()
-                plt.pause(1.0)
-        return self.coordinates
+    # def refine_center_of_mass(self, plot=False):
+    #     # do center of mass for each atom
+    #     r, _, _ = self.guess_radius()
+    #     windows_size = int(r) * 2
+    #     pre_coordinates = self.coordinates
+    #     current_coordinates = self.coordinates
+    #     converged = False
+    #     while converged is False:
+    #         for i in tqdm(range(self.num_coordinates)):
+    #             x, y = pre_coordinates[i]
+    #             x = int(x)
+    #             y = int(y)
+    #             # calculate the mask for distance < r
+    #             region = self.image[
+    #                 x - windows_size : x + windows_size + 1,
+    #                 y - windows_size : y + windows_size + 1,
+    #             ]
+    #             mask = make_mask_circle_centre(region, r)
+    #             region = region * mask
+    #             region = (region - region.min()) / (region.max() - region.min())
+    #             local_x, local_y = center_of_mass(region)
+    #             current_coordinates[i] = [
+    #                 x - windows_size + local_x,
+    #                 y - windows_size + local_y,
+    #             ]
+    #             if plot:
+    #                 plt.imshow(region, cmap="gray")
+    #                 plt.scatter(local_y, local_x, color="red", s=2)
+    #                 plt.scatter(
+    #                     y % 1 + windows_size, x % 1 + windows_size, color="blue", s=2
+    #                 )
+    #                 plt.show()
+    #                 plt.pause(1.0)
+    #         converged = np.abs(current_coordinates - pre_coordinates).max() < 0.5
+    #     return current_coordinates
 
     def plot(self, image="original"):
         plt.figure()
