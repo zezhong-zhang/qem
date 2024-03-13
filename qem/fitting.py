@@ -55,6 +55,7 @@ class ImageModelFitting:
 
         self.device = "cpu"
         self.image = image.astype(np.float32)
+        self.model = None
         self.local_shape = image.shape
         self.pixel_size = pixel_size
         self._atom_types = None
@@ -62,13 +63,15 @@ class ImageModelFitting:
         self.coordinates = None
         self.fit_background = True
         self.same_width = True
-        self.model = "gaussian"
+        self.fitting_model = "gaussian"
         self.params = None
         self.fit_local = False
         x = np.arange(self.nx)
         y = np.arange(self.ny)
         self.X, self.Y = np.meshgrid(x, y, indexing="xy")
 
+
+### Properties
     @property
     def window(self):
         """
@@ -85,7 +88,27 @@ class ImageModelFitting:
         else:
             window = butterworth_window(self.image.shape, 0.5, 10)
         return window
+    
+    @property
+    def atom_types(self):
+        if self._atom_types is None:
+            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        return self._atom_types
+    
+    @property
+    def volume(self):
+        if self.fitting_model == "gaussian":
+            return self.height * self.sigma**2 * np.pi * 2
+        elif self.fitting_model == "voigt":
+            gaussian_contrib = self.height * self.sigma**2 * np.pi * 2 * self.ratio
+            lorentzian_contrib = self.height * self.gamma * 2 * np.pi * (1 - self.ratio)
+            return gaussian_contrib + lorentzian_contrib
 
+    @property
+    def num_coordinates(self):
+        return self.coordinates.shape[0]
+
+### init peaks and parameters
     def import_coordinates(self, coordinates):
         """
         Import the coordinates of the atomic columns.
@@ -97,12 +120,6 @@ class ImageModelFitting:
         if coordinates is not None:
 
             self.coordinates = coordinates
-
-    @property
-    def atom_types(self):
-        if self._atom_types is None:
-            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
-        return self._atom_types
 
     def find_peaks(
         self, atom_size=1, threshold_rel=0.2, exclude_border=False, image=None
@@ -172,7 +189,7 @@ class ImageModelFitting:
                 self.coordinates[:, 0], self.coordinates[:, 1], color="red", s=1
             )
         elif image == "prediction":
-            plt.imshow(self.prediction, cmap="gray")
+            plt.imshow(self.model, cmap="gray")
             plt.scatter(
                 self.pos_x / self.pixel_size,
                 self.pos_y / self.pixel_size,
@@ -254,7 +271,7 @@ class ImageModelFitting:
         # get the lowest 20% of the intensity as the background
         width = np.tile(width, self.num_coordinates)
         ratio = np.tile(0.9, self.num_coordinates)
-        if self.model == "gaussian":
+        if self.fitting_model == "gaussian":
             # Initialize the parameters
             params = {
                 "pos_x": pos_x,  # x position
@@ -262,7 +279,7 @@ class ImageModelFitting:
                 "height": height,  # height
                 "sigma": width,  # width
             }
-        elif self.model == "voigt":
+        elif self.fitting_model == "voigt":
             # Initialize the parameters
             params = {
                 "pos_x": pos_x,  # x position
@@ -275,6 +292,310 @@ class ImageModelFitting:
         if self.fit_background:
             params["background"] = background.astype(float)
 
+        return params
+
+### loss function and model prediction
+
+    def loss(self, params, image, X, Y):
+        # Compute the sum of the Gaussians
+        prediction = self.predict(params, X, Y)
+        diff = image - prediction
+        diff = diff * self.window
+        # dammping the difference near the edge
+        mse = jnp.sqrt(jnp.mean(diff**2))
+        L1 = jnp.mean(jnp.abs(diff))
+        return mse + L1
+
+    def residual(self, params, image, X, Y):
+        # Compute the sum of the Gaussians
+        prediction = self.predict(params, X, Y)
+        diff = prediction - image
+        return diff
+
+    def predict_local(self, params):
+        if self.fit_background:
+            background = params["background"]
+        else:
+            background = 0
+        pos_x = params["pos_x"]
+        pos_y = params["pos_y"]
+        height = params["height"]
+        sigma = params["sigma"]
+        windos_size = int(sigma.max() * 5)
+        x = np.arange(-windos_size, windos_size + 1, 1)
+        y = np.arange(-windos_size, windos_size + 1, 1)
+        X, Y = np.meshgrid(x, y, indexing="xy")
+        gauss_local = gaussian_local(X, Y, pos_x, pos_y, height, sigma)
+        gauss_local = np.array(gauss_local)
+        prediction = (
+            add_gaussian_at_positions(
+                np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
+            )
+            + background
+        )
+        prediction = (
+            add_gaussian_at_positions(
+                np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
+            )
+            + background
+        )
+        return prediction
+
+    def predict(self, params, X, Y):
+        if self.fit_background:
+            background = params["background"]
+        else:
+            background = 0
+        if self.fitting_model == "gaussian":
+            # if self.num_coordinates<1000:
+            prediction = gaussian_parallel(
+                X,
+                Y,
+                params["pos_x"],
+                params["pos_y"],
+                params["height"],
+                params["sigma"],
+                background,
+            )
+
+        elif self.fitting_model == "voigt":
+            prediction = voigt_parallel(
+                X,
+                Y,
+                params["pos_x"],
+                params["pos_y"],
+                params["height"],
+                params["sigma"],
+                params["gamma"],
+                params["ratio"],
+                background,
+            )
+        return prediction
+
+### fitting
+
+    def linear_estimator(self, params):
+        # create the design matrix as array of gaussian peaks + background
+        pos_x = params["pos_x"]
+        pos_y = params["pos_y"]
+        sigma = params["sigma"]
+        height = params["height"]
+        rows = []
+        cols = []
+        data = []
+        window_size = int(sigma.mean() * 5)
+        x = np.arange(-window_size, window_size + 1, 1)
+        y = np.arange(-window_size, window_size + 1, 1)
+        local_X, local_Y = np.meshgrid(x, y, indexing="xy")
+        gauss_local = gaussian_local(local_X, local_Y, pos_x, pos_y, height, sigma)
+
+        for i in range(self.num_coordinates):
+            global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[
+                i
+            ].astype(int)
+            mask = (
+                (global_X >= 0)
+                & (global_X < self.nx)
+                & (global_Y >= 0)
+                & (global_Y < self.ny)
+            )
+            flat_index = global_Y[mask].flatten() * self.nx + global_X[mask].flatten()
+            rows.extend(flat_index)
+            cols.extend(np.tile(i, flat_index.shape[0]))
+            data.extend(gauss_local[:, :, i][mask].ravel())
+        rows.extend(self.Y.flatten() * self.nx + self.X.flatten())
+        cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
+        data.extend(np.ones(self.nx * self.ny))
+        design_matrix = coo_matrix(
+            (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates + 1)
+        )
+        # create the target as the image
+        b = self.image.ravel()
+        # solve the linear equation
+        # solution = lsqr(design_matrix, b)[0]
+        try:
+            # Attempt to solve the linear system
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
+                # Check if any of the caught warnings are related to a singular matrix
+                if w and any(
+                    "singular matrix" in str(warning.message) for warning in w
+                ):
+                    logging.warning(
+                        "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
+                    )
+                    return params
+        except np.linalg.LinAlgError as e:
+            if "Singular matrix" in str(e):
+                logging.warning("Error: Singular matrix encountered.")
+            else:
+                raise
+
+        # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
+        # update the background and height
+        height_scale = solution[:-1]
+        if np.NaN in height_scale:
+            logging.warning(
+                "The height has NaN, the linear estimator is not valid, parameters are not updated"
+            )
+            return params
+        else:
+            params["background"] = solution[-1] if solution[-1] > 0 else 0.0
+            # if (height_scale>2).any():
+            #     logging.warning(
+            #         "The height has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
+            #     )
+            #     height_scale[height_scale>2] =2
+            # if (height_scale < 0.5).any():
+            #     logging.warning(
+            #         "The height has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
+            #     )
+            #     mask = (height_scale < 0.5) & (height_scale > 0)
+            #     height_scale[mask] = 0.5
+                
+            if (height_scale * params["height"] < 0).any():
+                logging.warning(
+                    "The height has negative values, the linear estimator is not valid. I will make it positive but be careful with the results."
+                )
+                input_negative_mask = params["height"] < 0
+                scale_neagtive_mask = height_scale < 0
+                height_scale[scale_neagtive_mask] = 1
+                params["height"][input_negative_mask] = -params["height"][input_negative_mask]
+            params["height"] = height_scale* params["height"]
+        return params
+
+    def optimize(
+        self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False
+    ):
+        opt = optax.adam(step_size)
+        solver = OptaxSolver(
+            opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
+        )
+        res = solver.run(params, image=image, X=X, Y=Y)
+        params = res[0]
+        return params
+
+    def gradient_descent(
+        self,
+        image,
+        params,
+        X,
+        Y,
+        step_size=0.001,
+        maxiter=10000,
+        tol=1e-4,
+        keys_to_mask=None,
+    ):
+        opt_init, opt_update, get_params = optimizers.adam(
+            step_size=step_size, b1=0.9, b2=0.999
+        )
+        opt_state = opt_init(params)
+
+        def step(step_index, opt_state, params, image, X, Y, keys_to_mask=[]):
+            loss, grads = value_and_grad(self.loss)(params, image, X, Y)
+            masked_grads = mask_grads(grads, keys_to_mask)
+            opt_state = opt_update(step_index, masked_grads, opt_state)
+            return loss, opt_state
+
+        # Initialize the loss
+        loss = np.inf
+        loss_list = []
+        # Loop over the number of iterations
+        for i in range(maxiter):
+            # Update the parameters
+            new_params = get_params(opt_state)
+            loss_new, opt_state = step(
+                i, opt_state, new_params, image, X, Y, keys_to_mask
+            )
+
+            # Check if the loss has converged
+            if np.abs(loss - loss_new) < tol * loss:
+                break
+            # Update the loss
+            loss = loss_new
+            loss_list.append(loss)
+
+            # Print the loss every 10 iterations
+            if i % 10 == 0:
+                logging.info(f"Iteration {i}: loss = {loss:.6f}")
+        plt.plot(loss_list, "o-")
+        plt.xlabel("Iteration")
+        plt.ylabel("Loss")
+        # Update the model
+        return new_params
+
+    def fit_global(self, params, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
+        self.fit_local = False
+        params = self.optimize(
+            self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
+        )
+        self.update_params(params)
+        self.model = self.predict(params, self.X, self.Y)
+        return params
+
+    def fit_random_batch(
+        self,
+        params,
+        num_epoch=2,
+        batch_size=500,
+        maxiter=1000,
+        tol=1e-4,
+        step_size=0.01,
+        verbose=False,
+        plot=False,
+    ):
+        self.fit_local = False
+        self.converged = False
+        while self.converged is False and num_epoch > 0:
+            pre_params = copy.deepcopy(params)
+            params = self.linear_estimator(params)
+            num_epoch -= 1
+            random_batches = get_random_indices_in_batches(
+                self.num_coordinates, batch_size
+            )
+            image = self.image
+            X = self.X
+            Y = self.Y
+
+            for index in tqdm(random_batches, desc="Fitting random batch"):
+                mask = np.zeros(self.num_coordinates, dtype=bool)
+                mask[index] = True
+                select_params = self.select_params(params, mask)
+                global_prediction = self.predict(params, self.X, self.Y)
+                local_prediction = self.predict(select_params, self.X, self.Y)
+                local_residual = global_prediction - local_prediction
+                local_target = image - local_residual
+                select_params = self.optimize(
+                    local_target, select_params, X, Y, maxiter, tol, step_size, verbose
+                )
+                params = self.update_from_local_params(params, select_params, mask)
+                if plot:
+                    plt.subplots(1, 3, figsize=(15, 5))
+                    plt.subplot(1, 3, 1)
+                    plt.imshow(image, cmap="gray")
+                    # plt.scatter(
+                    #     params["pos_x"], params["pos_y"], color="b", s=1
+                    # )
+                    plt.scatter(
+                        params["pos_x"][index], params["pos_y"][index], color="r", s=1
+                    )
+                    plt.gca().set_aspect("equal", adjustable="box")
+                    plt.subplot(1, 3, 2)
+                    plt.imshow(global_prediction, cmap="gray")
+                    plt.scatter(
+                        select_params["pos_x"], select_params["pos_y"], color="b", s=1
+                    )
+                    plt.gca().set_aspect("equal", adjustable="box")
+                    plt.subplot(1, 3, 3)
+                    plt.imshow(image - global_prediction, cmap="gray")
+                    plt.gca().set_aspect("equal", adjustable="box")
+                    plt.show()
+            params = self.update_params_on_atom_type(params)
+            self.converged = self.convergence(params, pre_params, tol)
+        params = self.linear_estimator(params)
+        self.update_params(params)
+        self.model = self.predict(params, self.X, self.Y)
         return params
 
     def fit_region(
@@ -342,7 +663,6 @@ class ImageModelFitting:
         local_prediction_new = self.predict(local_params, local_X, local_Y)
         # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background'])
         params = self.update_from_local_params(params, local_params, mask_center, index_center_in_region)
-        params = self.update_params_on_atom_type(params)
         # local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = [])
         # else:
         #     local_params = self.fit_gradient(image = local_target, params = local_params, X = local_X, Y = local_Y, step_size = step_size, maxiter = maxiter, tol = tol, keys_to_mask = ['background', 'ratio','sigma'])
@@ -408,6 +728,7 @@ class ImageModelFitting:
         mode="sequential",
         num_random_patches=10,
     ):
+        self.update_params_on_atom_type(params)
         self.fit_local = True
         if buffer_size is None:
             width, _, _ = (
@@ -427,7 +748,7 @@ class ImageModelFitting:
         elif mode == "random":
             ii = np.random.randint(half_patch, self.nx - half_patch, num_random_patches)
             jj = np.random.randint(half_patch, self.ny - half_patch, num_random_patches)
-
+        
         for index in tqdm(range(len(ii))):
             i, j = ii[index], jj[index]
             left = max(i - half_patch - buffer_size, 0)
@@ -465,122 +786,13 @@ class ImageModelFitting:
             )
 
         # have a linear estimator of the background and height of the gaussian peaks
+        self.update_params_on_atom_type(params)
+        params = self.linear_estimator(params)
         self.update_params(params)
-        self.prediction = self.predict(params, self.X, self.Y)
+        self.model = self.predict(params, self.X, self.Y)
         return params
 
-    def optimize(
-        self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False
-    ):
-        opt = optax.adam(step_size)
-        solver = OptaxSolver(
-            opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
-        )
-        res = solver.run(params, image=image, X=X, Y=Y)
-        params = res[0]
-        return params
-
-    def linear_estimator(self, params):
-
-        # create the design matrix as array of gaussian peaks + background
-        pos_x = params["pos_x"]
-        pos_y = params["pos_y"]
-        sigma = params["sigma"]
-        height = params["height"]
-        rows = []
-        cols = []
-        data = []
-        window_size = int(sigma.mean() * 5)
-        x = np.arange(-window_size, window_size + 1, 1)
-        y = np.arange(-window_size, window_size + 1, 1)
-        local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_local(local_X, local_Y, pos_x, pos_y, height, sigma)
-
-        for i in range(self.num_coordinates):
-            global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[
-                i
-            ].astype(int)
-            mask = (
-                (global_X >= 0)
-                & (global_X < self.nx)
-                & (global_Y >= 0)
-                & (global_Y < self.ny)
-            )
-            flat_index = global_Y[mask].flatten() * self.nx + global_X[mask].flatten()
-            rows.extend(flat_index)
-            cols.extend(np.tile(i, flat_index.shape[0]))
-            data.extend(gauss_local[:, :, i][mask].ravel())
-        rows.extend(self.Y.flatten() * self.nx + self.X.flatten())
-        cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
-        data.extend(np.ones(self.nx * self.ny))
-        design_matrix = coo_matrix(
-            (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates + 1)
-        )
-        # create the target as the image
-        b = self.image.ravel()
-        # solve the linear equation
-        # solution = lsqr(design_matrix, b)[0]
-        try:
-            # Attempt to solve the linear system
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
-                # Check if any of the caught warnings are related to a singular matrix
-                if w and any(
-                    "singular matrix" in str(warning.message) for warning in w
-                ):
-                    logging.warning(
-                        "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
-                    )
-                    return params
-        except np.linalg.LinAlgError as e:
-            # Catch exceptions for a singular matrix problem
-            if "Singular matrix" in str(e):
-                logging.warning("Error: Singular matrix encountered.")
-            else:
-                raise
-
-        # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
-        # update the background and height
-        height_scale = solution[:-1]
-        if np.NaN in height_scale:
-            logging.warning(
-                "The height has NaN, the linear estimator is not valid, parameters are not updated"
-            )
-            return params
-        else:
-            params["background"] = solution[-1] if solution[-1] > 0 else 0.0
-            # if (height_scale>2).any():
-            #     logging.warning(
-            #         "The height has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
-            #     )
-            #     height_scale[height_scale>2] =2
-            # if (height_scale < 0.5).any():
-            #     logging.warning(
-            #         "The height has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
-            #     )
-            #     mask = (height_scale < 0.5) & (height_scale > 0)
-            #     height_scale[mask] = 0.5
-                
-            if (height_scale * params["height"] < 0).any():
-                logging.warning(
-                    "The height has negative values, the linear estimator is not valid. I will make it positive but be careful with the results."
-                )
-                input_negative_mask = params["height"] < 0
-                scale_neagtive_mask = height_scale < 0
-                height_scale[scale_neagtive_mask] = 1
-                params["height"][input_negative_mask] = -params["height"][input_negative_mask]
-            params["height"] = height_scale* params["height"]
-        return params
-
-    def fit_global(self, params, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
-        params = self.optimize(
-            self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
-        )
-        self.update_params(params)
-        self.prediction = self.predict(params, self.X, self.Y)
-        return params
-
+### parameters updates and convergence
     def convergence(self, params, pre_params, tol=1e-2):
         """
         Checks if the parameters have converged within a specified tolerance.
@@ -617,7 +829,7 @@ class ImageModelFitting:
             else:
                 # Avoid division by zero and calculate relative update
                 value_with_offset = value + 1e-10
-                rate = np.abs(update / value_with_offset).max()
+                rate = np.abs(update / value_with_offset).mean()
                 logging.info(f"Convergence rate for {key} = {rate}")
                 if rate > tol:
                     logging.info("Convergence not reached")
@@ -634,69 +846,6 @@ class ImageModelFitting:
             }
         select_params["background"] = params["background"]
         return select_params
-
-    def fit_random_batch(
-        self,
-        params,
-        num_epoch=2,
-        batch_size=500,
-        maxiter=1000,
-        tol=1e-4,
-        step_size=0.01,
-        verbose=False,
-        plot=False,
-    ):
-        self.fit_local = False
-        self.converged = False
-        while self.converged is False and num_epoch > 0:
-            params = self.linear_estimator(params)
-            num_epoch -= 1
-            pre_params = copy.deepcopy(params)
-            random_batches = get_random_indices_in_batches(
-                self.num_coordinates, batch_size
-            )
-            image = self.image
-            X = self.X
-            Y = self.Y
-            for index in tqdm(random_batches, desc="Fitting random batch"):
-                mask = np.zeros(self.num_coordinates, dtype=bool)
-                mask[index] = True
-                select_params = self.select_params(params, mask)
-                global_prediction = self.predict(params, self.X, self.Y)
-                local_prediction = self.predict(select_params, self.X, self.Y)
-                local_residual = global_prediction - local_prediction
-                local_target = image - local_residual
-                select_params = self.optimize(
-                    local_target, select_params, X, Y, maxiter, tol, step_size, verbose
-                )
-                params = self.update_from_local_params(params, select_params, mask)
-                if plot:
-                    plt.subplots(1, 3, figsize=(15, 5))
-                    plt.subplot(1, 3, 1)
-                    plt.imshow(image, cmap="gray")
-                    # plt.scatter(
-                    #     params["pos_x"], params["pos_y"], color="b", s=1
-                    # )
-                    plt.scatter(
-                        params["pos_x"][index], params["pos_y"][index], color="r", s=1
-                    )
-                    plt.gca().set_aspect("equal", adjustable="box")
-                    plt.subplot(1, 3, 2)
-                    plt.imshow(global_prediction, cmap="gray")
-                    plt.scatter(
-                        select_params["pos_x"], select_params["pos_y"], color="b", s=1
-                    )
-                    plt.gca().set_aspect("equal", adjustable="box")
-                    plt.subplot(1, 3, 3)
-                    plt.imshow(image - global_prediction, cmap="gray")
-                    plt.gca().set_aspect("equal", adjustable="box")
-                    plt.show()
-            params = self.update_params_on_atom_type(params)
-            params = self.linear_estimator(params)
-            self.converged = self.convergence(params, pre_params, tol)
-        self.update_params(params)
-        self.prediction = self.predict(params, self.X, self.Y)
-        return params
 
     def update_from_local_params(self, params, local_params, mask=None, mask_local=None):
         for key, value in local_params.items():
@@ -733,162 +882,6 @@ class ImageModelFitting:
                             params[key][mask] = mean_value
         return params
 
-    def fit_gradient(
-        self,
-        image,
-        params,
-        X,
-        Y,
-        step_size=0.001,
-        maxiter=10000,
-        tol=1e-4,
-        keys_to_mask=None,
-    ):
-        opt_init, opt_update, get_params = optimizers.adam(
-            step_size=step_size, b1=0.9, b2=0.999
-        )
-        opt_state = opt_init(params)
-
-        def step(step_index, opt_state, params, image, X, Y, keys_to_mask=[]):
-            loss, grads = value_and_grad(self.loss)(params, image, X, Y)
-            masked_grads = mask_grads(grads, keys_to_mask)
-            opt_state = opt_update(step_index, masked_grads, opt_state)
-            return loss, opt_state
-
-        # Initialize the loss
-        loss = np.inf
-        loss_list = []
-        # Loop over the number of iterations
-        for i in range(maxiter):
-            # Update the parameters
-            new_params = get_params(opt_state)
-            loss_new, opt_state = step(
-                i, opt_state, new_params, image, X, Y, keys_to_mask
-            )
-
-            # Check if the loss has converged
-            if np.abs(loss - loss_new) < tol * loss:
-                break
-            # Update the loss
-            loss = loss_new
-            loss_list.append(loss)
-
-            # Print the loss every 10 iterations
-            if i % 10 == 0:
-                logging.info(f"Iteration {i}: loss = {loss:.6f}")
-        plt.plot(loss_list, "o-")
-        plt.xlabel("Iteration")
-        plt.ylabel("Loss")
-        # Update the model
-        return new_params
-
-    def l1_loss_smooth(self, predictions, targets, beta=1.0):
-
-        loss = 0
-
-        diff = predictions - targets
-        mask = jnp.abs(diff) < beta
-        loss += mask * (0.5 * diff**2 / beta)
-        loss += (~mask) * (jnp.abs(diff) - 0.5 * beta)
-
-        return loss.mean()
-
-    # def average_according_to_type(self, params, atom_types):
-    #     unique_types = np.unique(atom_types)
-    #     for atom_type in unique_types:
-    #         mask = atom_types == atom_type
-    #         mask = mask.squeeze()
-    #         for key, value in params.items():
-    #             is_jax_traced = isinstance(params[key], jax.numpy.ndarray)
-    #             if key in ["sigma", "gamma", "ratio"]:
-    #                 if is_jax_traced:
-    #                     # Calculate the mean only for the masked values using JAX
-    #                     mean_value = jnp.mean(value[mask])
-    #                     # Use JAX's indexing to update the values
-    #                     params[key] = value.at[mask].set(mean_value)
-    #                 else:
-    #                     # For non-JAX arrays, we can proceed with NumPy operations
-    #                     mean_value = np.mean(value[mask])
-    #                     params[key][mask] = mean_value
-    #     return params
-
-    def loss(self, params, image, X, Y):
-        # Compute the sum of the Gaussians
-        prediction = self.predict(params, X, Y)
-        diff = image - prediction
-        diff = diff * self.window
-        # dammping the difference near the edge
-        mse = jnp.sqrt(jnp.mean(diff**2))
-        L1 = jnp.mean(jnp.abs(diff))
-        return mse + L1
-
-    def residual(self, params, image, X, Y):
-        # Compute the sum of the Gaussians
-        prediction = self.predict(params, X, Y)
-        diff = prediction - image
-        return diff
-
-    def predict_local(self, params):
-        if self.fit_background:
-            background = params["background"]
-        else:
-            background = 0
-        pos_x = params["pos_x"]
-        pos_y = params["pos_y"]
-        height = params["height"]
-        sigma = params["sigma"]
-        windos_size = int(sigma.max() * 5)
-        x = np.arange(-windos_size, windos_size + 1, 1)
-        y = np.arange(-windos_size, windos_size + 1, 1)
-        X, Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_local(X, Y, pos_x, pos_y, height, sigma)
-        gauss_local = np.array(gauss_local)
-        prediction = (
-            add_gaussian_at_positions(
-                np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
-            )
-            + background
-        )
-        prediction = (
-            add_gaussian_at_positions(
-                np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
-            )
-            + background
-        )
-        return prediction
-
-
-    def predict(self, params, X, Y):
-        if self.fit_background:
-            background = params["background"]
-        else:
-            background = 0
-        if self.model == "gaussian":
-            # if self.num_coordinates<1000:
-            prediction = gaussian_parallel(
-                X,
-                Y,
-                params["pos_x"],
-                params["pos_y"],
-                params["height"],
-                params["sigma"],
-                background,
-            )
-
-        elif self.model == "voigt":
-            prediction = voigt_parallel(
-                X,
-                Y,
-                params["pos_x"],
-                params["pos_y"],
-                params["height"],
-                params["sigma"],
-                params["gamma"],
-                params["ratio"],
-                background,
-            )
-        return prediction
-
     def update_params(self, params):
         self.pos_x = params["pos_x"] * self.pixel_size
         self.pos_y = params["pos_y"] * self.pixel_size
@@ -899,20 +892,7 @@ class ImageModelFitting:
             self.background = params["background"]
         else:
             self.background = 0
-        if self.model == "voigt":
+        if self.fitting_model == "voigt":
             self.gamma = params["gamma"] * self.pixel_size
             self.ratio = params["ratio"]
         self.params = params
-
-    @property
-    def volume(self):
-        if self.model == "gaussian":
-            return self.height * self.sigma**2 * np.pi * 2
-        elif self.model == "voigt":
-            gaussian_contrib = self.height * self.sigma**2 * np.pi * 2 * self.ratio
-            lorentzian_contrib = self.height * self.gamma * 2 * np.pi * (1 - self.ratio)
-            return gaussian_contrib + lorentzian_contrib
-
-    @property
-    def num_coordinates(self):
-        return self.coordinates.shape[0]

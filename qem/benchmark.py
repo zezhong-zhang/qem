@@ -87,7 +87,7 @@ class Benchmark:
         model.import_coordinates(coordinates=self.input_coordinates/self.dx-1)
         params = model.init_params(atom_size=atom_size)
         params = model.fit_random_batch(params, tol=tol, maxiter=maxiter, step_size=step_size, num_epoch=num_epoch, batch_size=batch_size, verbose=verbose, plot=plot)
-        self.model_qem = model.prediction
+        self.model_qem = model.model
         self.scs_qem = model.volume
         self.pos_x = model.pos_x
         self.pos_y = model.pos_y
