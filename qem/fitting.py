@@ -143,10 +143,9 @@ class ImageModelFitting:
             threshold_abs=threshold_abs,
             exclude_border=exclude_border,
         )
-        peaks_locations = self.add_or_remove_peaks(
-            peaks_locations[:,[1,0]], min_distance=min_distance, image=self.image
+        self.coordinates = peaks_locations[:,[1,0]].astype(float)
+        self.add_or_remove_peaks(min_distance=min_distance, image=self.image
         )
-        self.coordinates = peaks_locations
         self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self.coordinates
 
@@ -154,9 +153,10 @@ class ImageModelFitting:
         self.coordinates = remove_close_coordinates(self.coordinates, threshold)
         return self.coordinates
 
-    def add_or_remove_peaks(self, peaks_locations, min_distance=10, image=None):
+    def add_or_remove_peaks(self, min_distance=10, image=None):
         if image is None:
             image = self.image
+        peaks_locations = self.coordinates
         interactive_plot = InteractivePlot(
             peaks_locations=peaks_locations,
             image=image,
@@ -179,23 +179,14 @@ class ImageModelFitting:
         return self.coordinates
 
     def plot(self, image="input"):
-        plt.figure()
+        plt.figure(figsize=(10, 5))
         # x = np.arange(self.nx) * self.pixel_size
         # y = np.arange(self.ny) * self.pixel_size
-        if image == "input":
-            plt.imshow(self.image, cmap="gray")
-            plt.scatter(
-                self.coordinates[:, 0], self.coordinates[:, 1], color="red", s=1
-            )
-        elif image == "model":
-            plt.imshow(self.model, cmap="gray")
-            plt.scatter(
-                self.pos_x / self.pixel_size,
-                self.pos_y / self.pixel_size,
-                color="red",
-                s=1,
-            )
+        plt.subplot(1, 2, 1)
+        plt.imshow(self.image, cmap="gray")
         plt.gca().set_aspect("equal", adjustable="box")
+        plt.subplot(1, 2, 2)
+        plt.hist(self.image.ravel(), bins=256)
 
     def guess_radius(self):
         """
@@ -524,7 +515,7 @@ class ImageModelFitting:
         # Update the model
         return new_params
 
-    def fit_global(self, params, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False):
+    def fit_global(self, params, maxiter=1000, tol=1e-3, step_size=0.01, verbose=False):
         self.fit_local = False
         params = self.optimize(
             self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
