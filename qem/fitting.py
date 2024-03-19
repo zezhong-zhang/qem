@@ -193,7 +193,7 @@ class ImageModelFitting:
             image=image,
             tolerance=min_distance,
         )
-        interactive_plot.show()
+        interactive_plot.add_or_remove()
         peaks_locations = [interactive_plot.pos_x, interactive_plot.pos_y]
         peaks_locations = np.array(peaks_locations).T.astype(float)
         return peaks_locations

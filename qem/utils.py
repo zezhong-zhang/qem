@@ -146,8 +146,13 @@ class InteractivePlot:
         self.image = image
         self.tolerance = tolerance
         self.scatter_plot = None
+        # Added attributes for vector selection
+        self.origin = None
+        self.vector_a = None
+        self.vector_b = None
+        self.selection_stage = 0  # 0: Select origin, 1: Select vector a, 2: Select vector b
 
-    def onclick(self, event):
+    def onclick_add_or_remove(self, event):
         if event.dblclick:
             x, y = event.xdata, event.ydata
             distance = np.sqrt((self.pos_x - x) ** 2 + (self.pos_y - y) ** 2)
@@ -167,12 +172,11 @@ class InteractivePlot:
         self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="red", s=1)
         plt.draw()
 
-    def show(self):
+    def add_or_remove(self):
         fig = plt.figure()
         plt.imshow(self.image)
         self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="red", s=1)
-
-        fig.canvas.mpl_connect("button_press_event", self.onclick)
+        fig.canvas.mpl_connect("button_press_event", self.onclick_add_or_remove)
         plt.show()
 
         while plt.fignum_exists(fig.number):
@@ -180,6 +184,76 @@ class InteractivePlot:
 
         print("Updated peak locations.")
 
+    def onclick_select(self, event):
+        if event.dblclick:
+            x, y = event.xdata, event.ydata
+            distance = np.sqrt((self.pos_x - x) ** 2 + (self.pos_y - y) ** 2)
+            if distance.min() < self.tolerance:
+                i = np.argmin(distance)
+                self.selected_point = (self.pos_x[i], self.pos_y[i])
+                plt.scatter(self.pos_x[i], self.pos_y[i], color="red", s=5)
+                plt.draw()
+
+    def select(self):
+        fig = plt.figure()
+        plt.imshow(self.image)
+        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="blue", s=1)
+        fig.canvas.mpl_connect("button_press_event", self.onclick_select)
+        plt.show()
+
+        while plt.fignum_exists(fig.number):
+            plt.pause(0.1)
+
+        print(f"Selected peak location: {self.selected_point}.")
+        return self.selected_point
+
+    def onclick_select_vectors(self, event):
+        if event.dblclick:
+            x, y = event.xdata, event.ydata
+            distance = np.sqrt((self.pos_x - x) ** 2 + (self.pos_y - y) ** 2)
+            if distance.min() < self.tolerance:
+                i = np.argmin(distance)
+                point = (self.pos_x[i], self.pos_y[i])
+
+                if self.selection_stage == 0:
+                    self.origin = point
+                    self.selection_stage += 1
+                    print("Origin selected:", self.origin)
+                elif self.selection_stage == 1:
+                    self.vector_a = point
+                    self.selection_stage += 1
+                    print("Vector a selected:", self.vector_a)
+                    self.draw_arrow(self.origin, self.vector_a, 'a')
+                elif self.selection_stage == 2:
+                    self.vector_b = point
+                    print("Vector b selected:", self.vector_b)
+                    self.draw_arrow(self.origin, self.vector_b, 'b')
+                    self.selection_stage = 0  # Reset the selection stage to allow new selections
+                    return self.origin, self.vector_a, self.vector_b
+            plt.draw()
+
+    def draw_arrow(self, start, end, label):
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        plt.arrow(start[0], start[1], dx, dy, head_width=0.05, head_length=0.1, fc='green', ec='green')
+        plt.text((start[0] + end[0])/2, (start[1] + end[1])/2, label, color='green')
+
+    def select_vectors(self):
+        fig = plt.figure()
+        plt.imshow(self.image)
+        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="blue", s=10)
+        fig.canvas.mpl_connect("button_press_event", self.onclick_select_vectors)
+        plt.show()
+
+        while plt.fignum_exists(fig.number):
+            plt.pause(0.1)
+
+        if self.origin and self.vector_a and self.vector_b:
+            print(f"Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}")
+            return self.origin, self.vector_a, self.vector_b
+        else:
+            print("Selection incomplete.")
+            return None, None, None
 
 def remove_freq(image, low, high):
     nx, ny = image.shape[1:]
