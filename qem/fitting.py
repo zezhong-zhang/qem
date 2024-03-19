@@ -128,7 +128,7 @@ class ImageModelFitting:
         s = Signal2D(self.image - self.params["background"])
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
-        max_radius = self.params["sigma"].max() * 2
+        max_radius = self.params["sigma"].max() * 5
         integrated_intensity, intensity_record, point_record = integrate(s, pos_x, pos_y, max_radius=max_radius)
         integrated_intensity = integrated_intensity * self.pixel_size**2
         intensity_record = intensity_record * self.pixel_size**2

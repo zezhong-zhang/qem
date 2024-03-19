@@ -82,14 +82,50 @@ class Benchmark:
             )
 
     @time_it
-    def refine(self, atom_size = None, tol = 1e-2, maxiter = 50, step_size = 1e-2, num_epoch = 10, batch_size = 1000, verbose = False, plot = True, guess_radius = False):
+    def refine(self, atom_size = 0.7, guess_radius = False, tol = 1e-2, maxiter = 50, step_size = 1e-2, num_epoch = 10, batch_size = 1000, verbose = False, plot = True) -> None:
         model=ImageModelFitting(self.image, pixel_size=self.dx)
         model.import_coordinates(coordinates=self.input_coordinates/self.dx)
-        params = model.init_params(atom_size=atom_size)
+        params = model.init_params(atom_size=atom_size, guess_radius=guess_radius)
         params = model.fit_random_batch(params, tol=tol, maxiter=maxiter, step_size=step_size, num_epoch=num_epoch, batch_size=batch_size, verbose=verbose, plot=plot)
+        self.qem = model
         self.model_qem = model.model
         self.scs_qem = model.volume
         self.params_qem = params
+        self.qem.voronoi_integration(plot=True)
+        self.scs_voronoi = self.qem.voronoi_volume
+
+
+    def compare_scs_voronoi(self, folder_path=None, file_path=None, save=False):
+        plt.figure(figsize=(15, 5))
+        plt.subplot(1, 3, 1)
+        im = plt.scatter(self.qem.params['pos_x'], self.qem.params['pos_y'], s=1, c=self.scs_qem, cmap='viridis')
+        plt.gca().invert_yaxis()
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.title("QEM refined scs ($\AA^2$)")
+        plt.tight_layout()
+        plt.subplot(1, 3, 2)
+        im = plt.scatter(self.qem.params['pos_x'], self.qem.params['pos_y'], s=1, c=self.scs_voronoi, cmap='viridis')
+        plt.gca().invert_yaxis()
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.title("Voronoi refined scs ($\AA^2$)")
+        plt.tight_layout()
+        plt.subplot(1, 3, 3)
+        im = plt.scatter(self.qem.params['pos_x'], self.qem.params['pos_y'], s=1, c=self.scs_voronoi-self.scs_qem, cmap='viridis')
+        plt.gca().invert_yaxis()
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.title("difference refined scs ($\AA^2$)")
+        plt.clim(-self.scs_qem.mean() / 10, self.scs_qem.mean() / 10)
+        plt.tight_layout()
+        if save:
+            if file_path is None:
+                file_path = "voronoi_scs.png"
+            if folder_path is not None:
+                os.makedirs(folder_path, exist_ok=True)
+            full_path = os.path.join(folder_path, file_path)
+            plt.savefig(full_path, dpi=300)
 
 
     def compare_residual(
