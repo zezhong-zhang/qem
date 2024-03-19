@@ -89,8 +89,8 @@ class Benchmark:
         params = model.fit_random_batch(params, tol=tol, maxiter=maxiter, step_size=step_size, num_epoch=num_epoch, batch_size=batch_size, verbose=verbose, plot=plot)
         self.model_qem = model.model
         self.scs_qem = model.volume
-        self.pos_x = model.pos_x
-        self.pos_y = model.pos_y
+        self.params_qem = params
+
 
     def compare_residual(
         self, mode="both", folder_path=None, file_path=None, save=False
@@ -185,8 +185,8 @@ class Benchmark:
     def compare_scs_map(self, folder_path=None, file_path=None, save=False):
         volume_qem = self.scs_qem
         volume_statstem = self.scs_statstem
-        pos_x = self.pos_x
-        pos_y = self.pos_y
+        pos_x = self.params_qem['pos_x']*self.dx
+        pos_y = self.params_qem['pos_y']*self.dx
         pos_x_statstem = self.output_coordinates[:, 0]
         pos_y_statstem = self.output_coordinates[:, 1]
         index_statstem_in_qem = np.array(
@@ -273,8 +273,8 @@ class Benchmark:
         volume_qem = self.scs_qem
         volume_statstem = self.scs_statstem
         if volume_qem.shape != volume_statstem.shape:
-            pos_x = self.pos_x
-            pos_y = self.pos_y
+            pos_x = self.params_qem['pos_x']*self.dx
+            pos_y = self.params_qem['pos_y']*self.dx
             pos_x_statstem = self.output_coordinates[:, 0]
             pos_y_statstem = self.output_coordinates[:, 1]
             index_statstem_in_qem = np.array(

@@ -41,7 +41,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 class ImageModelFitting:
-    def __init__(self, image: np.array, pixel_size=1):
+    def __init__(self, image: np.array, pixel_size:float =1.0):
         """
         Initialize the Fitting class.
 
@@ -84,10 +84,10 @@ class ImageModelFitting:
             numpy.ndarray: The Butterworth window used for fitting.
         """
         if self.fit_local:
-            window = butterworth_window(self.local_shape, 0.5, 10)
+            return butterworth_window(self.local_shape, 0.5, 10)
         else:
-            window = butterworth_window(self.image.shape, 0.5, 10)
-        return window
+            return butterworth_window(self.image.shape, 0.5, 10)
+
     
     @property
     def atom_types(self):
@@ -97,11 +97,12 @@ class ImageModelFitting:
     
     @property
     def volume(self):
+        params = self.params
         if self.fitting_model == "gaussian":
-            return self.height * self.sigma**2 * np.pi * 2
+            return params["height"] * params["sigma"]**2 * np.pi * 2
         elif self.fitting_model == "voigt":
-            gaussian_contrib = self.height * self.sigma**2 * np.pi * 2 * self.ratio
-            lorentzian_contrib = self.height * self.gamma * 2 * np.pi * (1 - self.ratio)
+            gaussian_contrib = params["height"] * params["sigma"]**2 * np.pi * 2 * params["ratio"]
+            lorentzian_contrib = params["height"] * params["gamma"] * 2 * np.pi * (1 - params["ratio"])
             return gaussian_contrib + lorentzian_contrib
 
     @property
@@ -109,7 +110,7 @@ class ImageModelFitting:
         return self.coordinates.shape[0]
 
 ### init peaks and parameters
-    def import_coordinates(self, coordinates):
+    def import_coordinates(self, coordinates: np.array):
         """
         Import the coordinates of the atomic columns.
 
@@ -119,13 +120,13 @@ class ImageModelFitting:
         self.coordinates = coordinates
 
     def find_peaks(
-        self, atom_size=1, threshold_rel=0.2, threshold_abs = None, exclude_border=False, image=None
+        self, atom_size:float=1, threshold_rel:float=0.2, threshold_abs:bool = None, exclude_border:bool=False, image:np.array=None
     ):
         """
         Find the peaks in the image.
 
         Args:
-            atom_size (int, optional): The size of the atomic columns. Defaults to 1.
+            atom_size (float, optional): The size of the atomic columns. Defaults to 1.
             threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
             exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
             image (np.array, optional): The input image. Defaults to None.
@@ -149,11 +150,11 @@ class ImageModelFitting:
         self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self.coordinates
 
-    def remove_close_coordinates(self, threshold=10):
+    def remove_close_coordinates(self, threshold:int=10):
         self.coordinates = remove_close_coordinates(self.coordinates, threshold)
         return self.coordinates
 
-    def add_or_remove_peaks(self, min_distance=10, image=None):
+    def add_or_remove_peaks(self, min_distance:int=10, image:np.array=None):
         if image is None:
             image = self.image
         peaks_locations = self.coordinates
@@ -178,7 +179,7 @@ class ImageModelFitting:
         self.coordinates = coordinates[mask]
         return self.coordinates
 
-    def plot(self, image="input"):
+    def plot(self):
         plt.figure(figsize=(10, 5))
         # x = np.arange(self.nx) * self.pixel_size
         # y = np.arange(self.ny) * self.pixel_size
@@ -248,7 +249,7 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, atom_size=None):
+    def init_params(self, atom_size:float=None):
         if atom_size is not None:
             width = atom_size / self.pixel_size
         else:
@@ -282,27 +283,28 @@ class ImageModelFitting:
         if self.fit_background:
             params["background"] = background.astype(float)
 
+        self.params = params
         return params
 
 ### loss function and model prediction
 
-    def loss(self, params, image, X, Y):
+    def loss(self, params:dict, image:np.array, X:np.array, Y:np.array):
         # Compute the sum of the Gaussians
         prediction = self.predict(params, X, Y)
         diff = image - prediction
         diff = diff * self.window
         # dammping the difference near the edge
         mse = jnp.sqrt(jnp.mean(diff**2))
-        # L1 = jnp.mean(jnp.abs(diff))
-        return mse #+ L1
+        L1 = jnp.mean(jnp.abs(diff))
+        return mse + L1
 
-    def residual(self, params, image, X, Y):
+    def residual(self, params:dict, image:np.array, X:np.array, Y:np.array):
         # Compute the sum of the Gaussians
         prediction = self.predict(params, X, Y)
         diff = prediction - image
         return diff
 
-    def predict_local(self, params):
+    def predict_local(self, params:dict):
         if self.fit_background:
             background = params["background"]
         else:
@@ -331,7 +333,7 @@ class ImageModelFitting:
         )
         return prediction
 
-    def predict(self, params, X, Y):
+    def predict(self, params:dict, X:np.array, Y:np.array):
         if self.fit_background:
             background = params["background"]
         else:
@@ -364,7 +366,9 @@ class ImageModelFitting:
 
 ### fitting
 
-    def linear_estimator(self, params):
+    def linear_estimator(self, params:dict=None):
+        if params is None:
+            params = self.params
         # create the design matrix as array of gaussian peaks + background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
@@ -453,10 +457,11 @@ class ImageModelFitting:
                 height_scale[scale_neagtive_mask] = 1
                 params["height"][input_negative_mask] = -params["height"][input_negative_mask]
             params["height"] = height_scale* params["height"]
+        self.params = params
         return params
 
     def optimize(
-        self, image, params, X, Y, maxiter=1000, tol=1e-4, step_size=0.01, verbose=False
+        self, image:np.array, params:dict, X:np.array, Y:np.array, maxiter:int=1000, tol:float=1e-4, step_size:float=0.01, verbose:bool=False
     ):
         opt = optax.adam(step_size)
         solver = OptaxSolver(
@@ -468,15 +473,17 @@ class ImageModelFitting:
 
     def gradient_descent(
         self,
-        image,
-        params,
-        X,
-        Y,
-        step_size=0.001,
-        maxiter=10000,
-        tol=1e-4,
-        keys_to_mask=None,
+        image:np.array,
+        params:dict,
+        X:np.array,
+        Y:np.array,
+        step_size:float=0.001,
+        maxiter:int=10000,
+        tol:float=1e-4,
+        keys_to_mask:bool=None,
     ):
+        if params is None:
+            params = self.params
         opt_init, opt_update, get_params = optimizers.adam(
             step_size=step_size, b1=0.9, b2=0.999
         )
@@ -513,34 +520,39 @@ class ImageModelFitting:
         plt.xlabel("Iteration")
         plt.ylabel("Loss")
         # Update the model
+        self.params = new_params
         return new_params
 
-    def fit_global(self, params, maxiter=1000, tol=1e-3, step_size=0.01, verbose=False):
+    def fit_global(self, params: dict = None, maxiter:int=1000, tol:float=1e-3, step_size:float=0.01, verbose:bool=False):
+        if params is None:
+            params = self.params
         self.fit_local = False
         params = self.optimize(
             self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
         )
-        params = self.update_params_on_atom_type(params)
-        self.update_params(params)
+        params = self.same_width_on_atom_type(params)
+        self.params = params
         self.model = self.predict(params, self.X, self.Y)
         return params
 
     def fit_random_batch(
         self,
-        params,
-        num_epoch=5,
-        batch_size=500,
-        maxiter=50,
-        tol=1e-3,
-        step_size=1e-2,
-        verbose=False,
-        plot=False,
+        params: dict = None,
+        num_epoch:int=5,
+        batch_size:int=500,
+        maxiter:int=50,
+        tol:float=1e-3,
+        step_size:float=1e-2,
+        verbose:bool=False,
+        plot:bool=False,
     ):
+        if params is None:
+            params = self.params
         self.fit_local = False
         self.converged = False
         while self.converged is False and num_epoch > 0:
-            pre_params = copy.deepcopy(params)
             params = self.linear_estimator(params)
+            pre_params = copy.deepcopy(params)
             num_epoch -= 1
             random_batches = get_random_indices_in_batches(
                 self.num_coordinates, batch_size
@@ -552,6 +564,7 @@ class ImageModelFitting:
             for index in tqdm(random_batches, desc="Fitting random batch"):
                 mask = np.zeros(self.num_coordinates, dtype=bool)
                 mask[index] = True
+                params = self.same_width_on_atom_type(params)
                 select_params = self.select_params(params, mask)
                 global_prediction = self.predict(params, self.X, self.Y)
                 local_prediction = self.predict(select_params, self.X, self.Y)
@@ -583,24 +596,25 @@ class ImageModelFitting:
                     plt.imshow(image - global_prediction, cmap="gray")
                     plt.gca().set_aspect("equal", adjustable="box")
                     plt.show()
-            params = self.update_params_on_atom_type(params)
+            params = self.same_width_on_atom_type(params)
             self.converged = self.convergence(params, pre_params, tol)
         params = self.linear_estimator(params)
-        self.update_params(params)
+        self.params = params
         self.model = self.predict(params, self.X, self.Y)
         return params
 
     def fit_region(
         self,
-        params,
-        fitting_region,
-        update_region,
-        maxiter=1000,
-        tol=1e-4,
-        step_size=0.01,
-        plot=False,
-        verbose=False,
+        params: dict,
+        fitting_region: list,
+        update_region: list,
+        maxiter:int=1000,
+        tol:float=1e-4,
+        step_size:float=0.01,
+        plot:bool=False,
+        verbose:bool=False,
     ):
+        self.fit_local = True
         left, right, top, bottom = fitting_region
         center_left, center_right, center_top, center_bottom = update_region
         pos_x = params["pos_x"]
@@ -703,18 +717,20 @@ class ImageModelFitting:
 
     def fit_patch(
         self,
-        params,
-        step_size=0.01,
-        maxiter=1000,
-        tol=1e-4,
-        patch_size=100,
-        buffer_size=None,
-        stride_size=None,
-        plot=False,
-        verbose=False,
-        mode="sequential",
-        num_random_patches=10,
+        params: dict = None,
+        step_size:float=0.01,
+        maxiter:int=1000,
+        tol:float=1e-4,
+        patch_size:int=100,
+        buffer_size:int=0,
+        stride_size:int=100,
+        plot:bool=False,
+        verbose:bool=False,
+        mode:str="sequential",
+        num_random_patches:int=10,
     ):
+        if params is None:
+            params = self.params
         self.fit_local = True
         if buffer_size is None:
             width, _, _ = (
@@ -772,14 +788,14 @@ class ImageModelFitting:
             )
 
         # have a linear estimator of the background and height of the gaussian peaks
-        self.update_params_on_atom_type(params)
+        self.same_width_on_atom_type(params)
         params = self.linear_estimator(params)
-        self.update_params(params)
+        self.params = params
         self.model = self.predict(params, self.X, self.Y)
         return params
 
 ### parameters updates and convergence
-    def convergence(self, params, pre_params, tol=1e-2):
+    def convergence(self, params:dict, pre_params:dict, tol:float=1e-2):
         """
         Checks if the parameters have converged within a specified tolerance.
 
@@ -824,7 +840,7 @@ class ImageModelFitting:
         logging.info("Convergence reached")
         return True
 
-    def select_params(self, params, mask):
+    def select_params(self, params:dict, mask:list[str]):
         select_params = {
             key: value[mask]
             for key, value in params.items()
@@ -833,7 +849,7 @@ class ImageModelFitting:
         select_params["background"] = params["background"]
         return select_params
 
-    def update_from_local_params(self, params, local_params, mask=None, mask_local=None):
+    def update_from_local_params(self, params:dict, local_params:dict, mask:np.array[bool]=None, mask_local:np.array[bool]=None):
         for key, value in local_params.items():
             value = np.array(value)
             if key not in ["background"]:
@@ -848,7 +864,7 @@ class ImageModelFitting:
                 # params[key] = value
         return params
     
-    def update_params_on_atom_type(self, params):
+    def same_width_on_atom_type(self, params:dict):
         if self.same_width:
             unique_types = np.unique(self.atom_types)
             for atom_type in unique_types:
@@ -868,22 +884,7 @@ class ImageModelFitting:
                             params[key][mask] = mean_value
         return params
 
-    def update_params(self, params):
-        self.pos_x = params["pos_x"] * self.pixel_size
-        self.pos_y = params["pos_y"] * self.pixel_size
-        self.height = params["height"]
-        
-        self.sigma = params["sigma"] * self.pixel_size
-        if self.fit_background:
-            self.background = params["background"]
-        else:
-            self.background = 0
-        if self.fitting_model == "voigt":
-            self.gamma = params["gamma"] * self.pixel_size
-            self.ratio = params["ratio"]
-        self.params = params
-
-    def project_params(self, params):
+    def project_params(self, params:dict):
         for key, value in params.items():
             if key == "pos_x":
                 params[key] = jnp.clip(value, 0, self.nx - 1)
