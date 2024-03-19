@@ -41,7 +41,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 class ImageModelFitting:
-    def __init__(self, image: np.array, pixel_size:float =1.0):
+    def __init__(self, image: np.ndarray, pixel_size: float = 1.0):
         """
         Initialize the Fitting class.
 
@@ -55,16 +55,16 @@ class ImageModelFitting:
 
         self.device = "cpu"
         self.image = image.astype(np.float32)
-        self.model = None
+        self.model = np.zeros(image.shape)
         self.local_shape = image.shape
         self.pixel_size = pixel_size
-        self._atom_types = None
-        self.atoms_selected = None
-        self.coordinates = None
+        self._atom_types = np.array([])
+        self.atoms_selected = np.array([])
+        self.coordinates = np.array([])
         self.fit_background = True
         self.same_width = True
         self.fitting_model = "gaussian"
-        self.params = None
+        self.params = dict()
         self.fit_local = False
         x = np.arange(self.nx)
         y = np.arange(self.ny)
@@ -91,9 +91,9 @@ class ImageModelFitting:
     
     @property
     def atom_types(self):
-        if self._atom_types is None:
+        if self._atom_types.shape != self.num_coordinates:
             self._atom_types = np.zeros(self.num_coordinates, dtype=int)
-        return self._atom_types
+        return self._atom_types 
     
     @property
     def volume(self):
@@ -106,11 +106,41 @@ class ImageModelFitting:
             return gaussian_contrib + lorentzian_contrib
 
     @property
+    def voronoi_volume(self):
+        if self._voronoi_volume is None:
+            self.voronoi_integration()
+        return self._voronoi_volume
+
+    @property
     def num_coordinates(self):
         return self.coordinates.shape[0]
 
+### voronoi integration
+    def voronoi_integration(self,plot=False):
+        """
+        Compute the Voronoi integration of the atomic columns.
+
+        Returns:
+            np.array: The Voronoi integration of the atomic columns.
+        """
+        from hyperspy.signals import Signal2D
+        from qem.voronoi import integrate
+        s = Signal2D(self.image - self.params["background"])
+        pos_x = self.params["pos_x"]
+        pos_y = self.params["pos_y"]
+        max_radius = self.params["sigma"].max() * 2
+        integrated_intensity, intensity_record, point_record = integrate(s, pos_x, pos_y, max_radius=max_radius)
+        integrated_intensity = integrated_intensity * self.pixel_size**2
+        intensity_record = intensity_record * self.pixel_size**2
+        self._voronoi_volume = integrated_intensity
+        self._voronoi_map = intensity_record
+        self._voronoi_cell = point_record
+        if plot:
+            intensity_record.plot(cmap='viridis')
+        return integrated_intensity, intensity_record, point_record
+
 ### init peaks and parameters
-    def import_coordinates(self, coordinates: np.array):
+    def import_coordinates(self, coordinates: np.ndarray):
         """
         Import the coordinates of the atomic columns.
 
@@ -120,7 +150,7 @@ class ImageModelFitting:
         self.coordinates = coordinates
 
     def find_peaks(
-        self, atom_size:float=1, threshold_rel:float=0.2, threshold_abs:bool = None, exclude_border:bool=False, image:np.array=None
+        self, atom_size:float=1, threshold_rel:float=0.2, threshold_abs = None, exclude_border:bool=False, image=None
     ):
         """
         Find the peaks in the image.
@@ -154,7 +184,7 @@ class ImageModelFitting:
         self.coordinates = remove_close_coordinates(self.coordinates, threshold)
         return self.coordinates
 
-    def add_or_remove_peaks(self, min_distance:int=10, image:np.array=None):
+    def add_or_remove_peaks(self, min_distance:int=10, image=None):
         if image is None:
             image = self.image
         peaks_locations = self.coordinates
@@ -249,11 +279,11 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, atom_size:float=None):
-        if atom_size is not None:
-            width = atom_size / self.pixel_size
-        else:
+    def init_params(self, atom_size:float=0.7, guess_radius:bool=True):            
+        if guess_radius:
             width = self.guess_radius()[0]
+        else:
+            width = atom_size / self.pixel_size
         # self.center_of_mass()
         pos_x = copy.deepcopy(self.coordinates[:, 0])
         pos_y = copy.deepcopy(self.coordinates[:, 1])
@@ -288,7 +318,7 @@ class ImageModelFitting:
 
 ### loss function and model prediction
 
-    def loss(self, params:dict, image:np.array, X:np.array, Y:np.array):
+    def loss(self, params:dict, image:np.ndarray, X:np.ndarray, Y:np.ndarray):
         # Compute the sum of the Gaussians
         prediction = self.predict(params, X, Y)
         diff = image - prediction
@@ -298,7 +328,7 @@ class ImageModelFitting:
         L1 = jnp.mean(jnp.abs(diff))
         return mse + L1
 
-    def residual(self, params:dict, image:np.array, X:np.array, Y:np.array):
+    def residual(self, params:dict, image:np.ndarray, X:np.ndarray, Y:np.ndarray):
         # Compute the sum of the Gaussians
         prediction = self.predict(params, X, Y)
         diff = prediction - image
@@ -333,7 +363,7 @@ class ImageModelFitting:
         )
         return prediction
 
-    def predict(self, params:dict, X:np.array, Y:np.array):
+    def predict(self, params:dict, X:np.ndarray, Y:np.ndarray):
         if self.fit_background:
             background = params["background"]
         else:
@@ -366,9 +396,7 @@ class ImageModelFitting:
 
 ### fitting
 
-    def linear_estimator(self, params:dict=None):
-        if params is None:
-            params = self.params
+    def linear_estimator(self, params:dict):
         # create the design matrix as array of gaussian peaks + background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
@@ -461,9 +489,9 @@ class ImageModelFitting:
         return params
 
     def optimize(
-        self, image:np.array, params:dict, X:np.array, Y:np.array, maxiter:int=1000, tol:float=1e-4, step_size:float=0.01, verbose:bool=False
+        self, image:np.ndarray, params:dict, X:np.ndarray, Y:np.ndarray, maxiter:int=1000, tol:float=1e-4, step_size:float=0.01, verbose:bool=False
     ):
-        opt = optax.adam(step_size)
+        opt = optax.adam(learning_rate=step_size)
         solver = OptaxSolver(
             opt=opt, fun=self.loss, maxiter=maxiter, tol=tol, verbose=verbose
         )
@@ -473,17 +501,15 @@ class ImageModelFitting:
 
     def gradient_descent(
         self,
-        image:np.array,
+        image:np.ndarray,
         params:dict,
-        X:np.array,
-        Y:np.array,
+        X:np.ndarray,
+        Y:np.ndarray,
+        keys_to_mask:list[str],
         step_size:float=0.001,
         maxiter:int=10000,
         tol:float=1e-4,
-        keys_to_mask:bool=None,
     ):
-        if params is None:
-            params = self.params
         opt_init, opt_update, get_params = optimizers.adam(
             step_size=step_size, b1=0.9, b2=0.999
         )
@@ -523,9 +549,7 @@ class ImageModelFitting:
         self.params = new_params
         return new_params
 
-    def fit_global(self, params: dict = None, maxiter:int=1000, tol:float=1e-3, step_size:float=0.01, verbose:bool=False):
-        if params is None:
-            params = self.params
+    def fit_global(self, params: dict, maxiter:int=1000, tol:float=1e-3, step_size:float=0.01, verbose:bool=False):
         self.fit_local = False
         params = self.optimize(
             self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
@@ -537,7 +561,7 @@ class ImageModelFitting:
 
     def fit_random_batch(
         self,
-        params: dict = None,
+        params: dict,
         num_epoch:int=5,
         batch_size:int=500,
         maxiter:int=50,
@@ -546,8 +570,6 @@ class ImageModelFitting:
         verbose:bool=False,
         plot:bool=False,
     ):
-        if params is None:
-            params = self.params
         self.fit_local = False
         self.converged = False
         while self.converged is False and num_epoch > 0:
@@ -717,7 +739,7 @@ class ImageModelFitting:
 
     def fit_patch(
         self,
-        params: dict = None,
+        params: dict,
         step_size:float=0.01,
         maxiter:int=1000,
         tol:float=1e-4,
@@ -729,8 +751,6 @@ class ImageModelFitting:
         mode:str="sequential",
         num_random_patches:int=10,
     ):
-        if params is None:
-            params = self.params
         self.fit_local = True
         if buffer_size is None:
             width, _, _ = (
@@ -840,7 +860,7 @@ class ImageModelFitting:
         logging.info("Convergence reached")
         return True
 
-    def select_params(self, params:dict, mask:list[str]):
+    def select_params(self, params:dict, mask:np.ndarray):
         select_params = {
             key: value[mask]
             for key, value in params.items()
@@ -849,7 +869,7 @@ class ImageModelFitting:
         select_params["background"] = params["background"]
         return select_params
 
-    def update_from_local_params(self, params:dict, local_params:dict, mask:np.array=None, mask_local:np.array=None):
+    def update_from_local_params(self, params:dict, local_params:dict, mask:np.ndarray, mask_local=None):
         for key, value in local_params.items():
             value = np.array(value)
             if key not in ["background"]:
