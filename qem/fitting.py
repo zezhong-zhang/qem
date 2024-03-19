@@ -99,10 +99,10 @@ class ImageModelFitting:
     def volume(self):
         params = self.params
         if self.fitting_model == "gaussian":
-            return params["height"] * params["sigma"]**2 * np.pi * 2
+            return params["height"] * params["sigma"]**2 * np.pi * 2 *self.pixel_size**2
         elif self.fitting_model == "voigt":
-            gaussian_contrib = params["height"] * params["sigma"]**2 * np.pi * 2 * params["ratio"]
-            lorentzian_contrib = params["height"] * params["gamma"] * 2 * np.pi * (1 - params["ratio"])
+            gaussian_contrib = params["height"] * params["sigma"]**2 * np.pi * 2 * params["ratio"] *self.pixel_size**2
+            lorentzian_contrib = params["height"] * params["gamma"] * 2 * np.pi * (1 - params["ratio"]) *self.pixel_size**2
             return gaussian_contrib + lorentzian_contrib
 
     @property
@@ -849,7 +849,7 @@ class ImageModelFitting:
         select_params["background"] = params["background"]
         return select_params
 
-    def update_from_local_params(self, params:dict, local_params:dict, mask:np.array[bool]=None, mask_local:np.array[bool]=None):
+    def update_from_local_params(self, params:dict, local_params:dict, mask:np.array=None, mask_local:np.array=None):
         for key, value in local_params.items():
             value = np.array(value)
             if key not in ["background"]:
