@@ -213,21 +213,23 @@ class InteractivePlot:
             distance = np.sqrt((self.pos_x - x) ** 2 + (self.pos_y - y) ** 2)
             if distance.min() < self.tolerance:
                 i = np.argmin(distance)
-                point = (self.pos_x[i], self.pos_y[i])
+                point = np.array([self.pos_x[i], self.pos_y[i]])
+                plt.scatter(self.pos_x[i], self.pos_y[i], color="red", s=10)
+                plt.draw()
 
                 if self.selection_stage == 0:
                     self.origin = point
                     self.selection_stage += 1
                     print("Origin selected:", self.origin)
                 elif self.selection_stage == 1:
-                    self.vector_a = point
+                    self.vector_a = point - self.origin
                     self.selection_stage += 1
                     print("Vector a selected:", self.vector_a)
-                    self.draw_arrow(self.origin, self.vector_a, 'a')
+                    self.draw_arrow(self.origin, point, 'a')
                 elif self.selection_stage == 2:
-                    self.vector_b = point
+                    self.vector_b = point - self.origin
                     print("Vector b selected:", self.vector_b)
-                    self.draw_arrow(self.origin, self.vector_b, 'b')
+                    self.draw_arrow(self.origin, point, 'b')
                     self.selection_stage = 0  # Reset the selection stage to allow new selections
                     return self.origin, self.vector_a, self.vector_b
             plt.draw()
@@ -235,20 +237,20 @@ class InteractivePlot:
     def draw_arrow(self, start, end, label):
         dx = end[0] - start[0]
         dy = end[1] - start[1]
-        plt.arrow(start[0], start[1], dx, dy, head_width=0.05, head_length=0.1, fc='green', ec='green')
-        plt.text((start[0] + end[0])/2, (start[1] + end[1])/2, label, color='green')
+        plt.arrow(start[0], start[1], dx, dy, head_width=10, head_length=10, fc='black', ec='black')
+        plt.text((start[0] + end[0])/2, (start[1] + end[1])/2, label, color='black', fontsize=14)
 
     def select_vectors(self):
         fig = plt.figure()
         plt.imshow(self.image)
-        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="blue", s=10)
+        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="blue", s=1)
         fig.canvas.mpl_connect("button_press_event", self.onclick_select_vectors)
         plt.show()
 
         while plt.fignum_exists(fig.number):
             plt.pause(0.1)
 
-        if self.origin and self.vector_a and self.vector_b:
+        if self.origin.any() and self.vector_a.any() and self.vector_b.any():
             print(f"Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}")
             return self.origin, self.vector_a, self.vector_b
         else:
