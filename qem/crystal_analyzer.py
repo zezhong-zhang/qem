@@ -401,7 +401,7 @@ class CrystalAnalyzer:
                         # the element is not in the peak_positions, we will add it according to the neigboring peak positions with the symmetry preserved
                         neighbor_list = self.unitcell.get_neighbors(
                             site=site,
-                            r=min_distance[element_symbol]
+                            r=min_distances[element_symbol]
                             * search_range
                             * self.pixel_size,
                         )
@@ -503,15 +503,15 @@ class CrystalAnalyzer:
             f.write("2 26.981538  # Al3+\n")
             f.write("3 15.9994  # O2-\n\n")
             f.write("Atoms  # atomic\n\n")
-            id = 0
+            idx = 0
             for atom_type in np.unique(self.coordinates[:, 3]):
                 atom_type = int(atom_type)
                 mask = self.coordinates[:, 3] == atom_type
                 positions = self.coordinates[mask]
                 for position in positions:
-                    id += 1
+                    idx += 1
                     f.write(
-                        str(id)
+                        str(idx)
                         + " "
                         + str(atom_type + 1)
                         + " "
