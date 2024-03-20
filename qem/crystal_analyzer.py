@@ -2,22 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from qem.utils import InteractivePlot
 from pymatgen.core.structure import Structure
-import itertools
-import colorsys
-
-def get_unique_colors():
-    """
-    An iterator to generate unique colors by cycling through the HSV color space.
-    The saturation and value components are fixed to ensure bright and vivid colors.
-    """
-    # Choose a step size based on the number of elements you expect to plot to ensure distinct colors.
-    # For a large number of elements, you may need to adjust the step size or modify the approach to generate more variations.
-    step_size = 0.3
-    for i in itertools.count():
-        hue = (i * step_size) % 1.0
-        # Convert HSV color to RGB since most plotting libraries use RGB.
-        yield colorsys.hsv_to_rgb(hue, 1.0, 1.0)
-
+from qem.color import get_unique_colors
 
 def transform_coordinates(frac_coords, a, b, c):
     # Construct the transformation matrix with a, b, c as its columns
@@ -27,31 +12,6 @@ def transform_coordinates(frac_coords, a, b, c):
     # Multiply the transpose of T by the old coordinates to get the new coordinates
     new_coords = np.dot(transform_matrix, frac_coords.T).T
     return new_coords
-
-def rotate_vector(vector, axis, angle):
-    # Rotate a vector around a specified axis by a given angle
-    axis = axis / np.linalg.norm(axis)
-    rot_matrix = np.array(
-        [
-            [
-                np.cos(angle) + axis[0] ** 2 * (1 - np.cos(angle)),
-                axis[0] * axis[1] * (1 - np.cos(angle)) - axis[2] * np.sin(angle),
-                axis[0] * axis[2] * (1 - np.cos(angle)) + axis[1] * np.sin(angle),
-            ],
-            [
-                axis[1] * axis[0] * (1 - np.cos(angle)) + axis[2] * np.sin(angle),
-                np.cos(angle) + axis[1] ** 2 * (1 - np.cos(angle)),
-                axis[1] * axis[2] * (1 - np.cos(angle)) - axis[0] * np.sin(angle),
-            ],
-            [
-                axis[2] * axis[0] * (1 - np.cos(angle)) - axis[1] * np.sin(angle),
-                axis[2] * axis[1] * (1 - np.cos(angle)) + axis[0] * np.sin(angle),
-                np.cos(angle) + axis[2] ** 2 * (1 - np.cos(angle)),
-            ],
-        ]
-    )
-
-    return np.dot(rot_matrix, vector.T).T
 
 def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
     """
@@ -73,67 +33,7 @@ def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
     mask = np.array(mask)
     return mask
 
-import numpy as np
-
-def is_point_in_polygon(point, polygon):
-    """
-    Determine if a point is inside a polygon using the ray casting algorithm.
-
-    Parameters:
-    - point: A 2D point as a tuple or numpy array (x, y).
-    - polygon: A list of tuples or numpy arrays [(x1, y1), (x2, y2), ..., (xn, yn)] representing the polygon vertices.
-
-    Returns:
-    - Boolean indicating whether the point is inside the polygon.
-    """
-    x, y = point
-    inside = False
-    n = len(polygon)
-    px, py = polygon[0]
-    for i in range(1, n + 1):
-        qx, qy = polygon[i % n]
-        if y > min(py, qy) and y <= max(py, qy) and x <= max(px, qx):
-            if py != qy:
-                intercept = px + (y - py) * (qx - px) / (qy - py)
-            if px == qx or x <= intercept:
-                inside = not inside
-        px, py = qx, qy
-    return inside
-
-def find_peaks_in_rectangle(peaks, origin, a, b):
-    """
-    Find all peaks that lie within the rectangle defined by origin, origin+a, origin+b, and origin+a+b.
-
-    Parameters:
-    - peaks: A list of peak positions as tuples or numpy arrays (x, y).
-    - origin: The origin point as a tuple or numpy array (x, y).
-    - a: The vector a as a tuple or numpy array (x, y).
-    - b: The vector b as a tuple or numpy array (x, y).
-
-    Returns:
-    - A list of peaks within the defined rectangle.
-    """
-    origin = np.array(origin)
-    a = np.array(a)
-    b = np.array(b)
-    peaks = np.array(peaks)
-    # Define the rectangle's vertices
-    vertices = [origin, origin+a, origin+a+b, origin+b]
-
-    # Initialize a list to hold indices of peaks within the rectangle
-    indices_inside = []
-
-    # Check each peak to see if it's inside the rectangle
-    for idx, peak in enumerate(peaks):
-        if is_point_in_polygon(peak, vertices):
-            indices_inside.append(idx)
-
-    # Extract the peaks that are inside using the indices
-    peaks_inside = peaks[indices_inside]
-
-    return peaks_inside, np.array(indices_inside)
-
-class AtomicModel:
+class CrystalAnalyzer:
     def __init__(self, image, pixel_size, peak_positions, atom_types, elements):
         self.image = image
         self.pixel_size = pixel_size

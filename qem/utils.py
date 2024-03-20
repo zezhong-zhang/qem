@@ -432,3 +432,87 @@ def get_random_indices_in_batches(total_examples, batch_size):
     all_indices = np.random.permutation(total_examples)
     batches = [all_indices[i:i + batch_size] for i in range(0, total_examples, batch_size)]
     return batches
+
+
+def is_point_in_polygon(point, polygon):
+    """
+    Determine if a point is inside a polygon using the ray casting algorithm.
+
+    Parameters:
+    - point: A 2D point as a tuple or numpy array (x, y).
+    - polygon: A list of tuples or numpy arrays [(x1, y1), (x2, y2), ..., (xn, yn)] representing the polygon vertices.
+
+    Returns:
+    - Boolean indicating whether the point is inside the polygon.
+    """
+    x, y = point
+    inside = False
+    n = len(polygon)
+    px, py = polygon[0]
+    for i in range(1, n + 1):
+        qx, qy = polygon[i % n]
+        if y > min(py, qy) and y <= max(py, qy) and x <= max(px, qx):
+            if py != qy:
+                intercept = px + (y - py) * (qx - px) / (qy - py)
+            if px == qx or x <= intercept:
+                inside = not inside
+        px, py = qx, qy
+    return inside
+
+def find_peaks_in_rectangle(peaks, origin, a, b):
+    """
+    Find all peaks that lie within the rectangle defined by origin, origin+a, origin+b, and origin+a+b.
+
+    Parameters:
+    - peaks: A list of peak positions as tuples or numpy arrays (x, y).
+    - origin: The origin point as a tuple or numpy array (x, y).
+    - a: The vector a as a tuple or numpy array (x, y).
+    - b: The vector b as a tuple or numpy array (x, y).
+
+    Returns:
+    - A list of peaks within the defined rectangle.
+    """
+    origin = np.array(origin)
+    a = np.array(a)
+    b = np.array(b)
+    peaks = np.array(peaks)
+    # Define the rectangle's vertices
+    vertices = [origin, origin+a, origin+a+b, origin+b]
+
+    # Initialize a list to hold indices of peaks within the rectangle
+    indices_inside = []
+
+    # Check each peak to see if it's inside the rectangle
+    for idx, peak in enumerate(peaks):
+        if is_point_in_polygon(peak, vertices):
+            indices_inside.append(idx)
+
+    # Extract the peaks that are inside using the indices
+    peaks_inside = peaks[indices_inside]
+
+    return peaks_inside, np.array(indices_inside)
+
+def rotate_vector(vector, axis, angle):
+    # Rotate a vector around a specified axis by a given angle
+    axis = axis / np.linalg.norm(axis)
+    rot_matrix = np.array(
+        [
+            [
+                np.cos(angle) + axis[0] ** 2 * (1 - np.cos(angle)),
+                axis[0] * axis[1] * (1 - np.cos(angle)) - axis[2] * np.sin(angle),
+                axis[0] * axis[2] * (1 - np.cos(angle)) + axis[1] * np.sin(angle),
+            ],
+            [
+                axis[1] * axis[0] * (1 - np.cos(angle)) + axis[2] * np.sin(angle),
+                np.cos(angle) + axis[1] ** 2 * (1 - np.cos(angle)),
+                axis[1] * axis[2] * (1 - np.cos(angle)) - axis[0] * np.sin(angle),
+            ],
+            [
+                axis[2] * axis[0] * (1 - np.cos(angle)) - axis[1] * np.sin(angle),
+                axis[2] * axis[1] * (1 - np.cos(angle)) + axis[0] * np.sin(angle),
+                np.cos(angle) + axis[2] ** 2 * (1 - np.cos(angle)),
+            ],
+        ]
+    )
+
+    return np.dot(rot_matrix, vector.T).T
