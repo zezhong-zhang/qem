@@ -53,6 +53,7 @@ class CrystalAnalyzer:
         self.a = np.array([1, 0, 0])
         self.b = np.array([0, 1, 0])
         self.c = np.array([0, 0, 1])
+        self._min_distances = None
 
     def plot(self):
         plt.imshow(self.image, cmap="gray")
@@ -286,19 +287,22 @@ class CrystalAnalyzer:
             closest_peak = candidate_peaks[np.argmin(distance)]
             return closest_peak
 
-    def min_distance(self):
-        # Compute the minimum 2D distance between peaks in the unit cell, output as dictionary
-        min_distances = {}
-        elements = self.get_unitcell_elements()
-        unitcell_in_image = self.unitcell_mapping(plot=False)
-        for element in elements:
-            mask = check_element_in_unitcell(self.unitcell, element)
-            element_positions = unitcell_in_image[mask][:, :2]
-            distances = np.linalg.norm(
-                element_positions[:, None] - element_positions, axis=2
-            )
-            np.fill_diagonal(distances, np.inf)
-            min_distances[element] = distances.min() / 2
+    def min_distances(self):
+        if self._min_distances is not None:
+            return self._min_distances
+        else:
+            # Compute the minimum 2D distance between peaks in the unit cell, output as dictionary
+            min_distances = {}
+            elements = self.get_unitcell_elements()
+            unitcell_in_image = self.unitcell_mapping(plot=False)
+            for element in elements:
+                mask = check_element_in_unitcell(self.unitcell, element)
+                element_positions = unitcell_in_image[mask][:, :2]
+                distances = np.linalg.norm(
+                    element_positions[:, None] - element_positions, axis=2
+                )
+                np.fill_diagonal(distances, np.inf)
+                min_distances[element] = distances.min() / 2
         return min_distances
 
     def shift_origin_adaptive(self, a_limit, b_limit):
@@ -357,7 +361,7 @@ class CrystalAnalyzer:
     def unitcell_with_refined_peaks(self, origin, search_range=3):
         coordinates = np.array([]).reshape(0, 4)
         unitcell_in_image = self.unitcell_mapping(plot=False)
-        min_distance = self.min_distance()
+        min_distances = self.min_distances()
         for idx, site in enumerate(self.unitcell):
             atom_position = unitcell_in_image[idx, :3] + origin
             elements = site.species.elements
@@ -371,7 +375,7 @@ class CrystalAnalyzer:
                         closest_peak = self.closest_peak(
                             candidate_peaks,
                             atom_position[:2],
-                            min_distance=min_distance[element_symbol],
+                            min_distance=min_distances[element_symbol],
                         )
                         if closest_peak is not None:
                             atom_position_3d = np.append(
@@ -386,10 +390,11 @@ class CrystalAnalyzer:
                     else:
                         if coordinates.size == 0:
                             continue
+                        # check if have any close peak within the search range
                         closest_peak = self.closest_peak(
                             self.peak_positions,
                             atom_position[:2],
-                            min_distance=min_distance[element_symbol] * search_range,
+                            min_distance=min_distances[element_symbol] * search_range,
                         )
                         if closest_peak is None:
                             continue
@@ -432,7 +437,7 @@ class CrystalAnalyzer:
                             closest_peak = self.closest_peak(
                                 candidate_peaks,
                                 site_position[:2],
-                                min_distance=min_distance[element_site],
+                                min_distance=min_distances[element_site],
                             )
                             # get the displacement of the site_position
                             if closest_peak is not None:
