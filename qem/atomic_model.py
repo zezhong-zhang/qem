@@ -2,6 +2,31 @@ import numpy as np
 import matplotlib.pyplot as plt
 from qem.utils import InteractivePlot
 from pymatgen.core.structure import Structure
+import itertools
+import colorsys
+
+def get_unique_colors():
+    """
+    An iterator to generate unique colors by cycling through the HSV color space.
+    The saturation and value components are fixed to ensure bright and vivid colors.
+    """
+    # Choose a step size based on the number of elements you expect to plot to ensure distinct colors.
+    # For a large number of elements, you may need to adjust the step size or modify the approach to generate more variations.
+    step_size = 0.3
+    for i in itertools.count():
+        hue = (i * step_size) % 1.0
+        # Convert HSV color to RGB since most plotting libraries use RGB.
+        yield colorsys.hsv_to_rgb(hue, 1.0, 1.0)
+
+
+def transform_coordinates(frac_coords, a, b, c):
+    # Construct the transformation matrix with a, b, c as its columns
+    transform_matrix = np.array([a, b, c]).T  # Take the transpose to get the vectors as columns
+    # Convert the old coordinates to a numpy array (if not already)
+    frac_coords = np.array(frac_coords)
+    # Multiply the transpose of T by the old coordinates to get the new coordinates
+    new_coords = np.dot(transform_matrix, frac_coords.T).T
+    return new_coords
 
 def rotate_vector(vector, axis, angle):
     # Rotate a vector around a specified axis by a given angle
@@ -28,23 +53,113 @@ def rotate_vector(vector, axis, angle):
 
     return np.dot(rot_matrix, vector.T).T
 
+def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
+    """
+    Checks if the given element is present in each site of the unit cell.
+    
+    Args:
+    - unitcell (Structure): The unit cell to check.
+    - element_symbol (str): The symbol of the element to check for (e.g., "O" for oxygen).
+    
+    Returns:
+    - A list of booleans, where each boolean indicates whether the target element
+      is present in the corresponding site of the unit cell.
+    """
+    mask = []
+    for site in unitcell:
+        # Check if the target element is in the current site
+        has_element = any(element.symbol == element_symbol for element in site.species.elements)
+        mask.append(has_element)
+    mask = np.array(mask)
+    return mask
+
+import numpy as np
+
+def is_point_in_polygon(point, polygon):
+    """
+    Determine if a point is inside a polygon using the ray casting algorithm.
+
+    Parameters:
+    - point: A 2D point as a tuple or numpy array (x, y).
+    - polygon: A list of tuples or numpy arrays [(x1, y1), (x2, y2), ..., (xn, yn)] representing the polygon vertices.
+
+    Returns:
+    - Boolean indicating whether the point is inside the polygon.
+    """
+    x, y = point
+    inside = False
+    n = len(polygon)
+    px, py = polygon[0]
+    for i in range(1, n + 1):
+        qx, qy = polygon[i % n]
+        if y > min(py, qy) and y <= max(py, qy) and x <= max(px, qx):
+            if py != qy:
+                intercept = px + (y - py) * (qx - px) / (qy - py)
+            if px == qx or x <= intercept:
+                inside = not inside
+        px, py = qx, qy
+    return inside
+
+def find_peaks_in_rectangle(peaks, origin, a, b):
+    """
+    Find all peaks that lie within the rectangle defined by origin, origin+a, origin+b, and origin+a+b.
+
+    Parameters:
+    - peaks: A list of peak positions as tuples or numpy arrays (x, y).
+    - origin: The origin point as a tuple or numpy array (x, y).
+    - a: The vector a as a tuple or numpy array (x, y).
+    - b: The vector b as a tuple or numpy array (x, y).
+
+    Returns:
+    - A list of peaks within the defined rectangle.
+    """
+    origin = np.array(origin)
+    a = np.array(a)
+    b = np.array(b)
+    peaks = np.array(peaks)
+    # Define the rectangle's vertices
+    vertices = [origin, origin+a, origin+a+b, origin+b]
+
+    # Initialize a list to hold indices of peaks within the rectangle
+    indices_inside = []
+
+    # Check each peak to see if it's inside the rectangle
+    for idx, peak in enumerate(peaks):
+        if is_point_in_polygon(peak, vertices):
+            indices_inside.append(idx)
+
+    # Extract the peaks that are inside using the indices
+    peaks_inside = peaks[indices_inside]
+
+    return peaks_inside, np.array(indices_inside)
 
 class AtomicModel:
     def __init__(self, image, pixel_size, peak_positions, atom_types, elements):
         self.image = image
         self.pixel_size = pixel_size
         self.peak_positions = peak_positions
+        self.coordinates = np.array([])
         self.atom_types = atom_types
         self.elements = elements
-        self.unitcell = None
-        self.lattice_parameters = None
-        self.origin = None
-        self.a = None
-        self.b = None
+        self.unitcell = Structure
+        self.origin = np.array([0, 0,0])
+        self.a = np.array([1, 0,0])
+        self.b = np.array([0, 1,0])
+        self.c = np.array([0, 0, 1])
 
     def plot(self):
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.peak_positions[:, 1], self.peak_positions[:, 0], c="r", s=1)
+        color_iterator = get_unique_colors()
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            element = self.elements[atom_type]
+            plt.scatter(
+                self.peak_positions[:, 0][mask],
+                self.peak_positions[:, 1][mask],
+                label=element,
+                c=next(color_iterator),
+            )
+        plt.legend()
         plt.show()
 
     def choose_lattice_vectors(self, tolerance=10):
@@ -52,125 +167,237 @@ class AtomicModel:
             peaks_locations=self.peak_positions, image=self.image, tolerance=tolerance
         )
         origin, a, b = interactive_plot.select_vectors()
-        self.origin = origin
-        self.a = a
-        self.b = b
+        self.origin = np.append(origin,0)
+        self.a = np.append(a,0)
+        self.b = np.append(b,0)
         return origin, a, b
 
     def import_crystal_structure(self, cif_file_path):
         structure = Structure.from_file(cif_file_path)
-        lattice_parameters = structure.lattice.parameters
         self.unitcell = structure
-        self.lattice_parameters = lattice_parameters
+        self.c = np.array([0,0,self.unitcell.lattice.c])
 
-    def rotate_lattice(self, axis=[0, 0, 1], plot=True):
-        angle = np.arctan2(self.a[1], self.a[0])
-        rotated_lattice = rotate_vector(self.unitcell.cart_coords, axis, -angle)
+    def transform(self, transformation_matrix):
+        from pymatgen.transformations.advanced_transformations import SupercellTransformation
+        self.unitcell = SupercellTransformation(scaling_matrix=transformation_matrix).apply_transformation(self.unitcell)
+        self.c = np.array([0,0,self.unitcell.lattice.c])
+
+    def get_unitcell_elements(self):
+        composition = self.unitcell.composition
+
+        # Then, extract the elements as a list of unique Element objects
+        elements = list(composition.element_composition.elements)
+
+        # If you want the element symbols as strings
+        element_symbols = [str(element) for element in elements]
+        return element_symbols
+
+    def unitcell_mapping(self, plot=True):
+        """
+        Transforms unit cell fractional coordinates to the image coordinate system,
+        aligning them with detected atomic peak positions. Optionally visualizes the
+        transformation, including the origin, lattice vectors, and positions of atoms
+        within the unit cell.
+
+        Parameters:
+        - plot: A boolean indicating whether to plot the mapping and unit cell visualization.
+
+        Returns:
+        - unitcell_transformed: The transformed coordinates of the unit cell.
+        """
+        unitcell_transformed = transform_coordinates(self.unitcell.frac_coords, self.a, self.b, self.c)
+        atom_types = []
+        for site in self.unitcell:
+            species = site.species
+            for specie in species:
+                element = specie.element
+                element_symbol = element.symbol
+                if element_symbol in self.elements:
+                    atom_type = self.elements.index(element_symbol)
+                    atom_types.append(atom_type)
+        atom_types = np.array(atom_types)
+        unitcell_transformed =  np.append(unitcell_transformed, np.array(atom_types).reshape(-1,1), axis=1)
         if plot:
             plt.subplots(figsize=(10, 10))
-            # label the a and b vectors
-            plt.text(
-                self.origin[0] + self.a[0] / 2,
-                self.origin[1] + self.a[1] / 2,
-                "a",
-                fontsize=20,
-            )
-            plt.text(
-                self.origin[0] + self.b[0] / 2,
-                self.origin[1] + self.b[1] / 2,
-                "b",
-                fontsize=20,
-            )
-            for atom_type in np.unique(self.atom_types):
-                mask = self.atom_types == atom_type
-                element = self.elements[atom_type]
-                plt.scatter(
-                    self.peak_positions[:, 0][mask],
-                    self.peak_positions[:, 1][mask],
-                    label=element,
-                )
-            plt.tight_layout()
-            plt.setp(plt.gca(), aspect="equal", adjustable="box")
-
-            plt.scatter(
-                rotated_lattice[:, 0] + self.origin[0],
-                rotated_lattice[:, 2] + self.origin[1],
-                s=10,
-                c="grey",
-            )
-            plt.scatter(self.origin[0], self.origin[1], c="r", s=100)
             # plot the a and b vectors
             plt.arrow(
                 self.origin[0],
                 self.origin[1],
                 self.a[0],
                 self.a[1],
-                color="r",
-                width=0.1,
+                color="k",
+                head_width=10, 
+                head_length=10
             )
             plt.arrow(
                 self.origin[0],
                 self.origin[1],
                 self.b[0],
                 self.b[1],
-                color="r",
-                width=0.1,
+                color="k",
+                head_width=10, 
+                head_length=10
             )
+            # label the a and b vectors
+            plt.text(
+                self.origin[0] + self.a[0],
+                self.origin[1] + self.a[1],
+                "a",
+                fontsize=20,
+            )
+            plt.text(
+                self.origin[0] + self.b[0],
+                self.origin[1] + self.b[1],
+                "b",
+                fontsize=20,
+            )
+            color_iterator = get_unique_colors()
+            for atom_type in np.unique(self.atom_types):
+                mask_element = self.atom_types == atom_type
+                element = self.elements[atom_type]
+                current_color = np.array(next(color_iterator)).reshape(1, -1)
+                plt.scatter(
+                    self.peak_positions[:, 0][mask_element],
+                    self.peak_positions[:, 1][mask_element],
+                    label=element,
+                    c = current_color,
+                )
+            for element in self.get_unitcell_elements():
+                current_color = np.array(next(color_iterator)).reshape(1, -1)
+                mask_unitcell_element = check_element_in_unitcell(self.unitcell, element)
+                plt.scatter(
+                    unitcell_transformed[:, 0][mask_unitcell_element] + self.origin[0],
+                    unitcell_transformed[:, 1][mask_unitcell_element] + self.origin[1],
+                    edgecolors = 'k',
+                    c=current_color,
+                    alpha=0.5,
+                    label=element + ' unitcell',
+                )
+            plt.tight_layout()
+            plt.legend()
+            plt.setp(plt.gca(), aspect="equal", adjustable="box")
             plt.gca().invert_yaxis()
-        return rotated_lattice
+        return unitcell_transformed
     
-    def compute_3d_coordinates(self):
-        element_coordinates_3d = {}
-        for id, atom in enumerate(self.unitcell):
-            element = atom.label[:-1]
-            if element not in element_coordinates_3d.keys():
-                element_coordinates_3d[element] = []
-            # check if the element is in the element_coordinates_2d
-            if element not in element_coordinates_2d.keys():
-                coord_3d = rotated_coordinates[id, [0,2,1]] + np.append(origin,0)
-                coord_2d = np.array([rotated_coordinates[id, [0,2]] + origin])
-                # check if the coord_2d is away from the rest of the element_coordinates_2d by a distance within than the threshold
-                if len(element_coordinates_2d) != 0:
-                    distance = np.linalg.norm(coord_2d - np.vstack(list(element_coordinates_2d.values())), axis=1)
-                    if distance.min() <= 2:
-                        element_coordinates_3d[element].append(coord_3d)
-                continue
-            # compute the distance between the atom and the element_coordinates_2d 
-            else:
-                distance = np.linalg.norm(element_coordinates_2d[element] - origin - rotated_coordinates[id, [0,2]] , axis=1)
-                mask = distance < 1.5
-                if mask.sum() != 0:
-                    element_coordinates_3d[element].append(rotated_coordinates[id, [0,2,1]] + np.append(origin,0))
-        return element_coordinates_3d
+    def sites_mapping(self, sites, plot=True):
+        frac_coords = np.array([site.frac_coords for site in sites])
+        atom_types = []
+        for site in sites:
+            species = site.species
+            for specie in species:
+                element = specie.element
+                element_symbol = element.symbol
+                if element_symbol in self.elements:
+                    atom_type = self.elements.index(element_symbol)
+                    atom_types.append(atom_type)
+        atom_types = np.array(atom_types)
+        sites_transformed = transform_coordinates(frac_coords, self.a, self.b, self.c)
+        sites_transformed =  np.append(sites_transformed, np.array(atom_types).reshape(-1,1), axis=1)
+        if plot:
+            plt.subplots(figsize=(10, 10))
+            # plot the a and b vectors
+            plt.arrow(
+                self.origin[0],
+                self.origin[1],
+                self.a[0],
+                self.a[1],
+                color="k",
+                head_width=10, 
+                head_length=10
+            )
+            plt.arrow(
+                self.origin[0],
+                self.origin[1],
+                self.b[0],
+                self.b[1],
+                color="k",
+                head_width=10, 
+                head_length=10
+            )
+            # label the a and b vectors
+            plt.text(
+                self.origin[0] + self.a[0],
+                self.origin[1] + self.a[1],
+                "a",
+                fontsize=20,
+            )
+            plt.text(
+                self.origin[0] + self.b[0],
+                self.origin[1] + self.b[1],
+                "b",
+                fontsize=20,
+            )
+            color_iterator = get_unique_colors()
+            for atom_type in np.unique(self.atom_types):
+                mask_element = self.atom_types == atom_type
+                element = self.elements[atom_type]
+                current_color = np.array(next(color_iterator)).reshape(1, -1)
+                plt.scatter(
+                    self.peak_positions[:, 0][mask_element],
+                    self.peak_positions[:, 1][mask_element],
+                    label=element,
+                    c = current_color,
+                )
+            for element in self.get_unitcell_elements():
+                current_color = np.array(next(color_iterator)).reshape(1, -1)
+                mask_unitcell_element = check_element_in_unitcell(self.unitcell, element)
+                plt.scatter(
+                    sites_transformed[:, 0][mask_unitcell_element] + self.origin[0],
+                    sites_transformed[:, 1][mask_unitcell_element] + self.origin[1],
+                    edgecolors = 'k',
+                    c=current_color,
+                    alpha=0.5,
+                    label=element + ' unitcell',
+                )
+            plt.tight_layout()
+            plt.legend()
+            plt.setp(plt.gca(), aspect="equal", adjustable="box")
+            plt.gca().invert_yaxis()
+        return sites_transformed
 
-    def map_3d(structure, element_coordinates_2d, rotated_coordinates, origin, a_axis, b_axis, a_axis_length, b_axis_length):
-        # now repeat the same process for origin shifted by a_axis and b_axis
-        limit_a_axis = 20
-        limit_b_axis = 10
-        coords_3d={}
+    def closest_peak(self, candidate_peaks, target_peak, min_distance=1.5):
+        """
+        Find the closest 2D peak to the given atom position.
+        """
+        distance = np.linalg.norm(candidate_peaks - target_peak, axis=1)
+        if distance.min() < min_distance:
+            closest_peak = candidate_peaks[np.argmin(distance)]
+            return closest_peak
+    
+    def min_distance(self):
+        # Compute the minimum 2D distance between peaks in the unit cell, output as dictionary
+        min_distances = {}
+        elements = self.get_unitcell_elements()
+        unitcell_in_image = self.unitcell_mapping(plot=False)
+        for element in elements:
+            mask = check_element_in_unitcell(self.unitcell, element)
+            element_positions = unitcell_in_image[mask][:, :2]
+            distances = np.linalg.norm(element_positions[:, None] - element_positions, axis=2)
+            np.fill_diagonal(distances, np.inf)
+            min_distances[element] = distances.min()/2
+        return min_distances
+
+    def shift_origin_adaptive(self,a_limit,b_limit):
         # generate a meshgrid 
-        a_axis_mesh, b_axis_mesh = np.meshgrid(np.arange(-limit_a_axis, limit_a_axis+1), np.arange(-limit_b_axis, limit_b_axis+1))
-        a_axis_distance_mesh = a_axis_mesh * a_axis_length
-        b_axis_distance_mesh = b_axis_mesh * b_axis_length
+        a_axis_mesh, b_axis_mesh = np.meshgrid(np.arange(-a_limit, a_limit+1), np.arange(-b_limit, b_limit+1))
+        a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a)
+        b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b)
         # compute the distance in such meshgrid
         distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
-        # sort the distance
-        distance_mesh_sorted = np.sort(distance_mesh, axis=None)
         # apply the sort to the a_axis_mesh and b_axis_mesh
         a_axis_mesh_sorted = a_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
         b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
-        order = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
-        # shifted_origin_array =np.array([origin[:,np.newaxis] + a_axis[:,np.newaxis] * a_axis_mesh_sorted.T +  b_axis[:,np.newaxis]*b_axis_mesh_sorted]).squeeze().T
-
+        order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
+        # Find the closest peak to the origin to correct for drift
         shifted_origin_adaptive = {}
-        for a_shift, b_shift in order:
-            shifted_origin_rigid = origin + a_axis * a_shift + b_axis * b_shift
+        for a_shift, b_shift in order_mesh:
+            shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
             if a_shift == 0 and b_shift == 0:
                 shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid 
             else:
                 #find the closet point of the a_shift and b_shift in the current shifted_origin_adaptive
                 distance = np.linalg.norm(np.array(list(shifted_origin_adaptive.values())) - shifted_origin_rigid, axis=1)
-                mask = distance < 1
+                mask = distance < np.linalg.norm(self.a) + np.linalg.norm(self.b)
                 if mask.sum() == 0:
                     shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
                 else:
@@ -178,50 +405,128 @@ class AtomicModel:
                     # find the difference of a_shift and b_shift with the selected_keys
                     a_shift_diff = a_shift - selected_keys[0]
                     b_shift_diff = b_shift - selected_keys[1]
-                    shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_adaptive[selected_keys] + a_axis * a_shift_diff + b_axis * b_shift_diff
+                    shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_adaptive[selected_keys] + self.a * a_shift_diff + self.b * b_shift_diff
+        return shifted_origin_adaptive
             
 
-            result = compute_3d_coordinates(structure, element_coordinates_2d, rotated_coordinates, shifted_origin_adaptive[(a_shift, b_shift)])
-            # combine the result
-            for l in result.keys():
-                if l not in coords_3d.keys():
-                    coords_3d[l] = []
-                coords_3d[l].extend(result[l])
-        return coords_3d
-    
-    def write_lammps(coords_3d, lattice_parameters, filename='ABO3.lammps'):
-        with open(filename, 'w') as f:
-            f.write('# LAMMPS data file written by OVITO Basic 3.8.1\n\n')
-            f.write(str(len(coords_3d['Y'])+len(coords_3d['Al'])+len(coords_3d['O']))+' atoms\n')
-            f.write(str(len(coords_3d.keys()))+' atom types\n\n')
+    def unitcell_with_refined_peaks(self, origin, search_range=3):
+        coordinates = np.array([]).reshape(0,4)
+        unitcell_in_image = self.unitcell_mapping(plot=False)
+        min_distance = self.min_distance()
+        for idx, site in enumerate(self.unitcell):
+            atom_position = unitcell_in_image[idx,:3] + origin
+            elements = site.species.elements
+            for element in elements:
+                element_symbol = element.symbol
+                if element_symbol in self.elements:
+                    atom_type = self.elements.index(element_symbol)
+                    mask = self.atom_types == atom_type
+                    if mask.any():
+                        candidate_peaks = self.peak_positions[mask]
+                        closest_peak = self.closest_peak(candidate_peaks, atom_position[:2], min_distance=min_distance[element_symbol])
+                        if closest_peak is not None:
+                            atom_position_3d = np.append(closest_peak*self.pixel_size, [atom_position[2], atom_type])
+                            coordinates = np.vstack([coordinates, atom_position_3d]) if coordinates.size else atom_position_3d
+                    else:
+                        if coordinates.size == 0:
+                            continue
+                        closest_peak = self.closest_peak(self.peak_positions, atom_position[:2], min_distance=min_distance[element_symbol]*search_range)
+                        if closest_peak is None:
+                            continue
+                        # the element is not in the peak_positions, we will add it according to the neigboring peak positions with the symmetry preserved
+                        neighbor_list = self.unitcell.get_neighbors(site=site, r=min_distance[element_symbol]*search_range*self.pixel_size)
+                        # remove the same element in the neighbour_list
+                        neighbor_list = [neighbour for neighbour in neighbor_list if neighbour.species != site.species]
+                        if len(neighbor_list) <1:
+                            continue
+                        # find the peak positions of the neighbors in the coordinates
+                        sites_transformed = self.sites_mapping(sites = neighbor_list, plot=False)
+                        displacement_list = []
+                        for site_transformed in sites_transformed:
+                            atom_type_site = int(site_transformed[3])
+                            element_site = self.elements[atom_type_site]
+                            site_position = site_transformed[:3] + origin
+                            if np.ndim(coordinates) == 1:
+                                candidate_peaks = coordinates[coordinates[3] == atom_type_site]
+                            else:
+                                candidate_peaks = coordinates[coordinates[:,3] == atom_type_site]
+                            if candidate_peaks.size == 0:
+                                continue
+                            else:
+                                candidate_peaks = candidate_peaks[:,:2]
+                            closest_peak = self.closest_peak(candidate_peaks, site_position[:2], min_distance=min_distance[element_site])
+                            # get the displacement of the site_position
+                            if closest_peak is not None:
+                                displacement = closest_peak[:2] - site_position[:2]
+                                displacement_list.append(displacement)
+                            else:
+                                continue
+                        # get the average displacement of the neighbor_list
+                        if len(displacement_list) > 0:
+                            displacement = np.mean(displacement_list, axis=0)
+                            atom_position = atom_position[:2] + displacement
+                        atom_position[:2] = atom_position[:2] * self.pixel_size
+                        atom_position_3d = np.append(atom_position, atom_type)
+                        coordinates = np.vstack([coordinates, atom_position_3d]) if coordinates.size else atom_position_3d
+        return coordinates
 
-            f.write(f'0 80 xlo xhi\n')
-            f.write(f'0 80 ylo yhi\n')
-            f.write(f'0.0 {lattice_parameters[1]} zlo zhi\n\n')
+    def supercell_with_refined_peaks(self, a_limit=1, b_limit=1):
+        supercell_coordinates = np.array([])
+        shifted_origin_adaptive = self.shift_origin_adaptive(a_limit,b_limit)
+        # Determine the range for translation along a_axis and b_axis
+        # This range depends on the size of the supercell you want to cover
+        for a_translation in range(-a_limit, a_limit + 1):
+            for b_translation in range(-b_limit, b_limit + 1):
+                # Calculate new origin for the translated unit cell
+                new_origin = shifted_origin_adaptive[(a_translation, b_translation)]
+                # Use unitcell_with_refined_peaks for the new origin and adjusted peaks
+                translated_unitcell_peaks = self.unitcell_with_refined_peaks(origin=new_origin)  # Adjust the method to accept dynamic origin and peak list
+                # Combine with supercell coordinates
+                if translated_unitcell_peaks.size > 0:
+                    supercell_coordinates = np.vstack([supercell_coordinates, translated_unitcell_peaks]) if supercell_coordinates.size else translated_unitcell_peaks
+        self.coordinates = supercell_coordinates
+        return supercell_coordinates
+
+    def write_lammps(self, filename='ABO3.lammps'):
+        total_atoms = len(self.coordinates)
+        total_types = len(np.unique(self.coordinates[:, 3]))
+        xlo = np.min(self.coordinates[:, 0])
+        xhi = np.max(self.coordinates[:, 0])
+        ylo = np.min(self.coordinates[:, 1])
+        yhi = np.max(self.coordinates[:, 1])
+        zlo = np.min(self.coordinates[:, 2])
+        zhi = np.max(self.coordinates[:, 2])
+
+        with open(filename, 'w') as f:
+            f.write('# LAMMPS data file written by QEM\n\n')
+            f.write(str(total_atoms)+' atoms\n')
+            f.write(str(total_types)+' atom types\n\n')
+
+            f.write(f'{xlo} {xhi} xlo xhi\n')
+            f.write(f'{ylo} {yhi} ylo yhi\n')
+            f.write(f'{zlo} {zhi} zlo zhi\n\n')
             f.write('Masses\n\n')
             f.write('1 88.90585  # Y3+\n')
             f.write('2 26.981538  # Al3+\n')
             f.write('3 15.9994  # O2-\n\n')
             f.write('Atoms  # atomic\n\n')
             id = 0
-            for l in coords_3d.keys():
-                for position in coords_3d[l]:
+            for atom_type in np.unique(self.coordinates[:, 3]):
+                atom_type = int(atom_type)
+                mask = self.coordinates[:, 3] == atom_type
+                positions = self.coordinates[mask]
+                for position in positions:
                     id += 1
-                    # get the atomic number of the element
-                    if l == 'Y':
-                        atomic_number = 1
-                    elif l == 'Al':
-                        atomic_number = 2
-                    elif l == 'O':
-                        atomic_number = 3
-                    f.write(str(id)+' '+str(atomic_number)+' '+str(position[0])+' '+str(position[1])+' '+str(position[2])+'\n')
+                    f.write(str(id)+' '+str(atom_type + 1)+' '+str(position[0])+' '+str(position[1])+' '+str(position[2])+'\n')
 
 
-    def write_xyz(coords_3d, filename='ABO3.xyz'):
+    def write_xyz(self, filename='ABO3.xyz'):
+        total_atoms = len(self.coordinates)
         with open(filename, 'w') as f:
-            f.write(str(len(coords_3d['Y'])+len(coords_3d['Al'])+len(coords_3d['O']))+'\n')
+            f.write(str(total_atoms)+'\n')
             f.write('comment line\n')
-            for l in coords_3d.keys():
-                for position in coords_3d[l]:
-                    f.write(l+' '+str(position[0])+' '+str(position[1])+' '+str(position[2])+'\n')
+            for position in self.coordinates:
+                atom_type = int(position[3])
+                element = self.elements[atom_type]
+                f.write(element+' '+str(position[0])+' '+str(position[1])+' '+str(position[2])+'\n')
         f.close()
