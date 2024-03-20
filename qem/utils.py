@@ -3,6 +3,9 @@ import numpy as np
 import sys
 from functools import partial
 from numba import jit
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 def plot_image(image, x_labels, y_labels, colormap="gray", colorbar=True):
     """
@@ -158,12 +161,14 @@ class InteractivePlot:
             distance = np.sqrt((self.pos_x - x) ** 2 + (self.pos_y - y) ** 2)
             if distance.min() < self.tolerance:
                 i = np.argmin(distance)
+                logging.info(f"Removing peak at ({self.pos_x[i]}, {self.pos_y[i]}).")
                 self.pos_x = np.delete(self.pos_x, i, axis=0)
                 self.pos_y = np.delete(self.pos_y, i, axis=0)
             else:
                 self.pos_x = np.append(self.pos_x, x)
                 self.pos_y = np.append(self.pos_y, y)
-
+                logging.info(f"Adding peak at ({x}, {y}).")
+            
             self.update_plot()
 
     def update_plot(self):
