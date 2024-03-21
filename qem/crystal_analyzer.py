@@ -67,6 +67,7 @@ class CrystalAnalyzer:
                 label=element,
                 c=next(color_iterator),
             )
+        # plt.gca().invert_yaxis()
         plt.legend()
         plt.show()
 
@@ -135,7 +136,7 @@ class CrystalAnalyzer:
             unitcell_transformed, np.array(atom_types).reshape(-1, 1), axis=1
         )
         if plot:
-            plt.subplots(figsize=(10, 10))
+            plt.subplots()
             # plot the a and b vectors
             plt.arrow(
                 self.origin[0],
