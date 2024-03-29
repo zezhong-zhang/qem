@@ -12,7 +12,7 @@ class GaussianMixtureModel:
         scs (np.ndarray): The scattering cross-section data.
         electron_per_px: The number of electrons per pixel.
         result (dict): The result of the GMM fitting.
-        val (np.ndarray): The selected data for GMM fitting.
+        val (np.ndarray): The selected cross-section for GMM fitting.
         minmax (np.ndarray): The minimum and maximum values of the selected data.
         init_mean (np.ndarray): The initial means for GMM fitting.
         curve: The curve used for GMM fitting.
@@ -28,10 +28,11 @@ class GaussianMixtureModel:
         self.init_mean: np.ndarray
         self.curve = None
         self.curve_prmt = None
+        self.n_component_list = np.ndarray([], dtype=int)
 
     def initCondition(
         self,
-        n_component,
+        n_component: list[int],
         use_scs_channel,
         metric,
         score_method,
@@ -51,7 +52,7 @@ class GaussianMixtureModel:
             n_component (int or list): Number of components in the mixture model. If an integer is provided, the range of components will be from 1 to n_component. If a list is provided, the range will be from the first element to the last element of the list.
             use_scs_channel (int or list or None): The channel(s) to be used for the model. If an integer is provided, only that channel will be used. If a list is provided, the channels specified in the list will be used. If None is provided, the first channel will be used by default.
             metric (str): The metric to be used for the model.
-            score_method (list): List of score methods to be used.
+            score_method (list): List of score methods to be used.Available methods: icl: Integrated Completed Likelihood, aic: Akaike Information Criterion, bic: Bayesian Information Criterion, gic: Generalized Information Criterion, clc: Consistent Likelihood Criterion, awe: Akaike's Weighted Estimate, en: Entropy, nllh: Negative Log-Likelihood.
             init_method (str): The initialization method to be used.
             lim_rate (float): The rate of convergence for the model.
             lim_ite (int): The maximum number of iterations for the model.
@@ -102,7 +103,7 @@ class GaussianMixtureModel:
         self.step = fit_step_size
         self.constraint = constraint
 
-    def GMM(
+    def fit(
         self,
         name: str,
         n_component,
@@ -126,7 +127,7 @@ class GaussianMixtureModel:
             n_component: The number of components in the GMM.
             use_scs_channel: The channel to use for fitting the GMM.
             metric (str): The metric used for model selection. Default is "nllh".
-            score_method (list): The scoring method(s) used for model selection. Default is ["icl"].
+            score_method (list): The scoring method(s) used for model selection. Default is ["icl"]. icl: Integrated Completed Likelihood, aic: Akaike Information Criterion, bic: Bayesian Information Criterion, gic: Generalized Information Criterion, clc: Consistent Likelihood Criterion, awe: Akaike's Weighted Estimate, en: Entropy, nllh: Negative Log-Likelihood.
             init_method (str): The initialization method for the GMM. Default is "middle".
             lim_rate (float): The convergence threshold for the optimization. Default is 1e-5.
             lim_ite (float): The maximum number of iterations for the optimization. Default is 1e5.
@@ -162,7 +163,7 @@ class GaussianMixtureModel:
         wmw = [np.array([]), np.array([[None]]), np.array([[]])]
 
         for n in tqdm(self.n_component_list):
-            wmw, score = self.EmOptimization(n, last_mean=wmw[1])
+            wmw, score = self.optimize(n, last_mean=wmw[1])
             gmm_result["weight"].append(wmw[0])
             gmm_result["mean"].append(wmw[1])  # the variance of the gaussian
             gmm_result["width"].append(wmw[2])
@@ -180,7 +181,7 @@ class GaussianMixtureModel:
             self.curve_prmt,
         )
 
-    def EmOptimization(self, n_component, last_mean):
+    def optimize(self, n_component, last_mean):
         """
         Performs Expectation-Maximization (EM) optimization for the Gaussian Mixture Model.
 
@@ -381,37 +382,37 @@ class GaussianMixtureModel:
         return [weight, mean, width], score
 
     @staticmethod
-        def meanCoincide(mean):
-            """
-            Check if the means of a Gaussian mixture model coincide.
+    def meanCoincide(mean):
+        """
+        Check if the means of a Gaussian mixture model coincide.
 
-            Args:
-                mean (ndarray): Array of means for each component of the Gaussian mixture model.
+        Args:
+            mean (ndarray): Array of means for each component of the Gaussian mixture model.
 
-            Returns:
-                bool: True if the means coincide, False otherwise.
-            """
-            cri = 1e-3
-            diff = mean[1:] - mean[:-1]
-            if ((diff**2).sum(1) ** 0.5 < cri).any():
-                # print('mean coincide')
-                return True
-            else:
-                return False
+        Returns:
+            bool: True if the means coincide, False otherwise.
+        """
+        cri = 1e-3
+        diff = mean[1:] - mean[:-1]
+        if ((diff**2).sum(1) ** 0.5 < cri).any():
+            # print('mean coincide')
+            return True
+        else:
+            return False
 
     @staticmethod
-        def logLikelihood(array):
-            """
-            Calculate the log-likelihood of an array.
+    def logLikelihood(array):
+        """
+        Calculate the log-likelihood of an array.
 
-            Parameters:
-            array (numpy.ndarray): The input array.
+        Parameters:
+        array (numpy.ndarray): The input array.
 
-            Returns:
-            float: The log-likelihood value.
-            """
-            llh = np.log(array.sum(0)).sum()
-            return llh
+        Returns:
+        float: The log-likelihood value.
+        """
+        llh = np.log(array.sum(0)).sum()
+        return llh
 
     @staticmethod
     def componentArray(weight, mean, width, val):
@@ -466,9 +467,6 @@ class GaussianMixtureModel:
         - The score is calculated based on the number of components, dimensions, and other constraints of the Gaussian Mixture Model.
 
         """
-        # Method implementation
-        ...
-    def calculateScore(self, tau, llh):
         penalty = 2
         n_component, n_val = np.shape(tau)
         ## weight
@@ -553,44 +551,43 @@ class GaussianMixtureModel:
         return weight, mean, width
 
     @staticmethod
-        def addChannel(list, method, prmt):
-            """
-            Adds a new channel to each array in the given list using the specified method and parameters.
+    def addChannel(mean_list, method, prmt):
+        """
+        Adds a new channel to each array in the given list using the specified method and parameters.
 
-            Args:
-                list (list): The list of arrays to add a channel to.
-                method (function): The method to apply for adding the channel.
-                prmt (tuple): The parameters to pass to the method.
+        Args:
+            list (list): The list of arrays to add a channel to.
+            method (function): The method to apply for adding the channel.
+            prmt (tuple): The parameters to pass to the method.
 
-            Returns:
-                list: The list of arrays with the additional channel added.
-            """
-            return [np.concatenate((val, method(val, *prmt)), axis=-1) for val in list]
+        Returns:
+            list: The list of arrays with the additional channel added.
+        """
+        return [np.concatenate((val, method(val, *prmt)), axis=-1) for val in mean_list]
 
     @staticmethod
-        def initResultDict(n_component_list: int, score_method: list, b_2d: bool):
-            """
-            Initialize the result dictionary for the Gaussian Mixture Model.
+    def initResultDict(n_component_list: np.ndarray, score_method: list, b_2d: bool):
+        """
+        Initialize the result dictionary for the Gaussian Mixture Model.
 
-            Args:
-                n_component_list (int): List of the number of components for each case.
-                score_method (list): List of score methods.
-                b_2d (bool): Boolean indicating whether the data is 2-dimensional.
+        Args:
+            n_component_list (int): List of the number of components for each case.
+            score_method (list): List of score methods.
+            b_2d (bool): Boolean indicating whether the data is 2-dimensional.
 
-            Returns:
-                dict: The initialized result dictionary with empty lists for each key.
-            """
-            n_cases = len(n_component_list)
-            score_dict = {key: [] for key in score_method}
-            gmm_result = {
-                "weight": [],
-                "mean": [],
-                "width": [],
-                "score": score_dict,
-                "scsidx": [],
-                "case": n_component_list,
-            }
-            return gmm_result
+        Returns:
+            dict: The initialized result dictionary with empty lists for each key.
+        """
+        score_dict = {key: [] for key in score_method}
+        gmm_result = {
+            "weight": [],
+            "mean": [],
+            "width": [],
+            "score": score_dict,
+            "scsidx": [],
+            "case": n_component_list,
+        }
+        return gmm_result
 
     @staticmethod
     def expCurve(x, a, b, c):
@@ -635,6 +632,22 @@ class GmmResult:
         val: np.ndarray,
         curve=None,
     ):
+        """
+        Initialize a GaussianMixtureModel result.
+
+        Args:
+            name (str): The name of the Gaussian mixture model.
+            weight (list): The weights of the Gaussian components.
+            mean (list): The means of the Gaussian components.
+            width (list): The widths of the Gaussian components.
+            score (dict): A dictionary containing scores for each component.
+            ndim (int): The number of dimensions of the data.
+            val (np.ndarray): The input data values.
+            curve (Optional): An optional curve parameter.
+
+        Returns:
+            None
+        """
         self.name = name
         self.weight = weight
         self.mean = mean
@@ -645,12 +658,31 @@ class GmmResult:
         self.val = val
 
     def idxComponentOfScs(self, id):
+        """
+        Returns the index of the component in the Gaussian Mixture Model (GMM) that the given id corresponds to.
+
+        Parameters:
+        id (int): The id of the scs (sub-component set).
+
+        Returns:
+        int: The index of the component in the GMM.
+
+        """
         # point each scs to a specific component
-        g = GaussianComponents(self.weight[id], self.mean[id], self.width[id])
-        ca = g.componentArray(self.val)
+        g = GaussianComponents(self.weight[id], self.mean[id], self.width[id], self.val)
+        ca = g.componentArray()
         return np.argmax(ca, 0)
 
     def idxScsOfComponent(self, id):
+        """
+        Returns the indices of the scs belonging to a specific component.
+
+        Parameters:
+        id (int): The component ID.
+
+        Returns:
+        list: A list of indices representing the samples belonging to the specified component.
+        """
         # list scs under each component
         idx_c = self.idxComponentOfScs(id)
         idx_s = []
@@ -661,6 +693,16 @@ class GmmResult:
 
 class GaussianComponents:
     def __init__(self, weight, mean, var, val, dose=None):
+        """
+        Gaussian component.
+
+        Args:
+            weight (ndarray): The weights of the Gaussian components.
+            mean (ndarray): The means of the Gaussian components.
+            var (ndarray): The variances of the Gaussian components.
+            val (ndarray): The observed values.
+            dose (ndarray, optional): The dose values. Defaults to None.
+        """
         self.weight = weight
         self.mean = mean
         self.var = var
@@ -692,6 +734,22 @@ class GaussianComponents:
 
     @staticmethod
     def _ca(var, mean, weight, val):
+        """
+        Calculate the conditional probability density function (PDF) of a Gaussian mixture model.
+
+        Args:
+            var (ndarray): The variance of each Gaussian component.
+            mean (ndarray): The mean of each Gaussian component.
+            weight (ndarray): The weight of each Gaussian component.
+            val (ndarray): The input value for which to calculate the PDF.
+
+        Returns:
+            ndarray: The conditional probability density function (PDF) of the Gaussian mixture model.
+
+        Raises:
+            None
+
+        """
         n_dim = mean.shape[-1]
         dis = (val - mean) ** 2
         if (var == 0).any():
@@ -716,17 +774,51 @@ class GaussianComponents:
         self.tau_ex_sum = self.tau_ex.sum(1) + np.finfo("double").eps
 
     def EStep(self, ca):
+        """
+        Performs the E-step of the Gaussian Mixture Model algorithm.
+
+        Parameters:
+        ca (numpy.ndarray): The responsibility matrix, representing the probabilities of each data point belonging to each cluster.
+
+        Returns:
+        None
+        """
         self.tau = ca / np.sum(ca, 0)
         if (self.tau.sum(1) < 1).any():
             self.b_fail = True
 
     def preMSTep(self, step, constraint):
+        """
+        Performs the pre-M-Step of the Gaussian Mixture Model algorithm.
+
+        Args:
+            step (tuple): A tuple containing the step values.
+            constraint (float): The constraint value.
+
+        Returns:
+            None
+        """
         self.updateWeight(step[0])
         self.componentArray()
         self.updateVariance(step[2], constraint)
         self.componentArray()
 
     def MStep(self, step, constraint):
+        """
+        Performs the M-step of the Expectation-Maximization algorithm for Gaussian Mixture Models.
+
+        Args:
+            step (tuple): A tuple containing the step values for updating the model parameters.
+                          The tuple should have the following elements:
+                          - step[0]: The step value for updating the weights.
+                          - step[1]: The step value for updating the means.
+                          - step[2]: The step value for updating the variances.
+            constraint (bool): A boolean value indicating whether to apply any constraints during the parameter updates.
+
+        Returns:
+            None
+
+        """
         self.updateWeight(step[0])
         self.updateMean(step[1])
         self.updateVariance(step[2], constraint)
@@ -792,14 +884,24 @@ class GaussianComponents:
         return np.log(val)
 
     def __fit_dose_indi_var__(self, var_indi, *args):
-        # args: var_dose, mean, weight, val
-        # fitting by minimizing negative log-likelihood
+        """
+        Fits the dose independent variance by minimizing the negative log-likelihood.
+
+        Args:
+            var_indi: The dose-independent variance.
+            *args: Additional arguments including var_dose, mean, weight, and val.
+
+        Returns:
+            The negative log-likelihood value.
+
+        """
         var_dose, mean, weight, val = args
         nllh = -np.log(
             self._ca(self.rectifier(var_indi) + var_dose, mean, weight, val).sum(0)
         ).sum()
         return nllh
 
+#### extra code
 class GaussianMixtureModelObject:
     """
     To Solve GMM
