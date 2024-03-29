@@ -1,10 +1,10 @@
 #%%
 import sys
-sys.path.insert(0,'D:/project/ from_linux/pyStatSTEM')
+# sys.path.insert(0,'D:/project/ from_linux/pyStatSTEM')
 import h5py
 import numpy as np
 import matplotlib.pyplot as plt
-import qem.classes as ps
+from qem.gaussian_mixture_model import GaussianMixtureModel
 
 #%%
 dir = '.'
@@ -18,9 +18,9 @@ img_adf = f['adf']['image'][:]
 
 #%%
 volume = np.array([volume1, volume2]).T
-h = ps.GaussianMixtureModel(volume)
+h = GaussianMixtureModel(volume)
 h.GMM("0+1_nomean", 40, use_scs_channel=[0,1], 
-    score_method=['icl', 'clc', 'bic'], init_method='equionce', fit_mean=False)
+    score_method=['icl', 'clc', 'bic'], init_method='equionce')
 # h.GMM("0", 40, use_scs_channel=[0], 
 #     score_method=['icl', 'clc', 'bic'])
 # h.GMM("1", 40, use_scs_channel=[1], 
@@ -50,7 +50,21 @@ plt.scatter(h.result[name[0]].mean[20][:,0], h.result[name[0]].mean[20][:,1], ma
 # g.plot_thickness(use_component=31, show_component=20)
 
 
+volume = np.array([volume1]).T
+h = GaussianMixtureModel(volume)
+h.GMM("0", 40, use_scs_channel=[0], 
+    score_method=['icl', 'clc', 'bic'])
 
+# h.GMM("0", 40, use_scs_channel=[0], 
+#     score_method=['icl', 'clc', 'bic'])
+# h.GMM("1", 40, use_scs_channel=[1], 
+#     score_method=['icl', 'clc', 'bic'])
+
+#%%
+name = ["0+1_nomean"]
+f, ax = plt.subplots(1,2, sharey=False)
+ax[0].plot(h.result[name[0]].score['icl'])
+ax[1].plot(h.result[name[0]].score['nllh'])
 
 #%%
 # Use ADF + ABF

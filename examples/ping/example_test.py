@@ -1,7 +1,7 @@
 #%%
 import sys
-sys.path
-sys.path.append('D:\project\ from_linux\pyStatSTEM')
+# sys.path
+# sys.path.append('D:\project\ from_linux\pyStatSTEM')
 import h5py
 import numpy as np
 import matplotlib
@@ -16,7 +16,7 @@ import timeit
 # requried variable: raw image, fitted model (for comparison)
 
 # path_to_data="/home/chu-ping/Documents/projects/multivariance_model/samples/AuAg/au_rod_7_adf1_result_samew.mat"
-path_to_data="D:\project\ from_linux\pyStatSTEM\Examples\Example_Au.mat"
+path_to_data="/home/zzhang/OneDrive/code/qem/examples/Example_Au.mat"
 legacyStatSTEM = qem.io.read_legacyInputStatSTEM(path_to_data)
 inputStatSTEM = legacyStatSTEM["input"]
 outputStatSTEM = legacyStatSTEM["output"]
@@ -32,13 +32,13 @@ nllh = atomcountsStatSTEM['mLogLik']
 # %%
 starttime = timeit.default_timer()
 I1_same = ps.ImageProcess(image, coor=coor)
-I1_same.fit_gaussian(idiv_sig=False)
+I1_same.fit_gaussian()
 I1_same.plot_image()
 print("Time :", timeit.default_timer() - starttime)
 # %%
 starttime = timeit.default_timer()
 I1_change = ps.ImageProcess(image, coor=coor)
-I1_change.fit_gaussian(idiv_sig=True)
+I1_change.fit_gaussian()
 I1_change.plot_image()
 print("Time :", timeit.default_timer() - starttime)
 #%%
@@ -67,26 +67,28 @@ ax[2].imshow(image[100:200,400:600])
 fig.dpi = 300
 
 # %%
+from qem.gaussian_mixture_model import GaussianMixtureModelObject
 starttime = timeit.default_timer()
 volume = I1_same.gaussian_prmt[0]['weight']
 coor = I1_same.gaussian_prmt[0]['mean']
-g1_same = ps.GaussianMixtureModelObject(volume, coor)
+g1_same = GaussianMixtureModelObject(volume, coor)
 g1_same.remove_edge(50, [I1_same.nx, I1_same.ny])
-g1_same.GMM([1, 50], criteria=['nllh', 'icl', 'clc', 'bic'], pos_init=(1,0))
+g1_same.GMM(max_component=40, criteria=['nllh', 'icl', 'clc', 'bic'], pos_init=(1,0))
 print("Time :", timeit.default_timer() - starttime)
 # %%
 starttime = timeit.default_timer()
 volume = I1_change.gaussian_prmt[0]['weight']*(I1_change.gaussian_prmt[0]['sig']**2)
 coor = I1_change.gaussian_prmt[0]['mean']
-g1_change = ps.GaussianMixtureModelObject(volume, coor)
+g1_change = GaussianMixtureModelObject(volume, coor)
 g1_change.remove_edge(50, [I1_same.nx, I1_same.ny])
-g1_change.GMM([1, 50], criteria=['nllh', 'icl', 'clc', 'bic'], pos_init=(1,0))
+g1_change.GMM(max_component=50, criteria=['nllh', 'icl', 'clc', 'bic'], pos_init=(1,0))
 print("Time :", timeit.default_timer() - starttime)
 # %%
+import matplotlib.pyplot as plt
 plt.figure()
 plt.plot(np.arange(1,51),icl)
 g1_same.plot_criteria(['icl'])
-g1_change.plot_criteria(['icl'])
+# g1_change.plot_criteria(['icl'])
 # %%
 plt.figure()
 plt.plot(np.arange(1,51),nllh)
@@ -157,3 +159,4 @@ h5data[:] = I1_change.gaussian_prmt[0]['mean']
 h5data = hf.create_dataset('adf1_img' , I1_change.image[0].shape)
 h5data[:] = I1_change.image[0]
 hf.close()
+# %%
