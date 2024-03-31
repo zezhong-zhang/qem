@@ -39,6 +39,8 @@ from qem.utils import (
 from scipy.ndimage import center_of_mass
 import numpy as np
 import logging
+from hyperspy._signals.signal2d import Signal2D
+from qem.voronoi import integrate
 
 logging.basicConfig(level=logging.INFO)
 class ImageModelFitting:
@@ -124,8 +126,6 @@ class ImageModelFitting:
         Returns:
             np.array: The Voronoi integration of the atomic columns.
         """
-        from hyperspy.signals import Signal2D
-        from qem.voronoi import integrate
         s = Signal2D(self.image - self.params["background"])
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
@@ -358,7 +358,7 @@ class ImageModelFitting:
         )
         return prediction
 
-    def predict(self, params:dict, X:np.ndarray, Y:np.ndarray):
+    def predict(self, params:dict, X:np.ndarray, Y:np.ndarray, pbc:bool=False):
         if self.fit_background:
             background = params["background"]
         else:
@@ -374,7 +374,17 @@ class ImageModelFitting:
                 params["sigma"],
                 background,
             )
-
+            if pbc:
+                for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                    prediction += gaussian_sum_parallel(
+                        X,
+                        Y,
+                        params["pos_x"] + i * self.nx,
+                        params["pos_y"] + j * self.ny,
+                        params["height"],
+                        params["sigma"],
+                        background,
+                    )
         elif self.fitting_model == "voigt":
             prediction = voigt_parallel(
                 X,
