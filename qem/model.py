@@ -7,22 +7,21 @@ from numba import jit as njit
 
 
 @njit
-def gaussian_local(X, Y, pos_x, pos_y, height, width):
+def gaussian_2d_numba(X, Y, pos_x, pos_y, height, width):
     # Unpack the parameters
     gauss = height * np.exp(
         -(
-            (X[:, :, None] - pos_x[None, None, :] % 1) ** 2
-            + (Y[:, :, None] - pos_y[None, None, :] % 1) ** 2
+            (X[:, :, None] - pos_x[None, None, :]) ** 2
+            + (Y[:, :, None] - pos_y[None, None, :]) ** 2
         )
         / (2 * width**2)
     )
     return gauss
 
-
-@njit
-def gaussian_global(X, Y, pos_x, pos_y, height, width):
+@jit
+def gaussian_2d_jax(X, Y, pos_x, pos_y, height, width):
     # Unpack the parameters
-    gauss = height * np.exp(
+    gauss = height * jnp.exp(
         -(
             (X[:, :, None] - pos_x[None, None, :]) ** 2
             + (Y[:, :, None] - pos_y[None, None, :]) ** 2
@@ -52,9 +51,9 @@ def add_gaussian_at_positions(total_sum, pos_x, pos_y, gaussian_local, windows_s
 
 
 @jit
-def gaussian_parallel(X, Y, pos_x, pos_y, height, width, background):
+def gaussian_sum_parallel(X, Y, pos_x, pos_y, height, width, background):
     # Unpack the parameters
-    sum = (
+    total = (
         jnp.sum(
             height
             * jnp.exp(
@@ -68,7 +67,7 @@ def gaussian_parallel(X, Y, pos_x, pos_y, height, width, background):
         )
         + background
     )
-    return sum
+    return total
 
 
 @jit

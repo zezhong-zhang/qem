@@ -23,10 +23,11 @@ from scipy.sparse.linalg import spsolve
 import warnings
 from qem.model import (
     butterworth_window,
-    gaussian_parallel,
+    gaussian_sum_parallel,
     voigt_parallel,
     mask_grads,
-    gaussian_local,
+    gaussian_2d_numba,
+    gaussian_2d_jax,
     add_gaussian_at_positions,
 )
 from qem.utils import (
@@ -346,8 +347,8 @@ class ImageModelFitting:
         windos_size = int(sigma.max() * 5)
         x = np.arange(-windos_size, windos_size + 1, 1)
         y = np.arange(-windos_size, windos_size + 1, 1)
-        X, Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_local(X, Y, pos_x, pos_y, height, sigma)
+        local_X, local_Y = np.meshgrid(x, y, indexing="xy")
+        gauss_local = gaussian_2d_jax(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
         gauss_local = np.array(gauss_local)
         prediction = (
             add_gaussian_at_positions(
@@ -370,7 +371,7 @@ class ImageModelFitting:
             background = 0
         if self.fitting_model == "gaussian":
             # if self.num_coordinates<1000:
-            prediction = gaussian_parallel(
+            prediction = gaussian_sum_parallel(
                 X,
                 Y,
                 params["pos_x"],
@@ -409,7 +410,7 @@ class ImageModelFitting:
         x = np.arange(-window_size, window_size + 1, 1)
         y = np.arange(-window_size, window_size + 1, 1)
         local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_local(local_X, local_Y, pos_x, pos_y, height, sigma)
+        gauss_local = gaussian_2d_jax(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
 
         for i in range(self.num_coordinates):
             global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[
