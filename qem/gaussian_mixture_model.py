@@ -670,8 +670,8 @@ class GmmResult:
         """
         # point each scs to a specific component
         g = GaussianComponents(self.weight[id], self.mean[id], self.width[id], self.val)
-        ca = g.componentArray()
-        return np.argmax(ca, 0)
+        g.componentArray()
+        return np.argmax(g.ca, 0)
 
     def idxScsOfComponent(self, id):
         """
@@ -1316,7 +1316,7 @@ class GaussianMixtureModelObject:
         plt.show(block=False)
         plt.pause(1)
 
-    def plot_histogram(self, n_component=None, use_dim=None, bin=None):
+    def plot_histogram(self, n_component:int, use_dim=None, bin=None):
         if use_dim is None or use_dim > self._use_dim:
             use_dim = self._use_dim
         if bin is None:
