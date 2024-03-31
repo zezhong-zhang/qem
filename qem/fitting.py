@@ -1,45 +1,28 @@
 import copy
 import logging
 import warnings
-from curses import window
 
 import jax
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
+# from scipy.ndimage import center_of_mass
+from hyperspy._signals.signal2d import Signal2D
 from jax import jit
-from functools import partial
-
 from jax import numpy as jnp
 from jax import value_and_grad
 from jax.example_libraries import optimizers
 from jaxopt import OptaxSolver
-from skimage.feature.peak import peak_local_max
-from tqdm import tqdm
-import copy
-import logging
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
-import warnings
-from qem.model import (
-    butterworth_window,
-    gaussian_sum_parallel,
-    voigt_parallel,
-    mask_grads,
-    gaussian_2d_numba,
-    gaussian_2d_jax,
-    add_gaussian_at_positions,
-)
-from qem.utils import (
-    InteractivePlot,
-    make_mask_circle_centre,
-    remove_close_coordinates,
-    get_random_indices_in_batches,
-)
-from scipy.ndimage import center_of_mass
-import numpy as np
-import logging
-from hyperspy._signals.signal2d import Signal2D
+from skimage.feature.peak import peak_local_max
+from tqdm import tqdm
+
+from qem.model import (add_gaussian_at_positions, butterworth_window,
+                       gaussian_2d_jax, gaussian_2d_numba,
+                       gaussian_sum_parallel, mask_grads, voigt_parallel)
+from qem.utils import (InteractivePlot, get_random_indices_in_batches,
+                       make_mask_circle_centre, remove_close_coordinates)
 from qem.voronoi import integrate
 
 logging.basicConfig(level=logging.INFO)
