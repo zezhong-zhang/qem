@@ -56,7 +56,7 @@ class ImageModelFitting:
         if len(image.shape) == 2:
             self.ny, self.nx = image.shape
 
-        self.device = "cpu"
+        self.device = "cuda"
         self.image = image.astype(np.float32)
         self.model = np.zeros(image.shape)
         self.local_shape = image.shape
@@ -69,6 +69,7 @@ class ImageModelFitting:
         self.fitting_model = "gaussian"
         self.params = dict()
         self.fit_local = False
+        self.pbc = False
         x = np.arange(self.nx)
         y = np.arange(self.ny)
         self.X, self.Y = np.meshgrid(x, y, indexing="xy")
@@ -182,7 +183,29 @@ class ImageModelFitting:
         return self.coordinates
 
     def remove_close_coordinates(self, threshold:int=10):
-        self.coordinates = remove_close_coordinates(self.coordinates, threshold)
+        if self.pbc:
+            coords = remove_close_coordinates(self.coordinates.copy(), threshold)
+            # find the coords near the boundary
+            mask_boundary = (coords[:, 0] < threshold) | (coords[:, 0] > self.nx - threshold) | (coords[:, 1] < threshold) | (coords[:, 1] > self.ny - threshold)
+            # genearate the boundary coords under the pbc
+            coords_boundary = coords[mask_boundary]
+            # identify the coords in the coords_boundary that are close to the coords_boundary_pbc
+            coords_boundary_pbc = coords_boundary.copy()
+            for (i, j) in [(1, 0), (0, 1), (1,1)]:
+                coords_boundary_shifted = coords_boundary + np.array([i*self.nx, j*self.ny])
+                for  row in coords_boundary:
+                    too_close = (np.linalg.norm(coords_boundary_shifted- row, axis=1) < threshold).any()
+                    # same_type = coords_boundary_shifted[too_close,2] == row[2]
+                    if too_close:
+                        # find the index of the row in the coords_boundary_pbc
+                        idx = np.where((coords_boundary_pbc == row).all(axis=1))[0]
+                        # dump the row if it is too close to the boundary
+                        coords_boundary_pbc = np.delete(coords_boundary_pbc, idx, axis=0)
+            # now combine the coords that are not close to the boundary with the coords_boundary_pbc
+            coords_final = np.vstack([coords[~mask_boundary], coords_boundary_pbc])
+            self.coordinates = coords_final
+        else:
+            self.coordinates = remove_close_coordinates(self.coordinates, threshold)
         return self.coordinates
 
     def add_or_remove_peaks(self, min_distance:int=10, image=None):
@@ -358,7 +381,7 @@ class ImageModelFitting:
         )
         return prediction
 
-    def predict(self, params:dict, X:np.ndarray, Y:np.ndarray, pbc:bool=False):
+    def predict(self, params:dict, X:np.ndarray, Y:np.ndarray):
         if self.fit_background:
             background = params["background"]
         else:
@@ -374,7 +397,7 @@ class ImageModelFitting:
                 params["sigma"],
                 background,
             )
-            if pbc:
+            if self.pbc:
                 for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
                     prediction += gaussian_sum_parallel(
                         X,
@@ -397,6 +420,19 @@ class ImageModelFitting:
                 params["ratio"],
                 background,
             )
+            if self.pbc:
+                for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                    prediction += voigt_parallel(
+                        X + i * self.nx,
+                        Y + j * self.ny,
+                        params["pos_x"],
+                        params["pos_y"],
+                        params["height"],
+                        params["sigma"],
+                        params["gamma"],
+                        params["ratio"],
+                        background,
+                    )
         return prediction
 
 ### fitting
