@@ -6,7 +6,7 @@ from jax.scipy.signal import convolve2d
 from numba import jit as njit
 
 
-@njit
+@njit(nopython=True)
 def gaussian_2d_numba(X, Y, pos_x, pos_y, height, width):
     # Unpack the parameters
     gauss = height * np.exp(

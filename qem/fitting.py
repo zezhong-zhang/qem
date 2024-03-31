@@ -348,14 +348,8 @@ class ImageModelFitting:
         x = np.arange(-windos_size, windos_size + 1, 1)
         y = np.arange(-windos_size, windos_size + 1, 1)
         local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_2d_jax(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
+        gauss_local = gaussian_2d_numba(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
         gauss_local = np.array(gauss_local)
-        prediction = (
-            add_gaussian_at_positions(
-                np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
-            )
-            + background
-        )
         prediction = (
             add_gaussian_at_positions(
                 np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
@@ -410,7 +404,7 @@ class ImageModelFitting:
         x = np.arange(-window_size, window_size + 1, 1)
         y = np.arange(-window_size, window_size + 1, 1)
         local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_2d_jax(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
+        gauss_local = gaussian_2d_numba(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
 
         for i in range(self.num_coordinates):
             global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[
