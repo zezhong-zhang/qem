@@ -462,11 +462,8 @@ class CrystalAnalyzer:
     def supercell_with_refined_peaks(self, a_limit=1, b_limit=1):
         supercell_coordinates = np.array([])
         shifted_origin_adaptive = self.shift_origin_adaptive(a_limit, b_limit)
-        # Determine the range for translation along a_axis and b_axis
         # This range depends on the size of the supercell you want to cover
-        for a_translation, b_translation in shifted_origin_adaptive.keys():
-            # Calculate new origin for the translated unit cell
-            new_origin = shifted_origin_adaptive[(a_translation, b_translation)]
+        for translation, new_origin in shifted_origin_adaptive.items():
             # Use unitcell_with_refined_peaks for the new origin and adjusted peaks
             translated_unitcell_peaks = self.unitcell_with_refined_peaks(
                 origin=new_origin
