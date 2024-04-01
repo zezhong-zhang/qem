@@ -19,7 +19,7 @@ img_adf = f['adf']['image'][:]
 #%%
 volume = np.array([volume1, volume2]).T
 h = GaussianMixtureModel(volume)
-h.GMM("0+1_nomean", 40, use_scs_channel=[0,1], 
+h.fit("0+1_nomean", 40, use_scs_channel=[0,1], 
     score_method=['icl', 'clc', 'bic'], init_method='equionce')
 # h.GMM("0", 40, use_scs_channel=[0], 
 #     score_method=['icl', 'clc', 'bic'])
@@ -28,9 +28,10 @@ h.GMM("0+1_nomean", 40, use_scs_channel=[0,1],
 
 #%%
 name = ["0+1_nomean"]
-f, ax = plt.subplots(1,2, sharey=False)
+f, ax = plt.subplots(1,3, sharey=False)
 ax[0].plot(h.result[name[0]].score['icl'])
 ax[1].plot(h.result[name[0]].score['nllh'])
+ax[2].plot(h.result[name[0]].score['bic'])
 
 
 # %%
@@ -52,7 +53,7 @@ plt.scatter(h.result[name[0]].mean[20][:,0], h.result[name[0]].mean[20][:,1], ma
 
 volume = np.array([volume1]).T
 h = GaussianMixtureModel(volume)
-h.GMM("0", 40, use_scs_channel=[0], 
+h.fit("0", 40, use_scs_channel=[0], 
     score_method=['icl', 'clc', 'bic'])
 
 # h.GMM("0", 40, use_scs_channel=[0], 
@@ -61,13 +62,14 @@ h.GMM("0", 40, use_scs_channel=[0],
 #     score_method=['icl', 'clc', 'bic'])
 
 #%%
-name = ["0+1_nomean"]
+name = ["0"]
 f, ax = plt.subplots(1,2, sharey=False)
 ax[0].plot(h.result[name[0]].score['icl'])
 ax[1].plot(h.result[name[0]].score['nllh'])
 
 #%%
 # Use ADF + ABF
+# import qem.classes as ps
 # volume1 = f['adf']['volume'][:]
 # volume2 = f['abf']['volume'][:]
 
@@ -78,3 +80,5 @@ ax[1].plot(h.result[name[0]].score['nllh'])
 # h.plot_histogram(n_component=n_component)
 # h.plot_thickness(n_component=n_component, show_component=[20])
 
+
+# %%
