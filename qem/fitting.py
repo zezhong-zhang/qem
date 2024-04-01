@@ -8,7 +8,6 @@ import numpy as np
 import optax
 # from scipy.ndimage import center_of_mass
 from hyperspy._signals.signal2d import Signal2D
-from jax import jit
 from jax import numpy as jnp
 from jax import value_and_grad
 from jax.example_libraries import optimizers
@@ -19,8 +18,7 @@ from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
 
 from qem.model import (add_gaussian_at_positions, butterworth_window,
-                       gaussian_2d_jax, gaussian_2d_numba,
-                       gaussian_sum_parallel, mask_grads, voigt_parallel)
+                        gaussian_2d_numba, gaussian_sum_parallel, mask_grads, voigt_parallel)
 from qem.utils import (InteractivePlot, get_random_indices_in_batches,
                        make_mask_circle_centre, remove_close_coordinates)
 from qem.voronoi import integrate
@@ -362,6 +360,15 @@ class ImageModelFitting:
             )
             + background
         )
+        if self.pbc:
+            for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                prediction += add_gaussian_at_positions(
+                    np.zeros(self.image.shape),
+                    pos_x + i * self.nx,
+                    pos_y + j * self.ny,
+                    gauss_local,
+                    windos_size,
+                )
         return prediction
 
     def predict(self, params:dict, X:np.ndarray, Y:np.ndarray):
@@ -370,7 +377,6 @@ class ImageModelFitting:
         else:
             background = 0
         if self.fitting_model == "gaussian":
-            # if self.num_coordinates<1000:
             prediction = gaussian_sum_parallel(
                 X,
                 Y,
@@ -389,7 +395,7 @@ class ImageModelFitting:
                         params["pos_y"] + j * self.ny,
                         params["height"],
                         params["sigma"],
-                        background,
+                        0,
                     )
         elif self.fitting_model == "voigt":
             prediction = voigt_parallel(
@@ -406,15 +412,15 @@ class ImageModelFitting:
             if self.pbc:
                 for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
                     prediction += voigt_parallel(
-                        X + i * self.nx,
-                        Y + j * self.ny,
-                        params["pos_x"],
-                        params["pos_y"],
+                        X,
+                        Y,
+                        params["pos_x"] + i * self.nx,
+                        params["pos_y"] + j * self.ny,
                         params["height"],
                         params["sigma"],
                         params["gamma"],
                         params["ratio"],
-                        background,
+                        0,
                     )
         return prediction
 
