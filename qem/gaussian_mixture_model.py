@@ -444,7 +444,7 @@ class GaussianMixtureModel:
         elif use_dim == 1:
             plt.figure()
             plt.hist(self.val[0, :], bins=bin)
-
+    
         if n_component is None:
             min_icl_comp = np.argmin(self.result.score['icl'])
             print("Number of components is chosen to be ", min_icl_comp+1, "based on ICL.\n")
@@ -588,28 +588,21 @@ class GaussianMixtureModel:
         t[tau == 0] = 0
         en = -1 * np.sum(t)
 
+        score_calculations = {
+            "aic": lambda: -2 * llh / self.n_dim + 2 * n_para,
+            "gic": lambda: -2 * llh / self.n_dim + penalty * n_para,
+            "bic": lambda: -2 * llh / self.n_dim + n_para * np.log(n_para),
+            "clc": lambda: -2 * llh / self.n_dim + 2 * en,
+            "awe": lambda: -2 * llh / self.n_dim + 2 * en + 2 * n_para * (3 / 2 + np.log(n_val)),
+            "icl": lambda: -2 * llh / self.n_dim + 2 * en + n_para * np.log(n_val),
+            "nllh": lambda: -1 * llh,
+            "en": lambda: en,
+        }
+
         score = {}
         for key in self.score_method:
-            if key == "aic":
-                score[key] = -2 * llh / self.n_dim + 2 * n_para
-            if key == "gic":
-                score[key] = -2 * llh / self.n_dim + penalty * n_para
-            if key == "bic":
-                score[key] = -2 * llh / self.n_dim + n_para * np.log(n_para)
-            if key == "clc":
-                score[key] = -2 * llh / self.n_dim + 2 * en
-            if key == "awe":
-                score[key] = (
-                    -2 * llh / self.n_dim
-                    + 2 * en
-                    + 2 * n_para * (3 / 2 + np.log(n_val))
-                )
-            if key == "icl":
-                score[key] = -2 * llh / self.n_dim + 2 * en + n_para * np.log(n_val)
-            if key == "nllh":
-                score[key] = -1 * llh
-            if key == "en":
-                score[key] = en
+            if key in score_calculations:
+                score[key] = score_calculations[key]()
         return score
 
     def failedScore(self):
