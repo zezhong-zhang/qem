@@ -103,9 +103,8 @@ class GaussianMixtureModel:
         self.step = fit_step_size
         self.constraint = constraint
 
-    def fit(
+    def GMM(
         self,
-        name: str,
         n_component,
         use_scs_channel=None,
         metric="nllh",
@@ -123,7 +122,6 @@ class GaussianMixtureModel:
         Fits a Gaussian Mixture Model (GMM) to the data.
 
         Args:
-            name (str): The name of the GMM model.
             n_component: The number of components in the GMM.
             use_scs_channel: The channel to use for fitting the GMM.
             metric (str): The metric used for model selection. Default is "nllh".
@@ -170,8 +168,7 @@ class GaussianMixtureModel:
             for key in score:
                 gmm_result["score"][key].append(score[key])
 
-        self.result[name] = GmmResult(
-            name,
+        self.result = GmmResult(
             gmm_result["weight"],
             gmm_result["mean"],
             gmm_result["width"],
@@ -381,6 +378,125 @@ class GaussianMixtureModel:
         score = self.calculateScore(g.tau, llh)
         return [weight, mean, width], score
 
+    def import_coordinates(self, coordinate):
+        self._coordinates = coordinate
+        self._num_column = np.size(coordinate, 1)
+
+    def plot_thickness(self, n_component,  show_component=None):
+        component_case = n_component - 1
+        xmin = np.amin(self._coordinates[0, :])
+        xmax = np.amax(self._coordinates[0, :])
+        ymin = np.amin(self._coordinates[1, :])
+        ymax = np.amax(self._coordinates[1, :])
+        weight = self.result.weight[component_case]
+        mean = self.result.mean[component_case]
+        var = self.result.width[component_case]
+        use_dim = np.size(var, 0)
+        value = np.expand_dims(self.val[:use_dim, :].T, axis=0)
+        # ca = GaussianComponents(weight, mean, var, value, self.dose)
+        self.component = self.result.idxComponentOfScs(component_case)
+        plt.figure()
+        plt.scatter(
+            self._coordinates[0, :],
+            self._coordinates[1, :],
+            marker="o",
+            c=self.component,
+        )
+        ax = plt.gca()
+        ax.set_xlim([xmin - 10, xmax + 10])
+        ax.set_ylim([ymin - 10, ymax + 10])
+        ax.set_aspect('equal')
+        # revert y axis
+        # ax.invert_yaxis()
+        plt.colorbar()
+        plt.show(block=False)
+        # plt.pause(1)
+        if show_component is not None:
+            # if ~isinstance(show_component, list): show_component = [show_component]
+            idx = np.zeros(self._num_column, dtype=bool)
+            for c in show_component:
+                idx += self.component == c
+            x = self._coordinates[0, idx]
+            y = self._coordinates[1, idx]
+            t = self.component[idx]
+            plt.figure()
+            plt.scatter(
+                self._coordinates[0, :],
+                self._coordinates[1, :],
+                marker=".",
+                c=self.component,
+            )
+            plt.scatter(x, y, marker="x", c=t)
+            ax = plt.gca()
+            ax.set_xlim([xmin - 10, xmax + 10])
+            ax.set_ylim([ymin - 10, ymax + 10])
+            ax.set_aspect('equal')
+            plt.show(block=False)
+            plt.pause(1)
+        return None
+
+    def plot_criteria(self, criteria=None):
+        xaxis = np.arange(self.max_n_components)
+        fig, ax = plt.subplots(1,1)
+        for cri in criteria:
+            plt.plot(xaxis, self.criteria_dict[cri], label=cri)
+            plt.plot(
+                np.argmin(self.criteria_dict[cri])+1, self.criteria_dict[cri].min(), 'o')
+        legend = ax.legend(loc="upper center")
+        plt.show(block=False)
+        plt.pause(1)
+        return None
+
+    def plot_histogram(self, n_component:int, use_dim=None, bin=None):
+        if use_dim is None or use_dim > self._use_dim:
+            use_dim = self._use_dim
+        if bin is None:
+            bin = np.size(self.val, axis=1) // 10
+
+        if use_dim != 2 and use_dim != 1:
+            print("only support up to 2 dimensions")
+            return
+        elif use_dim == 2:
+            plt.figure()
+            plt.hist2d(self.val[0, :], self.val[1, :], bins=bin)
+        elif use_dim == 1:
+            plt.figure()
+            plt.hist(self.val[0, :], bins=bin)
+
+        if n_component is None:
+            min_icl_comp = np.argmin(self.criteria_dict['icl'])
+            print("Number of components is chosen to be ", min_icl_comp+1, "based on ICL.\n")
+            component_case = n_component - 1
+        else:
+            component_case = n_component - 1
+            weight = self.weights_list[component_case]
+            mean = self.mean_list[component_case]
+            var = self.var_list[component_case]
+            if use_dim == 1:
+                sigma = var[0, 0, 0] ** 0.5
+                for c in range(component_case):
+                    w = weight[c] * self._num_column * sigma
+                    mu = mean[c, 0, 0]
+                    x = np.linspace(mu - 3 * sigma, mu + 3 * sigma, bin)
+                    plt.plot(
+                        x,
+                        w
+                        / (sigma * np.sqrt(2 * np.pi))
+                        * np.exp(-0.5 * ((x - mu) / sigma) ** 2),
+                    )
+                    plt.text(mu, w / (sigma * np.sqrt(2 * np.pi)) * 1.1, c + 1)
+            elif use_dim == 2:
+                t = np.linspace(-np.pi, np.pi, bin)
+                sigma = var[0] ** 0.5
+                for c in range(component_case):
+                    mu = mean[c]
+                    x = mu[0,0] + sigma[0,0]*np.cos(t)
+                    y = mu[0,1] + sigma[0,1]*np.sin(t)
+                    plt.plot(x,y)
+                    plt.text(mu[0,0], mu[0,1], c+1)
+        plt.show(block=False)
+        return None
+    
     @staticmethod
     def meanCoincide(mean):
         """
@@ -620,10 +736,10 @@ class GaussianMixtureModel:
         )
 
 
+
 class GmmResult:
     def __init__(
         self,
-        name: str,
         weight: list,
         mean: list,
         width: list,
@@ -636,7 +752,6 @@ class GmmResult:
         Initialize a GaussianMixtureModel result.
 
         Args:
-            name (str): The name of the Gaussian mixture model.
             weight (list): The weights of the Gaussian components.
             mean (list): The means of the Gaussian components.
             width (list): The widths of the Gaussian components.
@@ -648,7 +763,6 @@ class GmmResult:
         Returns:
             None
         """
-        self.name = name
         self.weight = weight
         self.mean = mean
         self.width = width

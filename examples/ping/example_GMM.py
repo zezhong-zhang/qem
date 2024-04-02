@@ -19,7 +19,7 @@ img_adf = f['adf']['image'][:]
 #%%
 volume = np.array([volume1, volume2]).T
 h = GaussianMixtureModel(volume)
-h.fit("0+1_nomean", 40, use_scs_channel=[0,1], 
+h.GMM("0+1_nomean", 40, use_scs_channel=[0,1], 
     score_method=['icl', 'clc', 'bic'], init_method='equionce')
 # h.GMM("0", 40, use_scs_channel=[0], 
 #     score_method=['icl', 'clc', 'bic'])
@@ -82,3 +82,4 @@ ax[1].plot(h.result[name[0]].score['nllh'])
 
 
 # %%
+h.plot_thickness(name='0+1_nomean',n_component=20,coordinates=)
