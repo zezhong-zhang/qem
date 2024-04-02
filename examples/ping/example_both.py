@@ -28,12 +28,16 @@ coor = I.gaussian_prmt[0]['mean']
 # &&
 g = GaussianMixtureModel(volume.reshape(-1, 1))
 g.GMM(40, use_scs_channel=[0], 
-    score_method=['icl', 'clc', 'bic'], init_method='equionce')
+    score_method=['icl', 'clc', 'bic'], init_method='equionce',constraint=['uni_width'])
 # g.plot_criteria(['icl', 'clc', 'bic'])
 # %%
 g.import_coordinates(coor)
-uc = 35
-g.plot_thickness(n_component=uc,show_component=[10,15,30])
+uc = 24
+g.plot_thickness(n_component=uc,show_component=[10,15,20])
 # %%
-g.plot_histogram(n_component=uc,use_dim=[0],bin=100)
+g.plot_histogram(n_component=uc,use_dim=1,bin=100)
+# %%
+g.plot_criteria(['icl', 'clc', 'bic'])
+# %%
+g.plot_criteria(['clc'])
 # %%
