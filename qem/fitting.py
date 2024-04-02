@@ -6,7 +6,7 @@ import jax
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
-# from scipy.ndimage import center_of_mass
+from scipy.ndimage import center_of_mass
 from hyperspy._signals.signal2d import Signal2D
 from jax import numpy as jnp
 from jax import value_and_grad
@@ -16,11 +16,12 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
-
+from pymatgen.core.structure import Structure
+from qem.color import get_unique_colors
 from qem.model import (add_gaussian_at_positions, butterworth_window,
                         gaussian_2d_numba, gaussian_sum_parallel, mask_grads, voigt_parallel)
-from qem.utils import (InteractivePlot, get_random_indices_in_batches,
-                       make_mask_circle_centre, remove_close_coordinates)
+from qem.utils import ( get_random_indices_in_batches, remove_close_coordinates)
+from qem.gui_classes import InteractivePlot
 from qem.voronoi import integrate
 
 logging.basicConfig(level=logging.INFO)
@@ -132,8 +133,30 @@ class ImageModelFitting:
         """
         self.coordinates = coordinates
 
+    def import_atom_types(self, atom_types: np.ndarray):
+        """
+        Import the atom types of the atomic columns.
+
+        Args:
+            atom_types (np.array): The atom types of the atomic columns.
+        """
+        self._atom_types = atom_types
+
+    def map_lattice(self, cif_file:str, add_missing_atoms:bool=False):
+        """
+        Find the peaks in the image based on the CIF file.
+
+        Args:
+            cif_file (str): The path to the CIF file.
+            min_distance (int, optional): The minimum distance between the peaks. Defaults to 10.
+            threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
+            exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
+        """
+
+        pass
+
     def find_peaks(
-        self, atom_size:float=1, threshold_rel:float=0.2, threshold_abs = None, exclude_border:bool=False, image=None
+        self, min_distance:int=10, threshold_rel:float=0.2, threshold_abs = None, exclude_border:bool=False, image=None
     ):
         """
         Find the peaks in the image.
@@ -149,7 +172,6 @@ class ImageModelFitting:
         """
         if image is None:
             image = self.image
-        min_distance = int(atom_size / self.pixel_size)
         peaks_locations = peak_local_max(
             image,
             min_distance=min_distance,
@@ -161,6 +183,78 @@ class ImageModelFitting:
         self.add_or_remove_peaks(min_distance=min_distance, image=self.image
         )
         self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        return self.coordinates
+
+    def refine_center_of_mass(self, windows_size=5, plot=False):
+        # do center of mass for each atom
+        pre_coordinates = self.coordinates
+        current_coordinates = self.coordinates
+        converged = False
+        while converged is False:
+            for i in tqdm(range(self.num_coordinates)):
+                x, y = pre_coordinates[i]
+                # calculate the mask for distance < r
+                region = self.image[
+                    int(y) - windows_size : int(y) + windows_size + 1,
+                    int(x) - windows_size : int(x) + windows_size + 1,
+                ]
+                region = (region - region.min()) / (region.max() - region.min())
+                local_y, local_x = center_of_mass(region)
+                if np.isnan(local_x) or np.isnan(local_y):
+                    pass 
+                else:
+                    current_coordinates[i] = [
+                        int(x) - windows_size + local_x,
+                        int(y) - windows_size + local_y,
+                    ]
+                if plot:
+                    plt.clf()
+                    plt.imshow(region, cmap="gray")
+                    plt.scatter(local_y, local_x, color="red", s=2)
+                    plt.scatter(
+                        y % 1 + windows_size, x % 1 + windows_size, color="blue", s=2
+                    )
+                    plt.show()
+                    plt.pause(1.0)
+            converged = np.abs(current_coordinates - pre_coordinates).max() < 0.5
+        return current_coordinates
+    
+    def refine_local_max(self, plot=False, min_distance=10,threshold_rel=0.3,threshold_abs=None,exclude_border=True):
+        windows_size = min_distance *2
+        peak_total = np.array([], dtype=int).reshape(0, 2)
+        for i in range(self.num_coordinates):
+            x, y = self.coordinates[i]
+            top = max(int(x) - windows_size, 0)
+            bottom = min(int(x) + windows_size+1, self.nx)
+            left = max(int(y) - windows_size, 0)
+            right = min(int(y) + windows_size+1, self.ny)
+            # calculate the mask for distance < r
+            region = self.image[left : right, top : bottom]
+            peaks_locations = peak_local_max(
+                region,
+                min_distance= int(min_distance/4),
+                threshold_rel=threshold_rel,
+                threshold_abs=threshold_abs,
+                exclude_border=exclude_border,
+            )
+            peaks_locations = peaks_locations[:,[1,0]].astype(int)
+            if peaks_locations.shape[0] > 0:
+                peak_total = np.append(peak_total, peaks_locations + np.array([int(x) - windows_size, int(y) - windows_size]), axis=0)
+            if plot:
+                plt.clf()
+                plt.subplot(1, 2, 1)
+                plt.imshow(self.image, cmap="gray")
+                plt.scatter(self.coordinates[:, 0], self.coordinates[:, 1], color="blue",marker='o', s=1)
+                plt.scatter(x, y, color="red", s=2)
+                plt.subplot(1, 2, 2)
+                plt.imshow(region, cmap="gray")
+                plt.scatter(x%1+windows_size,y%1+windows_size, color='red',s = 2)
+                if peaks_locations.shape[0] > 0:
+                    plt.scatter(peaks_locations[:,0], peaks_locations[:,1], color='green',marker='x',s = 2)
+                plt.show()
+                plt.pause(1.0)
+        self.coordinates = np.unique(peak_total, axis=0)
+        # self.coordinates = self.refine_duplicate_peaks()
         return self.coordinates
 
     def remove_close_coordinates(self, threshold:int=10):
@@ -201,6 +295,7 @@ class ImageModelFitting:
         interactive_plot.add_or_remove()
         peaks_locations = [interactive_plot.pos_x, interactive_plot.pos_y]
         peaks_locations = np.array(peaks_locations).T.astype(float)
+        self.coordinates = peaks_locations
         return peaks_locations
 
     def remove_peaks_outside_image(self):
