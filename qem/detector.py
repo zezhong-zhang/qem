@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from cv2 import GaussianBlur, moments
 from skimage import segmentation
-from .DM import dm_load
+from .dm import dm_load
 from skimage.feature import canny
 from scipy import ndimage as ndi
 # from numba import jit, njit, prange
