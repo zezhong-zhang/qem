@@ -185,7 +185,7 @@ class ImageModelFitting:
         self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self.coordinates
 
-    def refine_center_of_mass(self, windows_size=5, plot=False):
+    def refine_center_of_mass(self, windows_size:int=5, plot=False):
         # do center of mass for each atom
         pre_coordinates = self.coordinates
         current_coordinates = self.coordinates
@@ -200,13 +200,12 @@ class ImageModelFitting:
                 ]
                 region = (region - region.min()) / (region.max() - region.min())
                 local_y, local_x = center_of_mass(region)
-                if np.isnan(local_x) or np.isnan(local_y):
-                    pass 
-                else:
-                    current_coordinates[i] = [
-                        int(x) - windows_size + local_x,
-                        int(y) - windows_size + local_y,
-                    ]
+                assert isinstance(local_x, float), "local_x is not a float"
+                assert isinstance(local_y, float), "local_y is not a float"
+                current_coordinates[i] = np.array([
+                    int(x) - windows_size + local_x,
+                    int(y) - windows_size + local_y,
+                ], dtype=float)
                 if plot:
                     plt.clf()
                     plt.imshow(region, cmap="gray")
