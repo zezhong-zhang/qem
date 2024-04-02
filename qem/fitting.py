@@ -77,8 +77,6 @@ class ImageModelFitting:
     
     @property
     def atom_types(self):
-        if self._atom_types.shape != self.num_coordinates:
-            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self._atom_types 
     
     @property
@@ -142,7 +140,7 @@ class ImageModelFitting:
         """
         self._atom_types = atom_types
 
-    def map_lattice(self, cif_file:str, add_missing_atoms:bool=False):
+    def map_lattice(self, cif_file:str, elements:list[str], add_missing_atoms:bool=False):
         """
         Find the peaks in the image based on the CIF file.
 
@@ -152,8 +150,23 @@ class ImageModelFitting:
             threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
             exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
         """
-
-        pass
+        from qem.crystal_analyzer import CrystalAnalyzer
+        crystal_analyzer = CrystalAnalyzer(image = self.image, pixel_size = self.pixel_size, peak_positions = self.coordinates, atom_types = self.atom_types, elements=elements)
+        crystal_analyzer.import_crystal_structure(cif_file)
+        # crystal_analyzer.origin = np.array([798., 768., 0])
+        # crystal_analyzer.a = np.array([  30., -36.,0])
+        # crystal_analyzer.b = np.array([-117.33065449 , -99.18509708,0])
+        # crystal_analyzer.c = np.array([0.,0., crystal_analyzer.unitcell.lattice.c])
+        crystal_analyzer.choose_lattice_vectors()
+        crystal_analyzer.generate_supercell_lattice(a_limit=25, b_limit=15)
+        peak_positions, atom_types = crystal_analyzer.supercell_project_2d()
+        crystal_analyzer.peak_positions = peak_positions
+        crystal_analyzer.atom_types = atom_types
+        crystal_analyzer.unitcell_mapping()
+        # peak_positions_selected, atom_types_selected = crystal_analyzer.select_region(peak_positions, atom_types)
+        self.coordinates = peak_positions
+        self._atom_types = atom_types
+        return None
 
     def find_peaks(
         self, min_distance:int=10, threshold_rel:float=0.2, threshold_abs = None, exclude_border:bool=False, image=None
@@ -378,7 +391,7 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, atom_size:float=0.7, guess_radius:bool=True):            
+    def init_params(self, atom_size:float=0.7, guess_radius:bool=False):            
         if guess_radius:
             width = self.guess_radius()[0]
         else:

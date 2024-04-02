@@ -40,7 +40,7 @@ def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
 
 
 class CrystalAnalyzer:
-    def __init__(self, image, pixel_size, peak_positions, atom_types, elements):
+    def __init__(self, image:np.ndarray, pixel_size:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str]):
         self.image = image
         self.pixel_size = pixel_size
         self.peak_positions = peak_positions
@@ -140,38 +140,32 @@ class CrystalAnalyzer:
         Returns:
         - supercell_lattice: The supercell lattice.
         """
-        a_axis_mesh, b_axis_mesh = np.meshgrid(
-            np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
-        )
-        a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a)
-        b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b)
-        # compute the distance in such meshgrid
-        distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
-        # apply the sort to the a_axis_mesh and b_axis_mesh
-        a_axis_mesh_sorted = a_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
-        b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
-        order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
-        # Find the closest peak to the origin to correct for drift
-
         supercell = np.array([]).reshape(0, 4)
-        for a_shift, b_shift in order_mesh:
-            shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
-            unitcell = self.unitcell_mapping(ref=(shifted_origin_rigid, self.a, self.b, self.c), plot=False)
+        shift_origin_adaptive = self.shift_origin_adaptive(a_limit, b_limit)
+        for translation, new_origin in shift_origin_adaptive.items():
+            unitcell = self.unitcell_mapping(ref=(new_origin, self.a, self.b, self.c), plot=False)
             supercell = np.vstack([supercell, unitcell])
 
         mask = (supercell[:, :2] > 0).all(axis=1) & (supercell[:, :2] < self.image.shape).all(axis=1)
         supercell_in_image = supercell[mask]
-        supercell_in_image[:, :2] = supercell_in_image[:, :2] * self.pixel_size
-        self.coordinates = supercell_in_image
-        return supercell_in_image
+        # supercell_in_image[:, :2] = supercell_in_image[:, :2] * self.pixel_size
+        mask_close = np.zeros(supercell_in_image.shape[0], dtype=bool)
+        for idx, site in enumerate(supercell_in_image):
+            element = self.elements[int(site[3])]
+            distance = np.linalg.norm(
+                self.peak_positions - site[:2], axis=1
+            )
+            if distance.min() < self.min_distances()[element]:
+                mask_close[idx] = True
+        self.coordinates = supercell_in_image[mask_close]
+        return supercell_in_image[mask_close]
     
     def supercell_project_2d(self):
         coordinates = self.coordinates
-        coordinates[:, :2] = coordinates[:, :2] / self.pixel_size
         # get the unique 2d coordinates and atom types
         unique_coordinates = np.unique(coordinates[:, [0,1,3]], axis=0)
         peak_positions = unique_coordinates[:, :2]
-        atom_types = unique_coordinates[:, 2]
+        atom_types = unique_coordinates[:, 2].astype(int)
         return peak_positions, atom_types
     
     def select_region(self, peak_positions, atom_types):
@@ -226,6 +220,7 @@ class CrystalAnalyzer:
         )
         if plot:
             plt.subplots()
+            plt.imshow(self.image, cmap="gray")
             # plot the a and b vectors
             plt.arrow(
                 self.origin[0],
@@ -279,13 +274,13 @@ class CrystalAnalyzer:
                     unitcell_transformed[:, 1][mask_unitcell_element],
                     edgecolors="k",
                     c=current_color,
-                    alpha=0.5,
+                    alpha=0.8,
                     label=element + " unitcell",
                 )
             plt.tight_layout()
             plt.legend()
             plt.setp(plt.gca(), aspect="equal", adjustable="box")
-            plt.gca().invert_yaxis()
+            # plt.gca().invert_yaxis()
         return unitcell_transformed
 
     def sites_mapping(self, sites, ref=None, plot=True):
@@ -425,13 +420,13 @@ class CrystalAnalyzer:
             )
             boundary[0, :] = boundary[0, :] - np.abs(self.a + self.b) 
             boundary[1, :] = boundary[1, :] + np.abs(self.a + self.b)
-            mask = (shifted_origin_rigid[:2] > boundary[0, :2]).all() & (
+            mask = (shifted_origin_rigid[:2] > boundary[0, :2]).all() and (
                 shifted_origin_rigid[:2] < boundary[1, :2]
             ).all()
-            if mask is False:
+            if mask == False:
                 continue
             if a_shift == 0 and b_shift == 0:
-                shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
+                shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid                
             else:
                 # find the closet point of the a_shift and b_shift in the current shifted_origin_adaptive
                 distance = np.linalg.norm(
@@ -454,6 +449,29 @@ class CrystalAnalyzer:
                         + self.a * a_shift_diff
                         + self.b * b_shift_diff
                     )
+                    # check if the unitcell is close to any exisiting peak positions
+                    unitcell = self.unitcell_mapping(ref=(shifted_origin_adaptive[(a_shift, b_shift)], self.a, self.b, self.c), plot=False)
+                    mask = (unitcell[:, :2] > 0).all(axis=1) & (unitcell[:, :2] < self.image.shape).all(axis=1)
+                    unitcell_in_image = unitcell[mask]
+                    displacement_list = []
+                    if unitcell_in_image.size > 0:
+                        for site in unitcell_in_image:
+                            element = self.elements[int(site[3])]
+                            distance = np.linalg.norm(
+                                self.peak_positions - site[:2], axis=1
+                            )
+                            if distance.min() < self.min_distances()[element]/2:
+                                peak_selected = self.peak_positions[np.argmin(distance)]
+                                # get the displacement of the site_position
+                                displacement = peak_selected - site[:2]
+                                displacement_list.append(displacement)
+                        # update the shifted_origin_adaptive with the average displacement
+                        if len(displacement_list) > 0:
+                            displacement= np.mean(displacement_list, axis=0)
+                            displacement = np.array([displacement[0], displacement[1], 0])
+                            shifted_origin_adaptive[(a_shift, b_shift)] = (
+                                shifted_origin_adaptive[(a_shift, b_shift)] + displacement
+                            )
         return shifted_origin_adaptive
 
     def unitcell_with_refined_peaks(self, origin, search_range=3):
