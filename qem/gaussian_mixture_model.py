@@ -22,7 +22,7 @@ class GaussianMixtureModel:
     def __init__(self, scs: np.ndarray, electron_per_px=None):
         self.scs = scs
         self.dose = electron_per_px
-        self.result = {}
+        self.result = GmmResult
         self.val: np.ndarray
         self.minmax: np.ndarray
         self.init_mean: np.ndarray
@@ -50,7 +50,7 @@ class GaussianMixtureModel:
 
         Args:
             n_component (int or list): Number of components in the mixture model. If an integer is provided, the range of components will be from 1 to n_component. If a list is provided, the range will be from the first element to the last element of the list.
-            use_scs_channel (int or list or None): The channel(s) to be used for the model. If an integer is provided, only that channel will be used. If a list is provided, the channels specified in the list will be used. If None is provided, the first channel will be used by default.
+            use_scs_channel (int or list): The channel(s) to be used for the model. If an integer is provided, only that channel will be used. If a list is provided, the channels specified in the list will be used. If None is provided, the first channel will be used by default.
             metric (str): The metric to be used for the model.
             score_method (list): List of score methods to be used.Available methods: icl: Integrated Completed Likelihood, aic: Akaike Information Criterion, bic: Bayesian Information Criterion, gic: Generalized Information Criterion, clc: Consistent Likelihood Criterion, awe: Akaike's Weighted Estimate, en: Entropy, nllh: Negative Log-Likelihood.
             init_method (str): The initialization method to be used.
@@ -133,7 +133,7 @@ class GaussianMixtureModel:
             given_mean: The initial means of the GMM components. Default is None.
             given_width: The initial widths of the GMM components. Default is None.
             fit_step_size (list): The step sizes for fitting the GMM. Default is [1, [1, 1], [1, 1]].
-            constraint (list): The constraints applied to the GMM. Default is [].
+            constraint (list): The constraints applied to the GMM. Default is []. Possible constraints: uni_width, dose_width, dose_width_simplified, dose_width_fit
 
         Returns:
             None
@@ -187,7 +187,7 @@ class GaussianMixtureModel:
             last_mean (list): The mean values of the last iteration.
 
         Returns:
-            tuple: A tuple containing the optimized weights and the minimum score.
+            tuple: A tuple containing the optimized weights/mean/width and the minimum score.
 
         """
         mean_list = self.initMean(self.init_method, last_mean, n_component)
@@ -384,16 +384,6 @@ class GaussianMixtureModel:
 
     def plot_thickness(self, n_component,  show_component=None):
         component_case = n_component - 1
-        xmin = np.amin(self._coordinates[0, :])
-        xmax = np.amax(self._coordinates[0, :])
-        ymin = np.amin(self._coordinates[1, :])
-        ymax = np.amax(self._coordinates[1, :])
-        weight = self.result.weight[component_case]
-        mean = self.result.mean[component_case]
-        var = self.result.width[component_case]
-        use_dim = np.size(var, 0)
-        value = np.expand_dims(self.val[:use_dim, :].T, axis=0)
-        # ca = GaussianComponents(weight, mean, var, value, self.dose)
         self.component = self.result.idxComponentOfScs(component_case)
         plt.figure()
         plt.scatter(
@@ -403,16 +393,10 @@ class GaussianMixtureModel:
             c=self.component,
         )
         ax = plt.gca()
-        ax.set_xlim([xmin - 10, xmax + 10])
-        ax.set_ylim([ymin - 10, ymax + 10])
         ax.set_aspect('equal')
-        # revert y axis
-        # ax.invert_yaxis()
         plt.colorbar()
         plt.show(block=False)
-        # plt.pause(1)
         if show_component is not None:
-            # if ~isinstance(show_component, list): show_component = [show_component]
             idx = np.zeros(self._num_column, dtype=bool)
             for c in show_component:
                 idx += self.component == c
@@ -428,30 +412,28 @@ class GaussianMixtureModel:
             )
             plt.scatter(x, y, marker="x", c=t)
             ax = plt.gca()
-            ax.set_xlim([xmin - 10, xmax + 10])
-            ax.set_ylim([ymin - 10, ymax + 10])
             ax.set_aspect('equal')
             plt.show(block=False)
             plt.pause(1)
         return None
 
     def plot_criteria(self, criteria=None):
-        xaxis = np.arange(self.max_n_components)
+        xaxis = self.n_component_list
         fig, ax = plt.subplots(1,1)
         for cri in criteria:
-            plt.plot(xaxis, self.criteria_dict[cri], label=cri)
+            plt.plot(xaxis, self.result.score[cri], label=cri)
             plt.plot(
-                np.argmin(self.criteria_dict[cri])+1, self.criteria_dict[cri].min(), 'o')
+                np.argmin(self.result.score[cri])+1, min(self.result.score[cri]), 'o')
         legend = ax.legend(loc="upper center")
         plt.show(block=False)
         plt.pause(1)
         return None
 
     def plot_histogram(self, n_component:int, use_dim=None, bin=None):
-        if use_dim is None or use_dim > self._use_dim:
-            use_dim = self._use_dim
+        if use_dim is None or use_dim > self.scs.shape[1]:
+            use_dim = self.scs.shape[1]
         if bin is None:
-            bin = np.size(self.val, axis=1) // 10
+            bin = np.size(self.val, axis=0) // 10
 
         if use_dim != 2 and use_dim != 1:
             print("only support up to 2 dimensions")
@@ -464,19 +446,20 @@ class GaussianMixtureModel:
             plt.hist(self.val[0, :], bins=bin)
 
         if n_component is None:
-            min_icl_comp = np.argmin(self.criteria_dict['icl'])
+            min_icl_comp = np.argmin(self.result.score['icl'])
             print("Number of components is chosen to be ", min_icl_comp+1, "based on ICL.\n")
             component_case = n_component - 1
         else:
             component_case = n_component - 1
-            weight = self.weights_list[component_case]
-            mean = self.mean_list[component_case]
-            var = self.var_list[component_case]
+            weight = self.result.weight[component_case]
+            mean = self.result.mean[component_case]
+            width = self.result.width[component_case]
             if use_dim == 1:
-                sigma = var[0, 0, 0] ** 0.5
+                plt.hist(self.val[:, self.channel], bins=bin)
                 for c in range(component_case):
+                    sigma = width[c] ** 0.5
                     w = weight[c] * self._num_column * sigma
-                    mu = mean[c, 0, 0]
+                    mu = mean[c]
                     x = np.linspace(mu - 3 * sigma, mu + 3 * sigma, bin)
                     plt.plot(
                         x,
@@ -484,16 +467,17 @@ class GaussianMixtureModel:
                         / (sigma * np.sqrt(2 * np.pi))
                         * np.exp(-0.5 * ((x - mu) / sigma) ** 2),
                     )
-                    plt.text(mu, w / (sigma * np.sqrt(2 * np.pi)) * 1.1, c + 1)
+                    plt.text(mu, w / (sigma * np.sqrt(2 * np.pi)) * 1.1, str(c + 1))
             elif use_dim == 2:
+                plt.scatter(self.val[:, 0], self.val[:, 1], marker="o", c="b")
                 t = np.linspace(-np.pi, np.pi, bin)
-                sigma = var[0] ** 0.5
                 for c in range(component_case):
                     mu = mean[c]
+                    sigma = width[c] ** 0.5
                     x = mu[0,0] + sigma[0,0]*np.cos(t)
                     y = mu[0,1] + sigma[0,1]*np.sin(t)
                     plt.plot(x,y)
-                    plt.text(mu[0,0], mu[0,1], c+1)
+                    plt.text(mu[0,0], mu[0,1], str(c + 1))
         plt.show(block=False)
         return None
     
@@ -735,8 +719,6 @@ class GaussianMixtureModel:
             x**6 * a + x**5 * b + x**4 * c + x**3 * d + x**2 * e + x * f + g
         )
 
-
-
 class GmmResult:
     def __init__(
         self,
@@ -927,7 +909,7 @@ class GaussianComponents:
                           - step[0]: The step value for updating the weights.
                           - step[1]: The step value for updating the means.
                           - step[2]: The step value for updating the variances.
-            constraint (bool): A boolean value indicating whether to apply any constraints during the parameter updates.
+            constraint (bool): A boolean value indicating whether to apply any constraints during the parameter updates for variances.
 
         Returns:
             None
@@ -1014,468 +996,3 @@ class GaussianComponents:
             self._ca(self.rectifier(var_indi) + var_dose, mean, weight, val).sum(0)
         ).sum()
         return nllh
-
-#### extra code
-class GaussianMixtureModelObject:
-    """
-    To Solve GMM
-    """
-
-    # setter / getter
-    @property
-    def value(self):
-        return self._value
-
-    @value.setter
-    def value(self, value: np.ndarray):
-        self._value = value
-        self._num_column = np.size(self._value, 1)
-        self._num_dim = np.size(self.num_dim, 0)
-
-    @property
-    def coordinates(self):
-        return self._coordinates
-
-    @coordinates.setter
-    def coordinates(self, coordinates: np.ndarray):
-        self._coordinates = coordinates
-
-    def __init__(self, value: np.ndarray, coordinates: np.ndarray):
-        """
-        Parameters
-        ----------
-        value: np.ndarray
-            nparray of volume of gaussian, peak intensity, or scattering crossection
-        coordinates: np.ndarray
-            coordinates of the atomic columns
-        """
-        self._value = value
-        self._coordinates = coordinates
-        try:
-            self._num_column = np.size(self._value, 1)
-            self._num_dim = np.size(self._value, 0)
-        except:
-            self._value = np.reshape(self._value, [1, np.size(self._value)])
-            self._num_column = np.size(self._value, 1)
-            self._num_dim = np.size(self._value, 0)
-        self._use_dim = self._num_dim
-        self.criteria_dict = {}
-        self._criteria_list = []
-        self.weights_list = []
-        self.mean_list = []
-        self.var_list = []
-        self.component = []
-        self.max_n_components = 0
-        self.__data_dimension_check__()
-
-    def __data_dimension_check__(self):
-        """
-        check number of column matches with provided number of coordinates
-        """
-        assert self._num_column == np.size(
-            self._coordinates, 1
-        ), "GaussianMixtureModelObject._num_coordinates does noth match with _num_column"
-        
-    def remove_edge(self, edge_width, image_size):
-        lx, ly = image_size
-        delete_list = []
-        for i in range(self._num_column):
-            if (self._coordinates[0,i] < edge_width or 
-                self._coordinates[0,i] > lx-edge_width or 
-                self._coordinates[1,i] < edge_width or 
-                self._coordinates[1,i] > ly-edge_width):
-                delete_list.append(i)
-        self._coordinates = np.delete(self._coordinates, delete_list, 1)
-        self._value = np.delete(self._value, delete_list, 1)
-        self._num_column = np.size(self._value, 1)
-
-    @staticmethod
-    def cri_test(criteria, llh, num_para, num_column, penalty, tau_array):
-        cri = []
-        # t = tau_array * np.log(tau_array)
-        t = tau_array * safe_ln(tau_array)
-        t[tau_array == 0] = 0
-        en = -1 * np.sum(t)
-        for key in criteria:
-            if key == "aic":
-                cri.append(-2 * llh + 2 * num_para)
-            if key == "gic":
-                cri.append(-2 * llh + penalty * num_para)
-            if key == "bic":
-                cri.append(-2 * llh + num_para * np.log(num_column))
-            if key == "clc":
-                cri.append(-2 * llh + 2 * en)
-            if key == "awe":
-                cri.append(
-                    -2 * llh + 2 * en + 2 * num_para * (3 / 2 + np.log(num_column))
-                )
-            if key == "icl":
-                cri.append(-2 * llh + 2 * en + num_para * np.log(num_column))
-            if key == "nllh":
-                cri.append(-1 * llh)
-        return cri
-
-    @staticmethod
-    def log_likelihood(component_array):
-        llh = np.sum(np.log(np.sum(component_array, (0, 2))))
-        return llh
-
-    @staticmethod
-    def component_array(weight, mean, var, value):
-        num_component = np.size(weight, 0)
-        num_column = np.size(value, 1)
-        num_dim = np.size(value, 2)
-        ca = np.zeros([num_component, num_column, 1])
-        ca[:, :, 0] = (
-            weight[:, None]
-            * (2 * np.pi) ** -(num_dim / 2)
-            * np.prod(var[0, 0, :]) ** -(1 / 2)
-            * np.exp(-np.sum((value - mean) ** 2 / var, 2) / 2)
-        )
-        return ca
-
-    @staticmethod
-    def __init_wmv__(v_max, v_min, mean, num_component, num_dim):
-        weight = np.ones(num_component) / num_component
-        var = ((v_max - v_min) / (2 * num_component)) ** 2
-        mean = np.reshape(mean, (num_component, 1, num_dim))
-        var = np.tile(var, (num_component, 1))
-        var = np.reshape(var, (num_component, 1, num_dim))
-        return weight, mean, var
-
-    def __search__(self, value, criteria, num_component, pos_init):
-        b_multi_d = False
-        v_max = np.amax(value, 1)
-        v_min = np.amin(value, 1)
-
-        if self._use_dim > 1:
-            x = value[0, :, 0]
-            y = value[0, :, 1:]
-            # coef = np.linalg.lstsq(x, y, rcond=None)[0]
-            coef = np.squeeze(np.polyfit(x,y,3))
-            p = np.poly1d(coef)
-            b_multi_d = True
-
-        # uniform distance
-        if pos_init[0] == 0:
-            mean_0 = np.linspace(v_min[0, 0], v_max[0, 0], num_component)
-            if b_multi_d:
-                # mean = np.vstack([mean_0, mean_0 * coef[0] + coef[1]]).T
-                mean = np.vstack([mean_0, p(mean_0)]).T
-            else:
-                mean = mean_0
-            weight, mean, var = self.__init_wmv__(
-                v_max, v_min, mean, num_component, self._use_dim
-            )
-            weight, mean, var, cri = self.__EM__(weight, mean, var, value, criteria)
-
-        # StatSTEM
-        if pos_init[0] == 1:
-            if num_component == 1:
-                mean_0 = (v_min[0, 0] + v_max[0, 0]) / 2
-                if b_multi_d:
-                    # mean = np.vstack([mean_0, mean_0 * coef[0] + coef[1]]).T
-                    mean = np.vstack([mean_0, p(mean_0)]).T
-                else:
-                    mean = mean_0
-                weight, mean, var = self.__init_wmv__(
-                    v_max, v_min, mean, num_component, self._use_dim
-                )
-                weight, mean, var, cri = self.__EM__(weight, mean, var, value, criteria)
-            else:
-                mean_last = self.mean_list[num_component - 2][
-                    :, 0, 0]
-                mean_scale = np.insert(
-                    mean_last, (0, num_component - 2), (v_min[0, 0], v_max[0, 0])
-                )
-                weight_t, mean_t, var_t, cri_t, choose_t = [], [], [], [], []
-                criteria_plus = criteria.copy()
-                criteria_plus.append('nllh')
-                for i in range(num_component):
-                    mean_0 = np.append(
-                        mean_last, (mean_scale[i] + mean_scale[i + 1]) / 2
-                    )
-                    if b_multi_d:
-                        # mean = np.vstack([mean_0, mean_0 * coef[0] + coef[1]]).T
-                        mean = np.vstack([mean_0, p(mean_0)]).T
-                    else:
-                        mean = mean_0
-                    weight, mean, var = self.__init_wmv__(
-                        v_max, v_min, mean, num_component, self._use_dim
-                    )
-                    w, m, v, c = self.__EM__(weight, mean, var, value, criteria_plus)
-                    weight_t.append(w)
-                    mean_t.append(m)
-                    var_t.append(v)
-                    choose_t.append(c.pop())
-                    cri_t.append(c)
-                id = np.argmin(choose_t)
-                # plt.plot(choose_t)
-                # plt.plot(id,min(choose_t),'o')
-                # name = 'full_conv' + str(num_component) + '.png'
-                # plt.savefig(name)
-                # plt.clf()
-                weight = weight_t[id]
-                mean = mean_t[id]
-                var = var_t[id]
-                cri = cri_t[id]
-
-        # Annick's approach
-        if pos_init[0] == 2:
-            if num_component == 1:
-                mean_0 = (v_min[0, 0] + v_max[0, 0]) / 2
-                if b_multi_d:
-                    # mean = np.vstack([mean_0, mean_0 * coef[0] + coef[1]]).T
-                    mean = np.vstack([mean_0, p(mean_0)]).T
-                else:
-                    mean = mean_0
-                weight, mean, var = self.__init_wmv__(
-                    v_max, v_min, mean, num_component, self._use_dim
-                )
-                weight, mean, var, cri = self.__EM__(weight, mean, var, value, criteria)
-            else:
-                mean_last = self.mean_list[num_component - 2][
-                    :, 0, 0]
-                mean_scale = np.linspace(v_min[0, 0], v_max[0, 0], self.max_n_components)
-                weight_t, mean_t, var_t, cri_t, choose_t = [], [], [], [], []
-                criteria_plus = criteria.copy()
-                criteria_plus.append('nllh')
-                for i in range(self.max_n_components):
-                    mean_0 = np.append(mean_last, mean_scale[i])
-                    if b_multi_d:
-                        # mean = np.vstack([mean_0, mean_0 * coef[0] + coef[1]]).T
-                        mean = np.vstack([mean_0, p(mean_0)]).T
-                    else:
-                        mean = mean_0
-                    weight, mean, var = self.__init_wmv__(
-                        v_max, v_min, mean, num_component, self._use_dim
-                    )
-                    w, m, v, c = self.__EM__(weight, mean, var, value, criteria_plus)
-                    weight_t.append(w)
-                    mean_t.append(m)
-                    var_t.append(v)
-                    choose_t.append(c.pop())
-                    cri_t.append(c)
-                id = np.argmin(choose_t)
-                weight = weight_t[id]
-                mean = mean_t[id]
-                var = var_t[id]
-                cri = cri_t[id]
-
-        # repeat
-        for _ in range(pos_init[1]):
-            weight, _, var = self.__init_wmv__(
-                v_max, v_min, mean[:, 0, 0], num_component, self._use_dim
-            )
-            weight, mean, var, cri = self.__EM__(weight, mean, var*2, value, criteria)
-
-        return weight, mean, var, cri
-
-    def __EM__(self, weight, mean, var, value, criteria):
-        num_component = np.size(weight, 0)
-        num_column = np.size(value, 1)
-        num_dim = np.size(value, 2)
-        num_para = num_component - 1 + num_dim * num_component + num_dim
-
-        ca = self.component_array(weight, mean, var, value)
-        llh = self.log_likelihood(ca)
-        change_ratio = 1
-        cnt = 0
-        while change_ratio > 1e-7:
-            tau_array = ca / np.sum(ca, 0)            
-            if 0 in np.sum(tau_array, (1, 2)): break
-            weight = np.sum(tau_array, (1, 2)) / num_column
-            if num_component != 1:
-                weight[-1] = 1 - np.sum(weight[:-1])
-            mean = np.sum(tau_array * value, 1, keepdims=True) / np.sum(
-                tau_array, (1, 2), keepdims=True
-            )
-            var = (
-                np.sum(tau_array * (value - mean) ** 2, (0, 1), keepdims=True)
-                / num_column
-            )
-            var = np.repeat(var, num_component, axis=0)
-
-            ca = self.component_array(weight, mean, var, value)
-            llh_new = self.log_likelihood(ca)
-            change_ratio = abs(llh_new - llh) / abs(llh)
-            llh = llh_new
-            cnt += 1
-        sort_idx = np.argsort(mean, axis=0)
-        t = sort_idx[:, :, 0]
-        sort_idx = t[:, :, None]
-        mean = np.take_along_axis(mean, sort_idx, axis=0)
-        weight = np.take_along_axis(weight, sort_idx[:, 0, 0], axis=0)
-        tau_array = ca / np.sum(ca, 0)
-        cri = self.cri_test(criteria, llh, num_para, num_column, 2, tau_array)
-        return weight, mean, var, cri
-
-    def GMM(
-        self, max_component: int, use_dim=None, criteria=["icl"], pos_init=(1, 0)
-    ):
-        """
-        Find components of Gaussian mixture model
-
-        Parameters
-        ----------
-        max_component: int
-            How many components to try.
-        use_dim (optional): int
-            How many dimensions in the value list will be used. Use all if not specified.
-        criteria (optional): list
-            Which criteria to use. Options: icl, aic, gic, bic, clc, awe. Use 'icl' if not specified
-        pos_init (optional):
-            methods to add initial position.
-        ----------
-        Examples:
-            adf_value = [1, 2, 3, 4]
-            abf_value = [5, 6, 7, 8]
-            x = np.concatenate([adf_value, abf_value])
-            GaussianMixtureModelObject ADF(x, coordinates)
-            ADF.GMM([1,50], ['icl', 'aic'])
-        ----------
-        Questions:
-            how to calculate derivative of log likelihood to parameter?
-        """
-
-        # axis0: number of component
-        # axis1: number of column
-        # axis2: data dimension
-
-        if use_dim is not None:
-            if use_dim > self._num_column:
-                self._use_dim = self._num_dim
-                print("Use maximal dimension")
-            else:
-                self._use_dim = use_dim
-
-        self.criteria_dict = {}
-        self._criteria_list = []
-        self.weights_list = []
-        self.mean_list = []
-        self.var_list = []
-        self.max_n_components = max_component
-
-        value = np.expand_dims(self._value[: self._use_dim, :].T, axis=0)
-
-        for n_component in tqdm(range(1, self.max_n_components+1)):
-            weight, mean, var, cri = self.__search__(
-                value, criteria, n_component, pos_init=pos_init
-            )
-            self.weights_list.append(weight)
-            self.mean_list.append(mean)
-            self.var_list.append(var)
-            self._criteria_list.append(cri)
-
-        self._criteria_list = np.transpose(self._criteria_list)
-        self.criteria_dict = {key: value for key, value in zip(criteria, self._criteria_list)}
-      
-    def plot_thickness(self, n_component, show_component=None):
-        component_case = n_component - 1
-        xmin = np.amin(self._coordinates[0, :])
-        xmax = np.amax(self._coordinates[0, :])
-        ymin = np.amin(self._coordinates[1, :])
-        ymax = np.amax(self._coordinates[1, :])
-        weight = self.weights_list[component_case]
-        mean = self.mean_list[component_case]
-        var = self.var_list[component_case]
-        use_dim = np.size(var, 2)
-        value = np.expand_dims(self._value[:use_dim, :].T, axis=0)
-        ca = self.component_array(weight, mean, var, value)
-        self.component = np.argmax(ca[:, :, 0], axis=(0))
-        plt.figure()
-        plt.scatter(
-            self._coordinates[0, :],
-            self._coordinates[1, :],
-            marker="o",
-            c=self.component,
-        )
-        ax = plt.gca()
-        ax.set_xlim([xmin - 10, xmax + 10])
-        ax.set_ylim([ymin - 10, ymax + 10])
-        ax.set_aspect('equal')
-        plt.show(block=False)
-        plt.pause(1)
-        if show_component is not None:
-            # if ~isinstance(show_component, list): show_component = [show_component]
-            idx = np.zeros(self._num_column, dtype=bool)
-            for c in show_component:
-                idx += self.component == c
-            x = self._coordinates[0, idx]
-            y = self._coordinates[1, idx]
-            t = self.component[idx]
-            plt.figure()
-            plt.scatter(
-                self._coordinates[0, :],
-                self._coordinates[1, :],
-                marker=".",
-                c=self.component,
-            )
-            plt.scatter(x, y, marker="x", c=t)
-            ax = plt.gca()
-            ax.set_xlim([xmin - 10, xmax + 10])
-            ax.set_ylim([ymin - 10, ymax + 10])
-            ax.set_aspect('equal')
-            plt.show(block=False)
-            plt.pause(1)
-
-    def plot_criteria(self, criteria=None):
-        xaxis = np.arange(self.max_n_components)
-        fig, ax = plt.subplots(1,1)
-        for cri in criteria:
-            plt.plot(xaxis, self.criteria_dict[cri], label=cri)
-            plt.plot(
-                np.argmin(self.criteria_dict[cri])+1, self.criteria_dict[cri].min(), 'o')
-        legend = ax.legend(loc="upper center")
-        plt.show(block=False)
-        plt.pause(1)
-
-    def plot_histogram(self, n_component:int, use_dim=None, bin=None):
-        if use_dim is None or use_dim > self._use_dim:
-            use_dim = self._use_dim
-        if bin is None:
-            bin = np.size(self._value, axis=1) // 10
-
-        if use_dim != 2 and use_dim != 1:
-            print("only support up to 2 dimensions")
-            return
-        elif use_dim == 2:
-            plt.figure()
-            plt.hist2d(self._value[0, :], self._value[1, :], bins=bin)
-        elif use_dim == 1:
-            plt.figure()
-            plt.hist(self._value[0, :], bins=bin)
-
-        if n_component is None:
-            min_icl_comp = np.argmin(self.criteria_dict['icl'])
-            print("Number of components is chosen to be ", min_icl_comp+1, "based on ICL.\n")
-            component_case = n_component - 1
-        else:
-            component_case = n_component - 1
-            weight = self.weights_list[component_case]
-            mean = self.mean_list[component_case]
-            var = self.var_list[component_case]
-            if use_dim == 1:
-                sigma = var[0, 0, 0] ** 0.5
-                for c in range(component_case):
-                    w = weight[c] * self._num_column * sigma
-                    mu = mean[c, 0, 0]
-                    x = np.linspace(mu - 3 * sigma, mu + 3 * sigma, bin)
-                    plt.plot(
-                        x,
-                        w
-                        / (sigma * np.sqrt(2 * np.pi))
-                        * np.exp(-0.5 * ((x - mu) / sigma) ** 2),
-                    )
-                    plt.text(mu, w / (sigma * np.sqrt(2 * np.pi)) * 1.1, c + 1)
-            elif use_dim == 2:
-                t = np.linspace(-np.pi, np.pi, bin)
-                sigma = var[0] ** 0.5
-                for c in range(component_case):
-                    mu = mean[c]
-                    x = mu[0,0] + sigma[0,0]*np.cos(t)
-                    y = mu[0,1] + sigma[0,1]*np.sin(t)
-                    plt.plot(x,y)
-                    plt.text(mu[0,0], mu[0,1], c+1)
-        plt.show(block=False)
-        plt.pause(1)
