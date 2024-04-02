@@ -371,10 +371,7 @@ class ImageModelFitting:
                 )
         return prediction
 
-    def predict(self, params:dict, X:np.ndarray=None, Y:np.ndarray=None):
-        if X is None and Y is None:
-            X = self.X
-            Y = self.Y
+    def predict(self, params:dict, X:np.ndarray, Y:np.ndarray):
         if self.fit_background:
             background = params["background"]
         else:
