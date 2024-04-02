@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from qem.utils import InteractivePlot
+from qem.gui_classes import InteractivePlot
 from pymatgen.core.structure import Structure
 from qem.color import get_unique_colors
 
@@ -36,7 +36,6 @@ def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
             element.symbol == element_symbol for element in site.species.elements
         )
         mask.append(has_element)
-    mask = np.array(mask)
     return mask
 
 
@@ -72,17 +71,41 @@ class CrystalAnalyzer:
         plt.show()
 
     def choose_lattice_vectors(self, tolerance=10):
+        """
+        Choose the lattice vectors based on the given tolerance.
+
+        Args:
+        - tolerance (int): The tolerance value.
+
+        Returns:
+        - The selected origin, a, and b vectors.
+        """
         interactive_plot = InteractivePlot(
             peaks_locations=self.peak_positions, image=self.image, tolerance=tolerance
         )
         origin, a, b = interactive_plot.select_vectors()
-        self.origin = np.append(origin, 0)
-        self.a = np.append(a, 0)
-        self.b = np.append(b, 0)
+        # check origin, a, b are numpy array
+        assert isinstance(origin, np.ndarray), "origin should be a numpy array"
+        assert isinstance(a, np.ndarray), "a should be a numpy array"
+        assert isinstance(b, np.ndarray), "b should be a numpy array"
+        self.origin = np.append(origin, 0, axis=0)
+        self.a = np.append(a, 0, axis=0)
+        self.b = np.append(b, 0, axis=0)
         return origin, a, b
 
     def import_crystal_structure(self, cif_file_path):
         structure = Structure.from_file(cif_file_path)
+        # remove the sites with the element not in the self.elements
+        sites_to_keep = []
+        for i, site in enumerate(structure):
+            species = site.species
+            for specie in species:
+                element = specie.element
+                element_symbol = element.symbol
+                if element_symbol in self.elements:
+                    sites_to_keep.append(i)
+        sites_to_remove = [i for i in range(len(structure)) if i not in sites_to_keep]
+        structure.remove_sites(sites_to_remove)
         self.unitcell = structure
         self.c = np.array([0, 0, self.unitcell.lattice.c])
 
@@ -106,7 +129,65 @@ class CrystalAnalyzer:
         element_symbols = [str(element) for element in elements]
         return element_symbols
 
-    def unitcell_mapping(self, plot=True):
+    def generate_supercell_lattice(self, a_limit=1, b_limit=1):
+        """
+        Generate a supercell lattice based on the given lattice vectors and limits.
+
+        Parameters:
+        - a_limit: The number of times to repeat the a lattice vector.
+        - b_limit: The number of times to repeat the b lattice vector.
+
+        Returns:
+        - supercell_lattice: The supercell lattice.
+        """
+        a_axis_mesh, b_axis_mesh = np.meshgrid(
+            np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
+        )
+        a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a)
+        b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b)
+        # compute the distance in such meshgrid
+        distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
+        # apply the sort to the a_axis_mesh and b_axis_mesh
+        a_axis_mesh_sorted = a_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
+        b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
+        order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
+        # Find the closest peak to the origin to correct for drift
+
+        supercell = np.array([]).reshape(0, 4)
+        for a_shift, b_shift in order_mesh:
+            shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
+            unitcell = self.unitcell_mapping(ref=(shifted_origin_rigid, self.a, self.b, self.c), plot=False)
+            supercell = np.vstack([supercell, unitcell])
+
+        mask = (supercell[:, :2] > 0).all(axis=1) & (supercell[:, :2] < self.image.shape).all(axis=1)
+        supercell_in_image = supercell[mask]
+        supercell_in_image[:, :2] = supercell_in_image[:, :2] * self.pixel_size
+        self.coordinates = supercell_in_image
+        return supercell_in_image
+    
+    def supercell_project_2d(self):
+        coordinates = self.coordinates
+        coordinates[:, :2] = coordinates[:, :2] / self.pixel_size
+        # get the unique 2d coordinates and atom types
+        unique_coordinates = np.unique(coordinates[:, [0,1,3]], axis=0)
+        peak_positions = unique_coordinates[:, :2]
+        atom_types = unique_coordinates[:, 2]
+        return peak_positions, atom_types
+    
+    def select_region(self, peak_positions, atom_types):
+        from qem.gui_classes import GetAtomSelection
+        atom_select = GetAtomSelection(
+            image=self.image, atom_positions=peak_positions, invert_selection=False
+        )
+        # hold on until the atom_positions_selected is not empty
+        while atom_select.atom_positions_selected.size == 0:
+            plt.pause(0.1)
+        peak_positions_selected = np.array(atom_select.atom_positions_selected)
+        mask = np.isin(peak_positions,peak_positions_selected).all(axis=1)
+        atom_types_selected = atom_types[mask]
+        return peak_positions_selected, atom_types_selected
+
+    def unitcell_mapping(self, ref=None, plot=True):
         """
         Transforms unit cell fractional coordinates to the image coordinate system,
         aligning them with detected atomic peak positions. Optionally visualizes the
@@ -119,9 +200,17 @@ class CrystalAnalyzer:
         Returns:
         - unitcell_transformed: The transformed coordinates of the unit cell.
         """
+        if ref is not None:
+            origin, a, b, c = ref
+        else:   
+            origin = self.origin
+            a = self.a
+            b = self.b
+            c = self.c
+            
         unitcell_transformed = transform_coordinates(
-            self.unitcell.frac_coords, self.a, self.b, self.c
-        )
+            self.unitcell.frac_coords, a, b, c
+        ) + origin
         atom_types = []
         for site in self.unitcell:
             species = site.species
@@ -186,8 +275,8 @@ class CrystalAnalyzer:
                     self.unitcell, element
                 )
                 plt.scatter(
-                    unitcell_transformed[:, 0][mask_unitcell_element] + self.origin[0],
-                    unitcell_transformed[:, 1][mask_unitcell_element] + self.origin[1],
+                    unitcell_transformed[:, 0][mask_unitcell_element],
+                    unitcell_transformed[:, 1][mask_unitcell_element],
                     edgecolors="k",
                     c=current_color,
                     alpha=0.5,
@@ -199,7 +288,15 @@ class CrystalAnalyzer:
             plt.gca().invert_yaxis()
         return unitcell_transformed
 
-    def sites_mapping(self, sites, plot=True):
+    def sites_mapping(self, sites, ref=None, plot=True):
+        if ref is not None:
+            origin, a, b, c = ref
+        else:   
+            origin = self.origin
+            a = self.a
+            b = self.b
+            c = self.c
+                    
         frac_coords = np.array([site.frac_coords for site in sites])
         atom_types = []
         for site in sites:
@@ -211,7 +308,7 @@ class CrystalAnalyzer:
                     atom_type = self.elements.index(element_symbol)
                     atom_types.append(atom_type)
         atom_types = np.array(atom_types)
-        sites_transformed = transform_coordinates(frac_coords, self.a, self.b, self.c)
+        sites_transformed = transform_coordinates(frac_coords, a, b, c) + origin
         sites_transformed = np.append(
             sites_transformed, np.array(atom_types).reshape(-1, 1), axis=1
         )
@@ -266,8 +363,8 @@ class CrystalAnalyzer:
                     self.unitcell, element
                 )
                 plt.scatter(
-                    sites_transformed[:, 0][mask_unitcell_element] + self.origin[0],
-                    sites_transformed[:, 1][mask_unitcell_element] + self.origin[1],
+                    sites_transformed[:, 0][mask_unitcell_element],
+                    sites_transformed[:, 1][mask_unitcell_element],
                     edgecolors="k",
                     c=current_color,
                     alpha=0.5,
@@ -361,10 +458,11 @@ class CrystalAnalyzer:
 
     def unitcell_with_refined_peaks(self, origin, search_range=3):
         coordinates = np.array([]).reshape(0, 4)
-        unitcell_in_image = self.unitcell_mapping(plot=False)
+        ref = (origin, self.a, self.b, self.c)
+        unitcell_in_image = self.unitcell_mapping(ref=ref,plot=False)
         min_distances = self.min_distances()
         for idx, site in enumerate(self.unitcell):
-            atom_position = unitcell_in_image[idx, :3] + origin
+            atom_position = unitcell_in_image[idx, :3]
             elements = site.species.elements
             for element in elements:
                 element_symbol = element.symbol
@@ -400,7 +498,9 @@ class CrystalAnalyzer:
                         if closest_peak is None:
                             continue
                         # the element is not in the peak_positions, we will add it according to the neigboring peak positions with the symmetry preserved
-                        neighbor_list = self.unitcell.get_neighbors(
+                        structure = self.unitcell
+                        assert isinstance(structure, Structure), "structure should be a pymatgen Structure object"
+                        neighbor_list = structure.get_neighbors(
                             site=site,
                             r=min_distances[element_symbol]
                             * search_range
@@ -415,14 +515,15 @@ class CrystalAnalyzer:
                         if len(neighbor_list) < 1:
                             continue
                         # find the peak positions of the neighbors in the coordinates
-                        sites_transformed = self.sites_mapping(
+                        ref = (origin, self.a, self.b, self.c)
+                        sites_transformed = self.sites_mapping(ref=ref,
                             sites=neighbor_list, plot=False
                         )
                         displacement_list = []
                         for site_transformed in sites_transformed:
                             atom_type_site = int(site_transformed[3])
                             element_site = self.elements[atom_type_site]
-                            site_position = site_transformed[:3] + origin
+                            site_position = site_transformed[:3]
                             if np.ndim(coordinates) == 1:
                                 candidate_peaks = coordinates[
                                     coordinates[3] == atom_type_site
@@ -477,7 +578,8 @@ class CrystalAnalyzer:
                 )
         self.coordinates = supercell_coordinates
         return supercell_coordinates
-
+    
+####### export atomic structure #######
     def write_lammps(self, filename="ABO3.lammps"):
         total_atoms = len(self.coordinates)
         total_types = len(np.unique(self.coordinates[:, 3]))
@@ -486,7 +588,7 @@ class CrystalAnalyzer:
         ylo = np.min(self.coordinates[:, 1])
         yhi = np.max(self.coordinates[:, 1])
         zlo = np.min(self.coordinates[:, 2])
-        zhi = np.max(self.coordinates[:, 2])
+        zhi = max(np.max(self.coordinates[:, 2]), self.unitcell.lattice.c)
 
         with open(filename, "w") as f:
             f.write("# LAMMPS data file written by QEM\n\n")
