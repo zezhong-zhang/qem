@@ -4,8 +4,10 @@ import matplotlib.pyplot as plt
 from matplotlib.widgets import PolygonSelector
 from matplotlib.path import Path
 import logging
+from qem.color import get_unique_colors
 
 logging.basicConfig(level=logging.INFO)
+
 
 def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False):
     """Get a subset of atom positions within region spanned to verticies.
@@ -52,6 +54,7 @@ def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False)
         bool_array = np.invert(bool_array)
     atom_positions_selected = atom_positions[bool_array]
     return atom_positions_selected
+
 
 class GetAtomSelection:
     def __init__(self, image, atom_positions, invert_selection=False):
@@ -125,11 +128,17 @@ class GetAtomSelection:
         self.fig.canvas.flush_events()
 
 
-
 class InteractivePlot:
-    def __init__(self, peaks_locations, image, tolerance):
+    def __init__(
+        self,
+        image: np.ndarray,
+        peaks_locations: np.ndarray,
+        atom_types: np.ndarray,
+        tolerance: float = 10,
+    ):
         self.pos_x = peaks_locations[:, 0]
         self.pos_y = peaks_locations[:, 1]
+        self.atom_types = atom_types
         self.image = image
         self.tolerance = tolerance
         self.scatter_plot = None
@@ -137,7 +146,9 @@ class InteractivePlot:
         self.origin = None
         self.vector_a = None
         self.vector_b = None
-        self.selection_stage = 0  # 0: Select origin, 1: Select vector a, 2: Select vector b
+        self.selection_stage = (
+            0  # 0: Select origin, 1: Select vector a, 2: Select vector b
+        )
 
     def onclick_add_or_remove(self, event):
         if event.dblclick:
@@ -148,23 +159,35 @@ class InteractivePlot:
                 logging.info(f"Removing peak at ({self.pos_x[i]}, {self.pos_y[i]}).")
                 self.pos_x = np.delete(self.pos_x, i, axis=0)
                 self.pos_y = np.delete(self.pos_y, i, axis=0)
+                self.atom_types = np.delete(self.atom_types, i, axis=0)
             else:
                 self.pos_x = np.append(self.pos_x, x)
                 self.pos_y = np.append(self.pos_y, y)
+                self.atom_types = np.append(self.atom_types, 0)
                 logging.info(f"Adding peak at ({x}, {y}).")
-            
+
             self.update_plot()
 
     def update_plot(self):
         plt.clf()
         plt.imshow(self.image)
-        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="red", s=1)
+        color_iterator = get_unique_colors()
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            plt.scatter(
+                self.pos_x[mask],
+                self.pos_y[mask],
+                color=next(color_iterator),
+                s=1,
+                label=str(atom_type),
+            )
         plt.draw()
 
-    def add_or_remove(self):
+    def add_or_remove(self, tolerance: float = 10):
+        self.tolerance = tolerance
         fig = plt.figure()
         plt.imshow(self.image)
-        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="red", s=1)
+        self.update_plot()
         fig.canvas.mpl_connect("button_press_event", self.onclick_add_or_remove)
         plt.show()
 
@@ -180,13 +203,14 @@ class InteractivePlot:
             if distance.min() < self.tolerance:
                 i = np.argmin(distance)
                 self.selected_point = (self.pos_x[i], self.pos_y[i])
-                plt.scatter(self.pos_x[i], self.pos_y[i], color="red", s=5)
+                plt.scatter(self.pos_x[i], self.pos_y[i], color="red", s=5, edgecolors="black")
                 plt.draw()
 
-    def select(self):
+    def select(self, tolerance: float = 10):
+        self.tolerance = tolerance
         fig = plt.figure()
         plt.imshow(self.image)
-        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="blue", s=1)
+        self.update_plot()
         fig.canvas.mpl_connect("button_press_event", self.onclick_select)
         plt.show()
 
@@ -203,44 +227,75 @@ class InteractivePlot:
             if distance.min() < self.tolerance:
                 i = np.argmin(distance)
                 point = np.array([self.pos_x[i], self.pos_y[i]])
-                plt.scatter(self.pos_x[i], self.pos_y[i], color="red", s=10)
+                plt.scatter(self.pos_x[i], self.pos_y[i], color="red",edgecolors='black', s=10)
                 plt.draw()
+            else:
+                # If the point is not close to any peak, add it to the list
+                point = np.array([x, y])
+                self.pos_x = np.append(self.pos_x, x)
+                self.pos_y = np.append(self.pos_y, y)
+                self.atom_types = np.append(self.atom_types, 0)
 
-                if self.selection_stage == 0:
-                    self.origin = point
-                    self.selection_stage += 1
-                    print("Origin selected:", self.origin)
-                elif self.selection_stage == 1:
-                    self.vector_a = point - self.origin
-                    self.selection_stage += 1
-                    print("Vector a selected:", self.vector_a)
-                    self.draw_arrow(self.origin, point, 'a')
-                elif self.selection_stage == 2:
-                    self.vector_b = point - self.origin
-                    print("Vector b selected:", self.vector_b)
-                    self.draw_arrow(self.origin, point, 'b')
-                    self.selection_stage = 0  # Reset the selection stage to allow new selections
-                    return self.origin, self.vector_a, self.vector_b
+            if self.selection_stage == 0:
+                self.origin = point
+                self.selection_stage += 1
+                print("Origin selected:", self.origin)
+            elif self.selection_stage == 1:
+                self.vector_a = point - self.origin
+                self.selection_stage += 1
+                print("Vector a selected:", self.vector_a)
+                self.draw_arrow(self.origin, point, "a")
+            elif self.selection_stage == 2:
+                self.vector_b = point - self.origin
+                print("Vector b selected:", self.vector_b)
+                self.draw_arrow(self.origin, point, "b")
+                self.selection_stage = (
+                    0  # Reset the selection stage to allow new selections
+                )
+                return self.origin, self.vector_a, self.vector_b
             plt.draw()
 
     def draw_arrow(self, start, end, label):
         dx = end[0] - start[0]
         dy = end[1] - start[1]
-        plt.arrow(start[0], start[1], dx, dy, head_width=10, head_length=10, fc='black', ec='black')
-        plt.text((start[0] + end[0])/2, (start[1] + end[1])/2, label, color='black', fontsize=14)
+        plt.arrow(
+            start[0],
+            start[1],
+            dx,
+            dy,
+            head_width=10,
+            head_length=10,
+            fc="black",
+            ec="black",
+        )
+        plt.text(
+            (start[0] + end[0]) / 2,
+            (start[1] + end[1]) / 2,
+            label,
+            color="black",
+            fontsize=14,
+        )
 
-    def select_vectors(self):
+    def select_vectors(self, tolerance: float = 10):
+        self.tolerance = tolerance
         fig = plt.figure()
         plt.imshow(self.image)
-        self.scatter_plot = plt.scatter(self.pos_x, self.pos_y, color="blue", s=1)
+        self.update_plot()
         fig.canvas.mpl_connect("button_press_event", self.onclick_select_vectors)
         plt.show()
 
         while plt.fignum_exists(fig.number):
             plt.pause(0.1)
+        selected = (
+            isinstance(self.origin, np.ndarray)
+            and isinstance(self.vector_a, np.ndarray)
+            and isinstance(self.vector_b, np.ndarray)
+        )
 
-        if self.origin.any() and self.vector_a.any() and self.vector_b.any():
-            print(f"Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}")
+        if selected:
+            print(
+                f"Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}"
+            )
             return self.origin, self.vector_a, self.vector_b
         else:
             print("Selection incomplete.")
