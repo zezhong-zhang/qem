@@ -140,7 +140,7 @@ class ImageModelFitting:
         """
         self._atom_types = atom_types
 
-    def map_lattice(self, cif_file:str, elements:list[str], add_missing_atoms:bool=False):
+    def map_lattice(self, cif_file:str, elements:list[str],min_distance=20, add_missing_atoms:bool=False):
         """
         Find the peaks in the image based on the CIF file.
 
@@ -157,13 +157,13 @@ class ImageModelFitting:
         # crystal_analyzer.a = np.array([  30., -36.,0])
         # crystal_analyzer.b = np.array([-117.33065449 , -99.18509708,0])
         # crystal_analyzer.c = np.array([0.,0., crystal_analyzer.unitcell.lattice.c])
-        crystal_analyzer.choose_lattice_vectors()
+        crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
         crystal_analyzer.generate_supercell_lattice(a_limit=25, b_limit=15)
         peak_positions, atom_types = crystal_analyzer.supercell_project_2d()
         crystal_analyzer.peak_positions = peak_positions
         crystal_analyzer.atom_types = atom_types
         crystal_analyzer.unitcell_mapping()
-        # peak_positions_selected, atom_types_selected = crystal_analyzer.select_region(peak_positions, atom_types)
+        peak_positions, atom_types = crystal_analyzer.select_region(peak_positions, atom_types)
         self.coordinates = peak_positions
         self._atom_types = atom_types
         return None
@@ -193,6 +193,7 @@ class ImageModelFitting:
             exclude_border=exclude_border,
         )
         self.coordinates = peaks_locations[:,[1,0]].astype(float)
+        self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         self.add_or_remove_peaks(min_distance=min_distance, image=self.image
         )
         self._atom_types = np.zeros(self.num_coordinates, dtype=int)
@@ -300,14 +301,16 @@ class ImageModelFitting:
             image = self.image
         peaks_locations = self.coordinates
         interactive_plot = InteractivePlot(
-            peaks_locations=peaks_locations,
             image=image,
+            peaks_locations=peaks_locations,
+            atom_types=self.atom_types,
             tolerance=min_distance,
         )
         interactive_plot.add_or_remove()
         peaks_locations = [interactive_plot.pos_x, interactive_plot.pos_y]
         peaks_locations = np.array(peaks_locations).T.astype(float)
         self.coordinates = peaks_locations
+        self._atom_types = interactive_plot.atom_types
         return peaks_locations
 
     def remove_peaks_outside_image(self):
