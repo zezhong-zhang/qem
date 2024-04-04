@@ -5,7 +5,7 @@ from matplotlib.widgets import PolygonSelector
 from matplotlib.path import Path
 import logging
 from qem.color import get_unique_colors
-
+import os 
 logging.basicConfig(level=logging.INFO)
 
 
@@ -165,12 +165,13 @@ class InteractivePlot:
                 self.pos_y = np.append(self.pos_y, y)
                 self.atom_types = np.append(self.atom_types, 0)
                 logging.info(f"Adding peak at ({x}, {y}).")
+            title = "Double click to add or remove peaks."
+            self.update_plot(title)
 
-            self.update_plot()
-
-    def update_plot(self):
+    def update_plot(self, title):
         plt.clf()
         plt.imshow(self.image)
+        plt.title(title)
         color_iterator = get_unique_colors()
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
@@ -186,8 +187,8 @@ class InteractivePlot:
     def add_or_remove(self, tolerance: float = 10):
         self.tolerance = tolerance
         fig = plt.figure()
-        plt.imshow(self.image)
-        self.update_plot()
+        title = "Double click to add or remove peaks."
+        self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_add_or_remove)
         plt.show()
 
@@ -210,7 +211,8 @@ class InteractivePlot:
         self.tolerance = tolerance
         fig = plt.figure()
         plt.imshow(self.image)
-        self.update_plot()
+        title = "Double click to select a peak."
+        self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_select)
         plt.show()
 
@@ -280,7 +282,8 @@ class InteractivePlot:
         self.tolerance = tolerance
         fig = plt.figure()
         plt.imshow(self.image)
-        self.update_plot()
+        title = "Double click to select origin, vector a, and vector b."
+        self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_select_vectors)
         plt.show()
 
