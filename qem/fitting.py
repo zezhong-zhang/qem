@@ -163,11 +163,27 @@ class ImageModelFitting:
         crystal_analyzer.peak_positions = peak_positions
         crystal_analyzer.atom_types = atom_types
         crystal_analyzer.unitcell_mapping()
-        peak_positions, atom_types = crystal_analyzer.select_region(peak_positions, atom_types)
         self.coordinates = peak_positions
         self._atom_types = atom_types
         return None
-
+    
+    def select_region(self):
+        from qem.gui_classes import GetAtomSelection
+        atom_select = GetAtomSelection(
+            image=self.image, atom_positions=self.coordinates, invert_selection=False
+        )
+        while plt.fignum_exists(atom_select.fig.number):
+            plt.pause(0.1)
+        peak_positions_selected = np.array(atom_select.atom_positions_selected)
+        if peak_positions_selected.shape[0] == 0:
+            logging.info("No atoms selected.")
+            return None
+        else:
+            logging.info(f"Selected {peak_positions_selected.shape[0]} atoms out of {self.num_coordinates} atoms.")
+            mask = np.isin(self.coordinates,peak_positions_selected).all(axis=1)
+            self._atom_types = self._atom_types[mask]
+            self.coordinates = peak_positions_selected
+    
     def find_peaks(
         self, min_distance:int=10, threshold_rel:float=0.2, threshold_abs = None, exclude_border:bool=False, image=None
     ):
