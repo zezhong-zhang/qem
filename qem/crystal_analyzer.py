@@ -4,55 +4,28 @@ from qem.gui_classes import InteractivePlot
 from pymatgen.core.structure import Structure
 from qem.color import get_unique_colors
 from pymatgen.transformations.advanced_transformations import SupercellTransformation
-
-def transform_coordinates(frac_coords, a, b, c):
-    # Construct the transformation matrix with a, b, c as its columns
-    transform_matrix = np.array(
-        [a, b, c]
-    ).T  # Take the transpose to get the vectors as columns
-    # Convert the old coordinates to a numpy array (if not already)
-    frac_coords = np.array(frac_coords)
-    # Multiply the transpose of T by the old coordinates to get the new coordinates
-    new_coords = np.dot(transform_matrix, frac_coords.T).T
-    return new_coords
-
-
-def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
-    """
-    Checks if the given element is present in each site of the unit cell.
-
-    Args:
-    - unitcell (Structure): The unit cell to check.
-    - element_symbol (str): The symbol of the element to check for (e.g., "O" for oxygen).
-
-    Returns:
-    - A list of booleans, where each boolean indicates whether the target element
-      is present in the corresponding site of the unit cell.
-    """
-    mask = []
-    for site in unitcell:
-        # Check if the target element is in the current site
-        has_element = any(
-            element.symbol == element_symbol for element in site.species.elements
-        )
-        mask.append(has_element)
-    return mask
-
+from ase.io import read
+from ase import Atoms, Atom
+import re
+from ase.neighborlist import neighbor_list
 
 class CrystalAnalyzer:
-    def __init__(self, image:np.ndarray, pixel_size:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str]):
+    def __init__(self, image:np.ndarray, pixel_size:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str], add_missing_elements:bool=True):
         self.image = image
         self.pixel_size = pixel_size
         self.peak_positions = peak_positions
         self.coordinates = np.array([])
         self.atom_types = atom_types
         self.elements = elements
-        self.unitcell = Structure
+        self.unitcell = Atoms
         self.origin = np.array([0, 0, 0])
         self.a = np.array([1, 0, 0])
         self.b = np.array([0, 1, 0])
         self.c = np.array([0, 0, 1])
         self._min_distances = None
+        self._origin_adaptive = None
+        self.neighbor_site_dict = {}
+        self.add_missing_elements = add_missing_elements
 
     def plot(self):
         plt.imshow(self.image, cmap="gray")
@@ -94,39 +67,39 @@ class CrystalAnalyzer:
         self.origin = np.array([origin[0], origin[1], 0])
         self.a = np.array([a[0], a[1], 0])
         self.b = np.array([b[0], b[1], 0])
+        self.c = self.unitcell.cell[2]
         return origin, a, b
 
     def import_crystal_structure(self, cif_file_path):
-        structure = Structure.from_file(cif_file_path)
-        # remove the sites with the element not in the self.elements
-        sites_to_keep = []
-        for i, site in enumerate(structure):
-            species = site.species
-            for specie in species:
-                element = specie.element
-                element_symbol = element.symbol
-                if element_symbol in self.elements:
-                    sites_to_keep.append(i)
-        sites_to_remove = [i for i in range(len(structure)) if i not in sites_to_keep]
-        structure.remove_sites(sites_to_remove)
+        structure = read(cif_file_path)
+        assert isinstance(structure, Atoms), "structure should be a ase Atoms object"
+        mask = [atom.symbol in self.elements for atom in structure]
+        structure = structure[mask]
         self.unitcell = structure
-        self.c = np.array([0, 0, self.unitcell.lattice.c])
 
-    def transform(self, transformation_matrix):
-        self.unitcell = SupercellTransformation(
-            scaling_matrix=transformation_matrix
-        ).apply_transformation(self.unitcell)
-        self.c = np.array([0, 0, self.unitcell.lattice.c])
+    # def transform(self, transformation_matrix):
+    #     """
+    #     Apply a transformation matrix to the lattice vectors.
+
+    #     Args:
+    #     - transformation_matrix (np.ndarray): The transformation matrix to apply.
+    #     """
+    #     self.unitcell.positions = np.dot(self.unitcell.positions, transformation_matrix)
+    #     self.unitcell.cell = np.dot(self.unitcell.cell, transformation_matrix)
 
     def get_unitcell_elements(self):
-        composition = self.unitcell.composition
-
-        # Then, extract the elements as a list of unique Element objects
-        elements = list(composition.element_composition.elements)
-
-        # If you want the element symbols as strings
-        element_symbols = [str(element) for element in elements]
-        return element_symbols
+        """
+        Get the elements present in the unit cell.
+    
+        Returns:
+        - element_symbols: The symbols of the elements present in the unit cell.
+        """
+        assert isinstance(self.unitcell, Atoms), "unitcell should be a ase Atoms object"
+        formula = self.unitcell.symbols.__str__()
+        assert isinstance(formula, str), "composition should be a string"
+        # seperate the element symbols from the composition, split by numbers
+        elements = re.findall(r'[A-Z][a-z]*', formula)
+        return elements
 
     def generate_supercell_lattice(self, a_limit=1, b_limit=1):
         """
@@ -204,19 +177,17 @@ class CrystalAnalyzer:
             a = self.a
             b = self.b
             c = self.c
-            
-        unitcell_transformed = transform_coordinates(
-            self.unitcell.frac_coords, a, b, c
+        
+        frac_positions = self.unitcell.cell.scaled_positions(self.unitcell.positions)
+        unitcell_transformed = self.transform_coordinates(
+            frac_positions, a, b, c
         ) + origin
         atom_types = []
         for site in self.unitcell:
-            species = site.species
-            for specie in species:
-                element = specie.element
-                element_symbol = element.symbol
-                if element_symbol in self.elements:
-                    atom_type = self.elements.index(element_symbol)
-                    atom_types.append(atom_type)
+            element_symbol = site.symbol
+            if element_symbol in self.elements:
+                atom_type = self.elements.index(element_symbol)
+                atom_types.append(atom_type)
         atom_types = np.array(atom_types)
         unitcell_transformed = np.append(
             unitcell_transformed, np.array(atom_types).reshape(-1, 1), axis=1
@@ -237,7 +208,7 @@ class CrystalAnalyzer:
                 )
             for element in self.get_unitcell_elements():
                 current_color = np.array(next(color_iterator)).reshape(1, -1)
-                mask_unitcell_element = check_element_in_unitcell(
+                mask_unitcell_element = self.check_element_in_unitcell(
                     self.unitcell, element
                 )
                 plt.scatter(
@@ -296,18 +267,11 @@ class CrystalAnalyzer:
             b = self.b
             c = self.c
                     
-        frac_coords = np.array([site.frac_coords for site in sites])
-        atom_types = []
-        for site in sites:
-            species = site.species
-            for specie in species:
-                element = specie.element
-                element_symbol = element.symbol
-                if element_symbol in self.elements:
-                    atom_type = self.elements.index(element_symbol)
-                    atom_types.append(atom_type)
+        frac_coords = np.array([site.scaled_position for site in sites])
+        elements = [site.symbol for site in sites]
+        atom_types = [self.elements.index(element) for element in elements]
         atom_types = np.array(atom_types)
-        sites_transformed = transform_coordinates(frac_coords, a, b, c) + origin
+        sites_transformed = self.transform_coordinates(frac_coords, a, b, c) + origin
         sites_transformed = np.append(
             sites_transformed, np.array(atom_types).reshape(-1, 1), axis=1
         )
@@ -358,7 +322,7 @@ class CrystalAnalyzer:
                 )
             for element in self.get_unitcell_elements():
                 current_color = np.array(next(color_iterator)).reshape(1, -1)
-                mask_unitcell_element = check_element_in_unitcell(
+                mask_unitcell_element = self.check_element_in_unitcell(
                     self.unitcell, element
                 )
                 plt.scatter(
@@ -393,8 +357,8 @@ class CrystalAnalyzer:
             unitcell_in_image = self.unitcell_mapping(plot=False)
             for element1 in elements:
                 for element2 in elements:  # Only calculate for unique pairs or self-pairs to avoid redundancy
-                    mask1 = check_element_in_unitcell(self.unitcell, element1)
-                    mask2 = check_element_in_unitcell(self.unitcell, element2)
+                    mask1 = self.check_element_in_unitcell(self.unitcell, element1)
+                    mask2 = self.check_element_in_unitcell(self.unitcell, element2)
                     element1_positions = unitcell_in_image[mask1][:, :2]
                     element2_positions = unitcell_in_image[mask2][:, :2]
                     distances = np.linalg.norm(element1_positions[:, None] - element2_positions, axis=2)
@@ -411,82 +375,98 @@ class CrystalAnalyzer:
             return min_distances
 
     def shift_origin_adaptive(self, a_limit, b_limit):
-        # generate a meshgrid
-        a_axis_mesh, b_axis_mesh = np.meshgrid(
-            np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
-        )
-        a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a)
-        b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b)
-        # compute the distance in such meshgrid
-        distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
-        # apply the sort to the a_axis_mesh and b_axis_mesh
-        a_axis_mesh_sorted = a_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
-        b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
-        order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
-        # Find the closest peak to the origin to correct for drift
-        shifted_origin_adaptive = {}
-        for a_shift, b_shift in order_mesh:
-            shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
-            boundary = np.array(
-                [[0, 0, 0], [self.image.shape[1], self.image.shape[0], 0]]
+        if self._origin_adaptive is not None:
+            return self._origin_adaptive
+        else:
+            # generate a meshgrid
+            a_axis_mesh, b_axis_mesh = np.meshgrid(
+                np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
             )
-            boundary[0, :] = boundary[0, :] - np.abs(self.a + self.b) 
-            boundary[1, :] = boundary[1, :] + np.abs(self.a + self.b)
-            mask = (shifted_origin_rigid[:2] > boundary[0, :2]).all() and (
-                shifted_origin_rigid[:2] < boundary[1, :2]
-            ).all()
-            if mask == False:
-                continue
-            if a_shift == 0 and b_shift == 0:
-                shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid                
-            else:
-                # find the closet point of the a_shift and b_shift in the current shifted_origin_adaptive
-                distance = np.linalg.norm(
-                    np.array(list(shifted_origin_adaptive.values()))
-                    - shifted_origin_rigid,
-                    axis=1,
+            a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a)
+            b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b)
+            # compute the distance in such meshgrid
+            distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
+            # apply the sort to the a_axis_mesh and b_axis_mesh
+            a_axis_mesh_sorted = a_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
+            b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
+            order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
+            # Find the closest peak to the origin to correct for drift
+            shifted_origin_adaptive = {}
+            for a_shift, b_shift in order_mesh:
+                shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
+                boundary = np.array(
+                    [[0, 0, 0], [self.image.shape[1], self.image.shape[0], 0]]
                 )
-                mask = distance < np.linalg.norm(self.a) + np.linalg.norm(self.b)
-                if mask.sum() == 0:
-                    shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
+                boundary[0, :] = boundary[0, :] - np.abs(self.a + self.b) 
+                boundary[1, :] = boundary[1, :] + np.abs(self.a + self.b)
+                mask = (shifted_origin_rigid[:2] > boundary[0, :2]).all() and (
+                    shifted_origin_rigid[:2] < boundary[1, :2]
+                ).all()
+                if mask == False:
+                    continue
+                if a_shift == 0 and b_shift == 0:
+                    shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid                
                 else:
-                    selected_keys = list(shifted_origin_adaptive.keys())[
-                        np.argmin(distance)
-                    ]
-                    # find the difference of a_shift and b_shift with the selected_keys
-                    a_shift_diff = a_shift - selected_keys[0]
-                    b_shift_diff = b_shift - selected_keys[1]
-                    shifted_origin_adaptive[(a_shift, b_shift)] = (
-                        shifted_origin_adaptive[selected_keys]
-                        + self.a * a_shift_diff
-                        + self.b * b_shift_diff
+                    # find the closet point of the a_shift and b_shift in the current shifted_origin_adaptive
+                    distance = np.linalg.norm(
+                        np.array(list(shifted_origin_adaptive.values()))
+                        - shifted_origin_rigid,
+                        axis=1,
                     )
-                    # check if the unitcell is close to any exisiting peak positions
-                    unitcell = self.unitcell_mapping(ref=(shifted_origin_adaptive[(a_shift, b_shift)], self.a, self.b, self.c), plot=False)
-                    mask = (unitcell[:, :2] > 0).all(axis=1) & (unitcell[:, :2] < self.image.shape).all(axis=1)
-                    unitcell_in_image = unitcell[mask]
-                    displacement_list = []
-                    if unitcell_in_image.size > 1:
-                        for site in unitcell_in_image:
-                            element = self.elements[int(site[3])]
-                            mask_element = self.atom_types == int(site[3])
-                            distance = np.linalg.norm(
-                                self.peak_positions[mask_element] - site[:2], axis=1
-                            )
-                            distance_ref = np.array([d for d in self.min_distances()[element].values()])
-                            if len(distance)>0 and distance.min() < distance_ref.min():
-                                peak_selected = self.peak_positions[mask_element][np.argmin(distance)]
-                                # get the displacement of the site_position
-                                displacement = peak_selected - site[:2]
-                                displacement_list.append(displacement)
-                        # update the shifted_origin_adaptive with the average displacement
-                        if len(displacement_list) > 0:
-                            displacement= np.mean(displacement_list, axis=0)
-                            displacement = np.array([displacement[0], displacement[1], 0])
-                            shifted_origin_adaptive[(a_shift, b_shift)] = (
-                                shifted_origin_adaptive[(a_shift, b_shift)] + displacement
-                            )
-        return shifted_origin_adaptive
+                    mask = distance < np.linalg.norm(self.a) + np.linalg.norm(self.b)
+                    if mask.sum() == 0:
+                        shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
+                    else:
+                        selected_keys = list(shifted_origin_adaptive.keys())[
+                            np.argmin(distance)
+                        ]
+                        # find the difference of a_shift and b_shift with the selected_keys
+                        a_shift_diff = a_shift - selected_keys[0]
+                        b_shift_diff = b_shift - selected_keys[1]
+                        shifted_origin_adaptive[(a_shift, b_shift)] = (
+                            shifted_origin_adaptive[selected_keys]
+                            + self.a * a_shift_diff
+                            + self.b * b_shift_diff
+                        )
+                        # check if the unitcell is close to any exisiting peak positions
+                        unitcell = self.unitcell_mapping(ref=(shifted_origin_adaptive[(a_shift, b_shift)], self.a, self.b, self.c), plot=False)
+                        mask = (unitcell[:, :2] > 0).all(axis=1) & (unitcell[:, :2] < self.image.shape).all(axis=1)
+                        unitcell_in_image = unitcell[mask]
+                        displacement_list = []
+                        if unitcell_in_image.size > 1:
+                            for site in unitcell_in_image:
+                                element = self.elements[int(site[3])]
+                                mask_element = self.atom_types == int(site[3])
+                                if mask_element.any():
+                                    distance = np.linalg.norm(
+                                        self.peak_positions[mask_element] - site[:2], axis=1
+                                    )
+                                    distance_ref = np.array([d for d in self.min_distances()[element].values()])
+                                    if len(distance)>0 and distance.min() < distance_ref.min()/2:
+                                        peak_selected = self.peak_positions[mask_element][np.argmin(distance)]
+                                        # get the displacement of the site_position
+                                        displacement = peak_selected - site[:2]
+                                        displacement_list.append(displacement)
+                            # update the shifted_origin_adaptive with the average displacement
+                            if len(displacement_list) > 0:
+                                displacement= np.mean(displacement_list, axis=0)
+                                displacement = np.array([displacement[0], displacement[1], 0])
+                                shifted_origin_adaptive[(a_shift, b_shift)] = (
+                                    shifted_origin_adaptive[(a_shift, b_shift)] + displacement
+                                )
+            self._origin_adaptive = shifted_origin_adaptive
+            return shifted_origin_adaptive
+
+    def neighbor_site(self, site_idx, cutoff=3):
+        if site_idx in self.neighbor_site_dict:
+            return self.neighbor_site_dict[site_idx]
+        else:
+            i, j, d = neighbor_list("ijd", self.unitcell,cutoff)
+            neighbors_indices = j[i == site_idx]
+            neighbors_indices = np.unique(neighbors_indices)
+            neighbor_sites = [self.unitcell[n_index] for n_index in neighbors_indices]
+            self.neighbor_site_dict[site_idx] = neighbor_sites
+        return neighbor_sites
 
     def unitcell_with_refined_peaks(self, origin, search_range=3):
         coordinates = np.array([]).reshape(0, 4)
@@ -494,106 +474,97 @@ class CrystalAnalyzer:
         unitcell_in_image = self.unitcell_mapping(ref=ref, plot=False)
         for idx, site in enumerate(self.unitcell):
             atom_position = unitcell_in_image[idx, :3]
-            elements = site.species.elements
-            for element in elements:
-                element_symbol = element.symbol
-                if element_symbol in self.elements:
-                    atom_type = self.elements.index(element_symbol)
-                    mask = self.atom_types == atom_type
-                    if mask.any():
-                        candidate_peaks = self.peak_positions[mask]
-                        distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])
-                        closest_peak = self.closest_peak(
-                            candidate_peaks,
-                            atom_position[:2],
-                            min_distance=distance_ref.min(),
-                        )
-                        if closest_peak is not None:
-                            atom_position_3d = np.append(
-                                closest_peak,
-                                [atom_position[2], atom_type],
-                            )
-                            coordinates = (
-                                np.vstack([coordinates, atom_position_3d])
-                                if coordinates.size
-                                else atom_position_3d
-                            )
-                    else:
-                        if coordinates.size == 0:
-                            continue
-                        distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])
-                        # check if have any close peak within the search range
-                        closest_peak = self.closest_peak(
-                            self.peak_positions,
-                            atom_position[:2],
-                            min_distance=distance_ref.min() * search_range,
-                        )
-                        if closest_peak is None:
-                            continue
-                        # the element is not in the peak_positions, we will add it according to the neigboring peak positions with the symmetry preserved
-                        structure = self.unitcell
-                        assert isinstance(structure, Structure), "structure should be a pymatgen Structure object"
-                        neighbor_list = structure.get_neighbors(
-                            site=site,
-                            r=distance_ref.min()
-                            * search_range
-                            * self.pixel_size,
-                        )
-                        # remove the same element in the neighbour_list
-                        neighbor_list = [
-                            neighbour
-                            for neighbour in neighbor_list
-                            if neighbour.species != site.species
+            atom_type = int(unitcell_in_image[idx, 3])
+            element_symbol = self.elements[int(unitcell_in_image[idx, 3])]
+            if element_symbol not in self.elements and not self.add_missing_elements:
+                continue
+            mask = self.atom_types == atom_type
+            if mask.any(): # if input peak_positions contains the element
+                candidate_peaks = self.peak_positions[mask]
+                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])
+                closest_peak = self.closest_peak(
+                    candidate_peaks,
+                    atom_position[:2],
+                    min_distance=distance_ref.min(),
+                )
+                if closest_peak is not None:
+                    atom_position_3d = np.append(
+                        closest_peak,
+                        [atom_position[2], atom_type],
+                    )
+                    coordinates = (
+                        np.vstack([coordinates, atom_position_3d])
+                        if coordinates.size
+                        else atom_position_3d
+                    )
+            else: # if input peak_positions does not contain the element
+                if coordinates.size == 0:
+                    continue
+                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])
+                # check if have any close peak within the search range
+                closest_peak = self.closest_peak(
+                    self.peak_positions,
+                    atom_position[:2],
+                    min_distance=distance_ref.min() * search_range,
+                )
+                if closest_peak is None:
+                    continue
+                # the element is not in the peak_positions, we will add it according to the neigboring peak positions with the symmetry preserved
+                neighbor_sites = self.neighbor_site(site_idx=idx, cutoff=distance_ref.min() * search_range*self.pixel_size)
+                # # remove the same element in the neighbour_list
+                # neighbor_list = [
+                #     neighbour
+                #     for neighbour in neighbor_list
+                #     if neighbour.species != site.species
+                # ]
+                if len(neighbor_sites) < 1:
+                    continue
+                # find the peak positions of the neighbors in the coordinates
+                sites_transformed = self.sites_mapping(
+                    ref=ref,
+                    sites=neighbor_sites,
+                    plot=False
+                )
+                displacement_list = []
+                for site_transformed in sites_transformed:
+                    atom_type_site = int(site_transformed[3])
+                    element_site = self.elements[atom_type_site]
+                    distance_ref = np.array([d for d in self.min_distances()[element_site].values()])
+                    site_position = site_transformed[:3]
+                    if np.ndim(coordinates) == 1:
+                        candidate_peaks = coordinates[
+                            coordinates[3] == atom_type_site
                         ]
-                        if len(neighbor_list) < 1:
-                            continue
-                        # find the peak positions of the neighbors in the coordinates
-                        ref = (origin, self.a, self.b, self.c)
-                        sites_transformed = self.sites_mapping(
-                            ref=ref,
-                            sites=neighbor_list,
-                            plot=False
-                        )
-                        displacement_list = []
-                        for site_transformed in sites_transformed:
-                            atom_type_site = int(site_transformed[3])
-                            element_site = self.elements[atom_type_site]
-                            distance_ref = np.array([d for d in self.min_distances()[element_site].values()])
-                            site_position = site_transformed[:3]
-                            if np.ndim(coordinates) == 1:
-                                candidate_peaks = coordinates[
-                                    coordinates[3] == atom_type_site
-                                ]
-                            else:
-                                candidate_peaks = coordinates[
-                                    coordinates[:, 3] == atom_type_site
-                                ]
-                            if candidate_peaks.size == 0:
-                                continue
-                            else:
-                                candidate_peaks = candidate_peaks[:, :2]
-                            closest_peak = self.closest_peak(
-                                candidate_peaks,
-                                site_position[:2],
-                                min_distance=distance_ref.min(),
-                            )
-                            # get the displacement of the site_position
-                            if closest_peak is not None:
-                                displacement = closest_peak[:2] - site_position[:2]
-                                displacement_list.append(displacement)
-                            else:
-                                continue
-                        # get the average displacement of the neighbor_list
-                        if len(displacement_list) > 0:
-                            displacement = np.mean(displacement_list, axis=0)
-                            atom_position[:2] = atom_position[:2] + displacement
-                        # atom_position[:2] = atom_position[:2] * self.pixel_size
-                        atom_position_3d = np.append(atom_position, atom_type)
-                        coordinates = (
-                            np.vstack([coordinates, atom_position_3d])
-                            if coordinates.size
-                            else atom_position_3d
-                        )
+                    else:
+                        candidate_peaks = coordinates[
+                            coordinates[:, 3] == atom_type_site
+                        ]
+                    if candidate_peaks.size == 0:
+                        continue
+                    else:
+                        candidate_peaks = candidate_peaks[:, :2]
+                    closest_peak = self.closest_peak(
+                        candidate_peaks,
+                        site_position[:2],
+                        min_distance=distance_ref.min(),
+                    )
+                    # get the displacement of the site_position
+                    if closest_peak is not None:
+                        displacement = closest_peak[:2] - site_position[:2]
+                        displacement_list.append(displacement)
+                    else:
+                        continue
+                # get the average displacement of the neighbor_list
+                if len(displacement_list) > 0:
+                    displacement = np.mean(displacement_list, axis=0)
+                    atom_position[:2] = atom_position[:2] + displacement
+                # atom_position[:2] = atom_position[:2] * self.pixel_size
+                atom_position_3d = np.append(atom_position, atom_type)
+                coordinates = (
+                    np.vstack([coordinates, atom_position_3d])
+                    if coordinates.size
+                    else atom_position_3d
+                )
         return coordinates
 
     def supercell_with_refined_peaks(self, a_limit=1, b_limit=1):
@@ -627,7 +598,7 @@ class CrystalAnalyzer:
         ylo = np.min(coordinates[:, 1])
         yhi = np.max(coordinates[:, 1])
         zlo = np.min(coordinates[:, 2])
-        zhi = max(np.max(coordinates[:, 2]), self.unitcell.lattice.c)
+        zhi = max(np.max(coordinates[:, 2]), self.unitcell.cell[2, 2])
 
         with open(filename, "w") as f:
             f.write("# LAMMPS data file written by QEM\n\n")
@@ -638,9 +609,11 @@ class CrystalAnalyzer:
             f.write(f"{ylo} {yhi} ylo yhi\n")
             f.write(f"{zlo} {zhi} zlo zhi\n\n")
             f.write("Masses\n\n")
-            f.write("1 88.90585  # Y3+\n")
-            f.write("2 26.981538  # Al3+\n")
-            # f.write("3 15.9994  # O2-\n\n")
+            for atom_type in range(total_types):
+                element = self.elements[atom_type]
+                weight = Atom(element).mass
+                f.write(f"{atom_type+1} {weight} # {element}\n")
+            f.write("\n")
             f.write("Atoms  # atomic\n\n")
             idx = 0
             for atom_type in np.unique(atom_types):
@@ -682,3 +655,35 @@ class CrystalAnalyzer:
                     + "\n"
                 )
         f.close()
+
+    @staticmethod   
+    def transform_coordinates(frac_coords, a, b, c):
+        # Construct the transformation matrix with a, b, c as its columns
+        transform_matrix = np.array(
+            [a, b, c]
+        ).T  # Take the transpose to get the vectors as columns
+        # Convert the old coordinates to a numpy array (if not already)
+        frac_coords = np.array(frac_coords)
+        # Multiply the transpose of T by the old coordinates to get the new coordinates
+        new_coords = np.dot(transform_matrix, frac_coords.T).T
+        return new_coords
+
+    @staticmethod
+    def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
+        """
+        Checks if the given element is present in each site of the unit cell.
+
+        Args:
+        - unitcell (Structure): The unit cell to check.
+        - element_symbol (str): The symbol of the element to check for (e.g., "O" for oxygen).
+
+        Returns:
+        - A list of booleans, where each boolean indicates whether the target element
+        is present in the corresponding site of the unit cell.
+        """
+        mask = []
+        for site in unitcell:
+            mask.append(site.symbol == element_symbol)
+        return mask
+
+
