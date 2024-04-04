@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from qem.gui_classes import InteractivePlot
 from pymatgen.core.structure import Structure
 from qem.color import get_unique_colors
-
+from pymatgen.transformations.advanced_transformations import SupercellTransformation
 
 def transform_coordinates(frac_coords, a, b, c):
     # Construct the transformation matrix with a, b, c as its columns
@@ -113,10 +113,6 @@ class CrystalAnalyzer:
         self.c = np.array([0, 0, self.unitcell.lattice.c])
 
     def transform(self, transformation_matrix):
-        from pymatgen.transformations.advanced_transformations import (
-            SupercellTransformation,
-        )
-
         self.unitcell = SupercellTransformation(
             scaling_matrix=transformation_matrix
         ).apply_transformation(self.unitcell)
@@ -228,38 +224,6 @@ class CrystalAnalyzer:
         if plot:
             plt.subplots()
             plt.imshow(self.image, cmap="gray")
-            # plot the a and b vectors
-            plt.arrow(
-                self.origin[0],
-                self.origin[1],
-                self.a[0],
-                self.a[1],
-                color="k",
-                head_width=10,
-                head_length=10,
-            )
-            plt.arrow(
-                self.origin[0],
-                self.origin[1],
-                self.b[0],
-                self.b[1],
-                color="k",
-                head_width=10,
-                head_length=10,
-            )
-            # label the a and b vectors
-            plt.text(
-                self.origin[0] + self.a[0],
-                self.origin[1] + self.a[1],
-                "a",
-                fontsize=20,
-            )
-            plt.text(
-                self.origin[0] + self.b[0],
-                self.origin[1] + self.b[1],
-                "b",
-                fontsize=20,
-            )
             color_iterator = get_unique_colors()
             for atom_type in np.unique(self.atom_types):
                 mask_element = self.atom_types == atom_type
@@ -288,6 +252,39 @@ class CrystalAnalyzer:
             plt.legend()
             plt.setp(plt.gca(), aspect="equal", adjustable="box")
             # plt.gca().invert_yaxis()
+            
+            # plot the a and b vectors
+            plt.arrow(
+                self.origin[0],
+                self.origin[1],
+                self.a[0],
+                self.a[1],
+                color="k",
+                head_width=5,
+                head_length=5,
+            )
+            plt.arrow(
+                self.origin[0],
+                self.origin[1],
+                self.b[0],
+                self.b[1],
+                color="k",
+                head_width=5,
+                head_length=5,
+            )
+            # label the a and b vectors
+            plt.text(
+                self.origin[0] + self.a[0],
+                self.origin[1] + self.a[1],
+                "a",
+                fontsize=20,
+            )
+            plt.text(
+                self.origin[0] + self.b[0],
+                self.origin[1] + self.b[1],
+                "b",
+                fontsize=20,
+            )
         return unitcell_transformed
 
     def sites_mapping(self, sites, ref=None, plot=True):

@@ -16,7 +16,6 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
-from pymatgen.core.structure import Structure
 from qem.color import get_unique_colors
 from qem.model import (add_gaussian_at_positions, butterworth_window,
                         gaussian_2d_numba, gaussian_sum_parallel, mask_grads, voigt_parallel)
