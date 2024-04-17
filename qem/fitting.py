@@ -139,7 +139,7 @@ class ImageModelFitting:
         """
         self._atom_types = atom_types
 
-    def map_lattice(self, cif_file:str, elements:list[str],min_distance=20, add_missing_atoms:bool=False):
+    def map_lattice(self, cif_file:str, elements:list[str], min_distance=10,a_limit=25, b_limit=15, add_missing_atoms:bool=False):
         """
         Find the peaks in the image based on the CIF file.
 
@@ -157,7 +157,7 @@ class ImageModelFitting:
         # crystal_analyzer.b = np.array([-117.33065449 , -99.18509708,0])
         # crystal_analyzer.c = np.array([0.,0., crystal_analyzer.unitcell.lattice.c])
         crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
-        crystal_analyzer.generate_supercell_lattice(a_limit=25, b_limit=15)
+        crystal_analyzer.generate_supercell_lattice(a_limit=a_limit, b_limit=b_limit)
         peak_positions, atom_types = crystal_analyzer.supercell_project_2d()
         crystal_analyzer.peak_positions = peak_positions
         crystal_analyzer.atom_types = atom_types
