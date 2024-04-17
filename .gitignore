@@ -9,3 +9,6 @@ tests/__pycache__/__init__.cpython-311.pyc
 tests/__pycache__/test_crystal_analyzer.cpython-311-pytest-8.1.1.pyc
 tests/__pycache__/test_GMM.cpython-311-pytest-8.1.1.pyc
 tests/__pycache__/test_preprocessing.cpython-311-pytest-8.1.1.pyc
+examples/*.cif
+examples/*.lmp
+examples/*.xyz
