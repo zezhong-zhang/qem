@@ -1,3 +1,4 @@
+from distutils import dist
 import numpy as np
 import matplotlib.pyplot as plt
 from qem.gui_classes import InteractivePlot
@@ -130,7 +131,7 @@ class CrystalAnalyzer:
             distance = np.linalg.norm(
                 self.peak_positions - site[:2], axis=1
             )
-            distance_ref = np.array([d for d in self.min_distances()[element].values()])
+            distance_ref = np.array([d for d in self.min_distances()[element].values()])/self.pixel_size
             if distance.min() < distance_ref.max():
                 mask_close[idx] = True
         self.coordinates = supercell_in_image[mask_close]
@@ -353,26 +354,43 @@ class CrystalAnalyzer:
             return self._min_distances
         else:
             min_distances = {}
-            elements = self.get_unitcell_elements()
-            unitcell_in_image = self.unitcell_mapping(plot=False)
-            for element1 in elements:
-                for element2 in elements:  # Only calculate for unique pairs or self-pairs to avoid redundancy
-                    mask1 = self.check_element_in_unitcell(self.unitcell, element1)
-                    mask2 = self.check_element_in_unitcell(self.unitcell, element2)
-                    element1_positions = unitcell_in_image[mask1][:, :2]
-                    element2_positions = unitcell_in_image[mask2][:, :2]
-                    distances = np.linalg.norm(element1_positions[:, None] - element2_positions, axis=2)
-                    np.fill_diagonal(distances, np.inf)  # Avoid zero distance for self-comparisons
-                    distances = distances[distances != np.inf]  # Filter out the infinity values
-                    distances = distances[distances > 0]  # Filter out the zero values
-                    if distances.size > 0:
-                        min_distance = distances.min() / 2
-                        # Update min_distances correctly to include all element pairs
-                        if element1 not in min_distances:
-                            min_distances[element1] = {}
-                        min_distances[element1][element2] = min_distance
+            # unitcell_in_image = self.unitcell_mapping(plot=False)
+            cutoff = max(self.unitcell.cell.lengths())*2
+            i, j, d = neighbor_list("ijd", self.unitcell,cutoff)
+            for site in self.unitcell:
+                neighbor_sites = j[i == site.index]
+                distances = d[i == site.index]
+                element = site.symbol
+                neighbor_elements = [self.unitcell[n].symbol for n in neighbor_sites]
+                for other_element in np.unique(neighbor_elements):
+                    mask = np.array(neighbor_elements) == other_element
+                    distances_element = distances[mask]
+                    min_distance = distances_element[distances_element>0].min() / 2
+                    if element not in min_distances:
+                        min_distances[element] = {}
+                    min_distances[element][other_element] = min_distance
             self._min_distances = min_distances
             return min_distances
+
+
+            # for element1 in elements:
+            #     for element2 in elements:  # Only calculate for unique pairs or self-pairs to avoid redundancy
+            #         mask1 = self.check_element_in_unitcell(self.unitcell, element1)
+            #         mask2 = self.check_element_in_unitcell(self.unitcell, element2)
+            #         element1_positions = unitcell_coordinates[mask1][:, :2]
+            #         element2_positions = unitcell_coordinates[mask2][:, :2]
+            #         distances = np.linalg.norm(element1_positions[:, None] - element2_positions, axis=2)
+            #         # np.fill_diagonal(distances, np.inf)  # Avoid zero distance for self-comparisons
+            #         distances = distances[distances != np.inf]  # Filter out the infinity values
+            #         distances = distances[distances > 0]  # Filter out the zero values
+            #         if distances.size > 0:
+            #             min_distance = distances.min() / 2
+            #             # Update min_distances correctly to include all element pairs
+            #             if element1 not in min_distances:
+            #                 min_distances[element1] = {}
+            #             min_distances[element1][element2] = min_distance
+            # self._min_distances = min_distances
+            # return min_distances
 
     def shift_origin_adaptive(self, a_limit, b_limit):
         if self._origin_adaptive is not None:
@@ -441,7 +459,7 @@ class CrystalAnalyzer:
                                     distance = np.linalg.norm(
                                         self.peak_positions[mask_element] - site[:2], axis=1
                                     )
-                                    distance_ref = np.array([d for d in self.min_distances()[element].values()])
+                                    distance_ref = np.array([d for d in self.min_distances()[element].values()])/self.pixel_size
                                     if len(distance)>0 and distance.min() < distance_ref.min()/2:
                                         peak_selected = self.peak_positions[mask_element][np.argmin(distance)]
                                         # get the displacement of the site_position
@@ -481,7 +499,7 @@ class CrystalAnalyzer:
             mask = self.atom_types == atom_type
             if mask.any(): # if input peak_positions contains the element
                 candidate_peaks = self.peak_positions[mask]
-                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])
+                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])/self.pixel_size
                 closest_peak = self.closest_peak(
                     candidate_peaks,
                     atom_position[:2],
@@ -500,7 +518,7 @@ class CrystalAnalyzer:
             else: # if input peak_positions does not contain the element
                 if coordinates.size == 0:
                     continue
-                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])
+                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])/self.pixel_size
                 # check if have any close peak within the search range
                 closest_peak = self.closest_peak(
                     self.peak_positions,
@@ -510,7 +528,7 @@ class CrystalAnalyzer:
                 if closest_peak is None:
                     continue
                 # the element is not in the peak_positions, we will add it according to the neigboring peak positions with the symmetry preserved
-                neighbor_sites = self.neighbor_site(site_idx=idx, cutoff=distance_ref.min() * search_range*self.pixel_size)
+                neighbor_sites = self.neighbor_site(site_idx=idx, cutoff=distance_ref.min() * search_range)
                 # # remove the same element in the neighbour_list
                 # neighbor_list = [
                 #     neighbour
@@ -529,7 +547,7 @@ class CrystalAnalyzer:
                 for site_transformed in sites_transformed:
                     atom_type_site = int(site_transformed[3])
                     element_site = self.elements[atom_type_site]
-                    distance_ref = np.array([d for d in self.min_distances()[element_site].values()])
+                    distance_ref = np.array([d for d in self.min_distances()[element_site].values()])/self.pixel_size
                     site_position = site_transformed[:3]
                     if np.ndim(coordinates) == 1:
                         candidate_peaks = coordinates[
