@@ -1,18 +1,18 @@
 #%%
-import sys
-sys.path.insert(0,'D:/project/ from_linux/pyStatSTEM')
 import numpy as np
 import matplotlib.pyplot as plt
 import qem
+from qem.gaussian_mixture_model import GaussianMixtureModel
+from qem.classes import AtomicColumns
 import pytest
 
-def test_GMM(path_to_data="./Examples/Example_PtIr.mat", plot=False):
+def test_GMM(path_to_data="../examples/Example_PtIr.mat", plot=False):
     # Load data for comparison
     legacyStatSTEM = qem.io.read_legacyInputStatSTEM(path_to_data)
     outputStatSTEM = legacyStatSTEM["output"]
     atomcountsStatSTEM = legacyStatSTEM["atomcounting"]
 
-    columns = qem.AtomicColumns(
+    columns = AtomicColumns(
         "HAADF", outputStatSTEM["volumes"], outputStatSTEM["coordinates"][:, 0:2]
     )
 
@@ -24,7 +24,7 @@ def test_GMM(path_to_data="./Examples/Example_PtIr.mat", plot=False):
 
     # gmm_obj = pyStatSTEM.GaussianMixtureModelObject(columns.scs["HAADF"], columns.pos)
     # gmm_obj.GMM(20, criteria=["icl"], pos_init=(1, 0))
-    gmm_obj = qem.GaussianMixtureModel(columns.scs["HAADF"])
+    gmm_obj = GaussianMixtureModel(columns.scs["HAADF"])
     gmm_obj.GMM("test", 20, score_method=['icl'])
     
     if plot:
