@@ -2,3 +2,10 @@ data/
 qem/archieve/
 qem/__pycache__/
 .vscode/
+examples/ABO3.lammps
+examples/adf_aligned.hspy
+examples/SrTiO3_mp-5229_conventional_standard.cif
+tests/__pycache__/__init__.cpython-311.pyc
+tests/__pycache__/test_crystal_analyzer.cpython-311-pytest-8.1.1.pyc
+tests/__pycache__/test_GMM.cpython-311-pytest-8.1.1.pyc
+tests/__pycache__/test_preprocessing.cpython-311-pytest-8.1.1.pyc
