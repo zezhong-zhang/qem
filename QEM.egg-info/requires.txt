@@ -7,6 +7,8 @@ jupyter>=1.0
 h5py>=2.0
 tqdm>=4.19.4
 scikit-image>=0.14.2
+optax
+numba
 
 [dev]
 build
@@ -18,3 +20,6 @@ myst-parser
 hyperspy
 jupyterlab
 plotly
+jaxopt
+optax
+ase

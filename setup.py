@@ -32,7 +32,9 @@ setup(
             "hyperspy",
             "jupyterlab",
             "plotly",
-            "jaxopt"
+            "jaxopt",
+            "optax",
+            "ase"
         ],
     },
     tests_require=["pytest", "pytest-cov"],
