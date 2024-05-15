@@ -106,7 +106,12 @@ class ImageModelFitting:
         Returns:
             np.array: The Voronoi integration of the atomic columns.
         """
-        s = Signal2D(self.image - self.params["background"])
+        if self.params is None:
+            raise ValueError("Please initialize the parameters first.")
+        if self.fit_background:
+            s = Signal2D(self.image - self.params["background"])
+        else:
+            s = Signal2D(self.image)
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
         max_radius = self.params["sigma"].max() * 5
@@ -129,6 +134,18 @@ class ImageModelFitting:
             coordinates (np.array): The coordinates of the atomic columns.
         """
         self.coordinates = coordinates
+
+    def plot_coordinates(self, color="red", s=1):
+        """
+        Plot the coordinates of the atomic columns.
+
+        Args:
+            color (str, optional): The color of the atomic columns. Defaults to "red".
+            s (int, optional): The size of the atomic columns. Defaults to 1.
+        """
+        plt.imshow(self.image, cmap="gray")
+        plt.scatter(self.coordinates[:, 0], self.coordinates[:, 1], color=color, s=s)
+
 
     def import_atom_types(self, atom_types: np.ndarray):
         """
