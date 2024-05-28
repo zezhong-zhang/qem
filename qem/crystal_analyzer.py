@@ -11,9 +11,10 @@ import re
 from ase.neighborlist import neighbor_list
 
 class CrystalAnalyzer:
-    def __init__(self, image:np.ndarray, pixel_size:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str], add_missing_elements:bool=True):
+    def __init__(self, image:np.ndarray, pixel_size:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str], add_missing_elements:bool=True, units:str="angstrom"):
         self.image = image
         self.pixel_size = pixel_size
+        self.units = units
         self.peak_positions = peak_positions
         self.coordinates = np.array([])
         self.atom_types = atom_types
@@ -115,16 +116,13 @@ class CrystalAnalyzer:
         """
         supercell = np.array([]).reshape(0, 4)
         shift_origin_adaptive = self.shift_origin_adaptive(a_limit, b_limit)
-        # plt.imshow(self.image, cmap="gray")
+
         for translation, new_origin in shift_origin_adaptive.items():
             unitcell = self.unitcell_mapping(ref=(new_origin, self.a, self.b, self.c), plot=False)
             supercell = np.vstack([supercell, unitcell])
-            # plt.scatter(unitcell[:, 0], unitcell[:, 1], color="b",edgecolors="k")
-            # plt.scatter(new_origin[0], new_origin[1], color="r",edgecolors="k")
 
         mask = (supercell[:, :2] > 0).all(axis=1) & (supercell[:, :2] < self.image.shape).all(axis=1)
         supercell_in_image = supercell[mask]
-        # supercell_in_image[:, :2] = supercell_in_image[:, :2] * self.pixel_size
         mask_close = np.zeros(supercell_in_image.shape[0], dtype=bool)
         for idx, site in enumerate(supercell_in_image):
             element = self.elements[int(site[3])]
