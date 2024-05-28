@@ -362,35 +362,18 @@ class CrystalAnalyzer:
                 distances = d[i == site.index]
                 element = site.symbol
                 neighbor_elements = [self.unitcell[n].symbol for n in neighbor_sites]
+                distances_list = []
                 for other_element in np.unique(neighbor_elements):
                     mask = np.array(neighbor_elements) == other_element
                     distances_element = distances[mask]
                     min_distance = distances_element[distances_element>0].min() / 2
-                    if element not in min_distances:
-                        min_distances[element] = {}
-                    min_distances[element][other_element] = min_distance
+                    distances_list.append(min_distance)
+                    # if element not in min_distances:
+                    #     min_distances[element] = {}
+                    # min_distances[element][other_element] = min_distance
+                min_distances[element] = np.array(distances_list).min()
             self._min_distances = min_distances
             return min_distances
-
-
-            # for element1 in elements:
-            #     for element2 in elements:  # Only calculate for unique pairs or self-pairs to avoid redundancy
-            #         mask1 = self.check_element_in_unitcell(self.unitcell, element1)
-            #         mask2 = self.check_element_in_unitcell(self.unitcell, element2)
-            #         element1_positions = unitcell_coordinates[mask1][:, :2]
-            #         element2_positions = unitcell_coordinates[mask2][:, :2]
-            #         distances = np.linalg.norm(element1_positions[:, None] - element2_positions, axis=2)
-            #         # np.fill_diagonal(distances, np.inf)  # Avoid zero distance for self-comparisons
-            #         distances = distances[distances != np.inf]  # Filter out the infinity values
-            #         distances = distances[distances > 0]  # Filter out the zero values
-            #         if distances.size > 0:
-            #             min_distance = distances.min() / 2
-            #             # Update min_distances correctly to include all element pairs
-            #             if element1 not in min_distances:
-            #                 min_distances[element1] = {}
-            #             min_distances[element1][element2] = min_distance
-            # self._min_distances = min_distances
-            # return min_distances
 
     def shift_origin_adaptive(self, a_limit, b_limit):
         if self._origin_adaptive is not None:
@@ -431,47 +414,44 @@ class CrystalAnalyzer:
                         - shifted_origin_rigid,
                         axis=1,
                     )
-                    mask = distance < np.linalg.norm(self.a) + np.linalg.norm(self.b)
-                    if mask.sum() == 0:
-                        shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
-                    else:
-                        selected_keys = list(shifted_origin_adaptive.keys())[
-                            np.argmin(distance)
-                        ]
-                        # find the difference of a_shift and b_shift with the selected_keys
-                        a_shift_diff = a_shift - selected_keys[0]
-                        b_shift_diff = b_shift - selected_keys[1]
-                        shifted_origin_adaptive[(a_shift, b_shift)] = (
-                            shifted_origin_adaptive[selected_keys]
-                            + self.a * a_shift_diff
-                            + self.b * b_shift_diff
-                        )
-                        # check if the unitcell is close to any exisiting peak positions
-                        unitcell = self.unitcell_mapping(ref=(shifted_origin_adaptive[(a_shift, b_shift)], self.a, self.b, self.c), plot=False)
-                        mask = (unitcell[:, :2] > 0).all(axis=1) & (unitcell[:, :2] < self.image.shape).all(axis=1)
-                        unitcell_in_image = unitcell[mask]
-                        displacement_list = []
-                        if unitcell_in_image.size > 1:
-                            for site in unitcell_in_image:
-                                element = self.elements[int(site[3])]
-                                mask_element = self.atom_types == int(site[3])
-                                if mask_element.any():
-                                    distance = np.linalg.norm(
-                                        self.peak_positions[mask_element] - site[:2], axis=1
-                                    )
-                                    distance_ref = np.array([d for d in self.min_distances()[element].values()])/self.pixel_size
-                                    if len(distance)>0 and distance.min() < distance_ref.min()/2:
-                                        peak_selected = self.peak_positions[mask_element][np.argmin(distance)]
-                                        # get the displacement of the site_position
-                                        displacement = peak_selected - site[:2]
-                                        displacement_list.append(displacement)
-                            # update the shifted_origin_adaptive with the average displacement
-                            if len(displacement_list) > 0:
-                                displacement= np.mean(displacement_list, axis=0)
-                                displacement = np.array([displacement[0], displacement[1], 0])
-                                shifted_origin_adaptive[(a_shift, b_shift)] = (
-                                    shifted_origin_adaptive[(a_shift, b_shift)] + displacement
-                                )
+                    # mask = distance < np.linalg.norm(self.a) + np.linalg.norm(self.b)
+                    # if mask.sum() == 0:
+                    #     shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
+                    # else:
+                    selected_keys = list(shifted_origin_adaptive.keys())[
+                        np.argmin(distance)
+                    ]
+                    # find the difference of a_shift and b_shift with the selected_keys
+                    a_shift_diff = a_shift - selected_keys[0]
+                    b_shift_diff = b_shift - selected_keys[1]
+                    shifted_origin_adaptive[(a_shift, b_shift)] = (
+                        shifted_origin_adaptive[selected_keys]
+                        + self.a * a_shift_diff
+                        + self.b * b_shift_diff
+                    )
+                    # check if the unitcell is close to any exisiting peak positions
+                    unitcell = self.unitcell_mapping(ref=(shifted_origin_adaptive[(a_shift, b_shift)], self.a, self.b, self.c), plot=False)
+                    mask = (unitcell[:, :2] > 0).all(axis=1) & (unitcell[:, [1,0]] < self.image.shape).all(axis=1)
+                    unitcell_in_image = unitcell[mask]
+                    displacement_list = []
+                    if unitcell_in_image.size > 1:
+                        for site in unitcell_in_image:
+                            distance = np.linalg.norm(
+                                self.peak_positions - site[:2], axis=1
+                            )
+                            distance_ref = np.array([d for d in self.min_distances().values()])/self.pixel_size
+                            if len(distance)>0 and distance.min() < distance_ref.min()/2:
+                                peak_selected = self.peak_positions[np.argmin(distance)]
+                                # get the displacement of the site_position
+                                displacement = peak_selected - site[:2]
+                                displacement_list.append(displacement)
+                        # update the shifted_origin_adaptive with the average displacement
+                        if len(displacement_list) > 0:
+                            displacement= np.mean(displacement_list, axis=0)
+                            displacement = np.array([displacement[0], displacement[1], 0])
+                            shifted_origin_adaptive[(a_shift, b_shift)] = (
+                                shifted_origin_adaptive[(a_shift, b_shift)] + displacement
+                            )
             self._origin_adaptive = shifted_origin_adaptive
             return shifted_origin_adaptive
 
