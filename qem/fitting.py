@@ -22,10 +22,11 @@ from qem.model import (add_gaussian_at_positions, butterworth_window,
 from qem.utils import ( get_random_indices_in_batches, remove_close_coordinates)
 from qem.gui_classes import InteractivePlot
 from qem.voronoi import integrate
+from matplotlib_scalebar.scalebar import ScaleBar
 
 logging.basicConfig(level=logging.INFO)
 class ImageModelFitting:
-    def __init__(self, image: np.ndarray, pixel_size: float = 1.0):
+    def __init__(self, image: np.ndarray, pixel_size: float = 1.0, units: str = "A"):
         """
         Initialize the Fitting class.
 
@@ -42,6 +43,7 @@ class ImageModelFitting:
         self.model = np.zeros(image.shape)
         self.local_shape = image.shape
         self.pixel_size = pixel_size
+        self.units = units
         self._atom_types = np.array([])
         self.atoms_selected = np.array([])
         self.coordinates = np.array([])
@@ -169,10 +171,6 @@ class ImageModelFitting:
         from qem.crystal_analyzer import CrystalAnalyzer
         crystal_analyzer = CrystalAnalyzer(image = self.image, pixel_size = self.pixel_size, peak_positions = self.coordinates, atom_types = self.atom_types, elements=elements)
         crystal_analyzer.import_crystal_structure(cif_file)
-        # crystal_analyzer.origin = np.array([798., 768., 0])
-        # crystal_analyzer.a = np.array([  30., -36.,0])
-        # crystal_analyzer.b = np.array([-117.33065449 , -99.18509708,0])
-        # crystal_analyzer.c = np.array([0.,0., crystal_analyzer.unitcell.lattice.c])
         crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
         crystal_analyzer.generate_supercell_lattice(a_limit=a_limit, b_limit=b_limit)
         peak_positions, atom_types = crystal_analyzer.supercell_project_2d()
@@ -361,10 +359,19 @@ class ImageModelFitting:
         # x = np.arange(self.nx) * self.pixel_size
         # y = np.arange(self.ny) * self.pixel_size
         plt.subplot(1, 2, 1)
-        plt.imshow(self.image, cmap="gray")
+        im = plt.imshow(self.image, cmap="gray")
+        plt.axis("off")
+        plt.colorbar(im,fraction=0.046, pad=0.04)
+        plt.tight_layout()
+        scalebar = ScaleBar(self.pixel_size, self.units, location='lower right')
+        plt.gca().add_artist(scalebar)
         plt.gca().set_aspect("equal", adjustable="box")
         plt.subplot(1, 2, 2)
         plt.hist(self.image.ravel(), bins=256)
+        plt.xlabel("Intensity")
+        plt.ylabel("Counts")
+        plt.tight_layout()
+        
 
     def guess_radius(self):
         """
