@@ -26,13 +26,13 @@ from matplotlib_scalebar.scalebar import ScaleBar
 
 logging.basicConfig(level=logging.INFO)
 class ImageModelFitting:
-    def __init__(self, image: np.ndarray, pixel_size: float = 1.0, units: str = "A"):
+    def __init__(self, image: np.ndarray, dx: float = 1.0, units: str = "A"):
         """
         Initialize the Fitting class.
 
         Args:
             image (np.array): The input image as a numpy array.
-            pixel_size (float, optional): The size of each pixel. Defaults to 1.
+            dx (float, optional): The size of each pixel. Defaults to 1.
         """
 
         if len(image.shape) == 2:
@@ -42,7 +42,7 @@ class ImageModelFitting:
         self.image = image.astype(np.float32)
         self.model = np.zeros(image.shape)
         self.local_shape = image.shape
-        self.pixel_size = pixel_size
+        self.dx = dx
         self.units = units
         self._atom_types = np.array([])
         self.atoms_selected = np.array([])
@@ -84,10 +84,10 @@ class ImageModelFitting:
     def volume(self):
         params = self.params
         if self.fitting_model == "gaussian":
-            return params["height"] * params["sigma"]**2 * np.pi * 2 *self.pixel_size**2
+            return params["height"] * params["sigma"]**2 * np.pi * 2 *self.dx**2
         elif self.fitting_model == "voigt":
-            gaussian_contrib = params["height"] * params["sigma"]**2 * np.pi * 2 * params["ratio"] *self.pixel_size**2
-            lorentzian_contrib = params["height"] * params["gamma"] * 2 * np.pi * (1 - params["ratio"]) *self.pixel_size**2
+            gaussian_contrib = params["height"] * params["sigma"]**2 * np.pi * 2 * params["ratio"] *self.dx**2
+            lorentzian_contrib = params["height"] * params["gamma"] * 2 * np.pi * (1 - params["ratio"]) *self.dx**2
             return gaussian_contrib + lorentzian_contrib
 
     @property
@@ -118,8 +118,8 @@ class ImageModelFitting:
         pos_y = self.params["pos_y"]
         max_radius = self.params["sigma"].max() * 5
         integrated_intensity, intensity_record, point_record = integrate(s, pos_x, pos_y, max_radius=max_radius)
-        integrated_intensity = integrated_intensity * self.pixel_size**2
-        intensity_record = intensity_record * self.pixel_size**2
+        integrated_intensity = integrated_intensity * self.dx**2
+        intensity_record = intensity_record * self.dx**2
         self._voronoi_volume = integrated_intensity
         self._voronoi_map = intensity_record
         self._voronoi_cell = point_record
@@ -169,7 +169,7 @@ class ImageModelFitting:
             exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
         """
         from qem.crystal_analyzer import CrystalAnalyzer
-        crystal_analyzer = CrystalAnalyzer(image = self.image, pixel_size = self.pixel_size, peak_positions = self.coordinates, atom_types = self.atom_types, elements=elements)
+        crystal_analyzer = CrystalAnalyzer(image = self.image, dx = self.dx, peak_positions = self.coordinates, atom_types = self.atom_types, elements=elements,units=self.units)
         crystal_analyzer.import_crystal_structure(cif_file)
         crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
         crystal_analyzer.generate_supercell_lattice(a_limit=a_limit, b_limit=b_limit)
@@ -356,22 +356,35 @@ class ImageModelFitting:
 
     def plot(self):
         plt.figure(figsize=(10, 5))
-        # x = np.arange(self.nx) * self.pixel_size
-        # y = np.arange(self.ny) * self.pixel_size
+        # x = np.arange(self.nx) * self.dx
+        # y = np.arange(self.ny) * self.dx
         plt.subplot(1, 2, 1)
         im = plt.imshow(self.image, cmap="gray")
         plt.axis("off")
+        scalebar = self.scalebar
+        plt.gca().add_artist(scalebar)
         plt.colorbar(im,fraction=0.046, pad=0.04)
         plt.tight_layout()
-        scalebar = ScaleBar(self.pixel_size, self.units, location='lower right')
         plt.gca().add_artist(scalebar)
         plt.gca().set_aspect("equal", adjustable="box")
+        plt.title("Image")
         plt.subplot(1, 2, 2)
         plt.hist(self.image.ravel(), bins=256)
         plt.xlabel("Intensity")
         plt.ylabel("Counts")
+        plt.title("Intensity Histogram")
         plt.tight_layout()
         
+    @property
+    def scalebar(self):
+        scalebar = ScaleBar(
+            self.dx,
+            units=self.units,
+            location="lower right",
+            length_fraction=0.2,
+            font_properties={"size": 20},
+        )
+        return scalebar
 
     def guess_radius(self):
         """
@@ -437,7 +450,7 @@ class ImageModelFitting:
         if guess_radius:
             width = self.guess_radius()[0]
         else:
-            width = atom_size / self.pixel_size
+            width = atom_size / self.dx
         # self.center_of_mass()
         pos_x = copy.deepcopy(self.coordinates[:, 0])
         pos_y = copy.deepcopy(self.coordinates[:, 1])
@@ -1100,3 +1113,27 @@ class ImageModelFitting:
             elif key == "background":
                 params[key] = jnp.clip(value, 0, np.max(self.image))
         return params
+
+##### plot functions
+    def plot_fitting(self):
+        plt.figure(figsize=(15, 5))
+        vmin = self.image.min()
+        vmax = self.image.max()
+        plt.subplot(1, 3, 1)
+        im = plt.imshow(self.image, cmap="gray", vmin=vmin, vmax=vmax)
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.title("Original Image")
+        plt.tight_layout()
+        plt.subplot(1, 3, 2)
+        im = plt.imshow(self.model, cmap="gray", vmin=vmin, vmax=vmax)
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.title("Model")
+        plt.tight_layout()
+        plt.subplot(1, 3, 3)
+        im = plt.imshow(self.image - self.model, cmap="gray")
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.title("Residual")
+        plt.tight_layout()

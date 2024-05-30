@@ -7,6 +7,7 @@ import logging
 from qem.color import get_unique_colors
 import os 
 logging.basicConfig(level=logging.INFO)
+from matplotlib_scalebar.scalebar import ScaleBar
 
 
 def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False):
@@ -133,13 +134,21 @@ class InteractivePlot:
         self,
         image: np.ndarray,
         peaks_locations: np.ndarray,
-        atom_types: np.ndarray,
+        atom_types: np.ndarray = None,
         tolerance: float = 10,
+        dx: float = 1,
+        units: str = "A",
+        dimension:str ="si-length",
     ):
         self.pos_x = peaks_locations[:, 0]
         self.pos_y = peaks_locations[:, 1]
+        if atom_types is None:
+            atom_types = np.zeros(len(peaks_locations))
         self.atom_types = atom_types
         self.image = image
+        self.dx = dx
+        self.units = units
+        self.dimension = dimension
         self.tolerance = tolerance
         self.scatter_plot = None
         # Added attributes for vector selection
@@ -168,9 +177,21 @@ class InteractivePlot:
             title = "Double click to add or remove peaks."
             self.update_plot(title)
 
+    @property
+    def scalebar(self):
+        scalebar = ScaleBar(
+            self.dx,
+            units=self.units,
+            location="lower right",
+            dimension=self.dimension,
+        )
+        return scalebar
+
     def update_plot(self, title):
         plt.clf()
         plt.imshow(self.image)
+        scalebar = self.scalebar
+        plt.gca().add_artist(scalebar)
         plt.title(title)
         color_iterator = get_unique_colors()
         for atom_type in np.unique(self.atom_types):
@@ -269,6 +290,7 @@ class InteractivePlot:
             head_length=10,
             fc="black",
             ec="black",
+            length_includes_head=True,
         )
         plt.text(
             (start[0] + end[0]) / 2,
@@ -297,8 +319,9 @@ class InteractivePlot:
 
         if selected:
             print(
-                f"Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}"
+                f"In pixel: Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}"
             )
+            print(f"In space: Origin: {self.origin*self.dx} {self.units}, Vector a: {self.vector_a*self.dx} {self.units}, Vector b: {self.vector_b*self.dx} {self.units}")
             return self.origin, self.vector_a, self.vector_b
         else:
             print("Selection incomplete.")
