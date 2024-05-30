@@ -9,21 +9,21 @@ from ase.io import read
 from ase import Atoms, Atom
 import re
 from ase.neighborlist import neighbor_list
+from skimage.feature import peak_local_max
 
 class CrystalAnalyzer:
-    def __init__(self, image:np.ndarray, pixel_size:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str], add_missing_elements:bool=True, units:str="angstrom"):
+    def __init__(self, image:np.ndarray, dx:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str], add_missing_elements:bool=True, units:str="angstrom"):
         self.image = image
-        self.pixel_size = pixel_size
+        self.dx = dx
         self.units = units
         self.peak_positions = peak_positions
         self.coordinates = np.array([])
         self.atom_types = atom_types
         self.elements = elements
         self.unitcell = Atoms
-        self.origin = np.array([0, 0, 0])
-        self.a = np.array([1, 0, 0])
-        self.b = np.array([0, 1, 0])
-        self.c = np.array([0, 0, 1])
+        self.origin = np.array([0, 0])
+        self.a = np.array([1, 0])
+        self.b = np.array([0, 1])
         self._min_distances = None
         self._origin_adaptive = None
         self.neighbor_site_dict = {}
@@ -55,29 +55,45 @@ class CrystalAnalyzer:
         Returns:
         - The selected origin, a, and b vectors.
         """
-        interactive_plot = InteractivePlot(
+        real_plot = InteractivePlot(
             image=self.image, 
             peaks_locations=self.peak_positions,
             atom_types=self.atom_types,
-            tolerance=tolerance
+            tolerance=tolerance,
+            dx=self.dx,
+            units = self.units
         )
-        origin, a, b = interactive_plot.select_vectors()
-        # check origin, a, b are numpy array
-        assert isinstance(origin, np.ndarray), "origin should be a numpy array"
-        assert isinstance(a, np.ndarray), "a should be a numpy array"
-        assert isinstance(b, np.ndarray), "b should be a numpy array"
-        self.origin = np.array([origin[0], origin[1], 0])
-        self.a = np.array([a[0], a[1], 0])
-        self.b = np.array([b[0], b[1], 0])
-        self.c = self.unitcell.cell[2]
-        return origin, a, b
+        real_origin, real_a, real_b = real_plot.select_vectors()
 
-    def import_crystal_structure(self, cif_file_path):
+        fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
+        fft_peaks = peak_local_max(fft_image, min_distance=20,threshold_abs=10*np.mean(fft_image))
+        fft_dx = 1/(self.dx*self.image.shape[0])
+        fft_plot = InteractivePlot(np.log(fft_image),fft_peaks,dx=fft_dx,units=f"1/{self.units}",dimension='si-length-reciprocal')
+        fft_origin, fft_a, fft_b = fft_plot.select_vectors()
+        # normalize the fft vectors
+        unit_vector_a = fft_a / np.linalg.norm(fft_a)
+        unit_vector_b = fft_b / np.linalg.norm(fft_b)
+        scale_a = 1/(np.linalg.norm(fft_a) * fft_dx)/self.dx
+        scale_b = 1/(np.linalg.norm(fft_b) * fft_dx)/self.dx
+        fft_real_a = unit_vector_a * scale_a
+        fft_real_b = unit_vector_b * scale_b
+
+        # check origin, a, b are numpy array
+        assert isinstance(real_origin, np.ndarray), "origin should be a numpy array"
+        assert isinstance(fft_real_a, np.ndarray), "a should be a numpy array"
+        assert isinstance(fft_real_b, np.ndarray), "b should be a numpy array"
+        self.origin = real_origin
+        self.a = fft_real_a
+        self.b = fft_real_b
+        return real_origin, real_a, real_b
+
+    def read_cif(self, cif_file_path):
         structure = read(cif_file_path)
         assert isinstance(structure, Atoms), "structure should be a ase Atoms object"
         mask = [atom.symbol in self.elements for atom in structure]
         structure = structure[mask]
         self.unitcell = structure
+        return structure
 
     # def transform(self, transformation_matrix):
     #     """
@@ -129,7 +145,7 @@ class CrystalAnalyzer:
             distance = np.linalg.norm(
                 self.peak_positions - site[:2], axis=1
             )
-            distance_ref = np.array([d for d in self.min_distances()[element].values()])/self.pixel_size
+            distance_ref = np.array([d for d in self.min_distances()[element].values()])/self.dx
             if distance.min() < distance_ref.max():
                 mask_close[idx] = True
         self.coordinates = supercell_in_image[mask_close]
@@ -175,11 +191,10 @@ class CrystalAnalyzer:
             origin = self.origin
             a = self.a
             b = self.b
-            c = self.c
         
         frac_positions = self.unitcell.cell.scaled_positions(self.unitcell.positions)
         unitcell_transformed = self.transform_coordinates(
-            frac_positions, a, b, c
+            frac_positions, a, b
         ) + origin
         atom_types = []
         for site in self.unitcell:
@@ -262,10 +277,9 @@ class CrystalAnalyzer:
             origin, a, b, c = ref
         else:   
             origin = self.origin
-            a = self.a
-            b = self.b
-            c = self.c
-                    
+            a = np.array([self.a[0], self.a[1], 0])
+            b = np.array([self.b[0], self.b[1], 0])
+            c = np.array([0, 0, self.c[2])
         frac_coords = np.array([site.scaled_position for site in sites])
         elements = [site.symbol for site in sites]
         atom_types = [self.elements.index(element) for element in elements]
@@ -391,17 +405,13 @@ class CrystalAnalyzer:
             order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
             # Find the closest peak to the origin to correct for drift
             shifted_origin_adaptive = {}
-            for a_shift, b_shift in order_mesh:
+            shifted_origin_adaptive[(0, 0)] = self.origin
+            for a_shift, b_shift in order_mesh[1:]:
                 shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
-                boundary = np.array(
-                    [[0, 0, 0], [self.image.shape[1], self.image.shape[0], 0]]
-                )
-                boundary[0, :] = boundary[0, :] - np.abs(self.a + self.b) 
-                boundary[1, :] = boundary[1, :] + np.abs(self.a + self.b)
-                mask = (shifted_origin_rigid[:2] > boundary[0, :2]).all() and (
-                    shifted_origin_rigid[:2] < boundary[1, :2]
-                ).all()
-                if mask == False:
+                # check if shifted_origin_rigid is within the image
+                boudary = np.linalg.norm(self.a) + np.linalg.norm(self.b)
+                boudaries = np.array([boudary, boudary])
+                if (shifted_origin_rigid[:2] < -boudaries).any() or (shifted_origin_rigid[:2] > self.image.shape + boudaries).any():
                     continue
                 if a_shift == 0 and b_shift == 0:
                     shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid                
@@ -477,7 +487,7 @@ class CrystalAnalyzer:
             mask = self.atom_types == atom_type
             if mask.any(): # if input peak_positions contains the element
                 candidate_peaks = self.peak_positions[mask]
-                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])/self.pixel_size
+                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])/self.dx
                 closest_peak = self.closest_peak(
                     candidate_peaks,
                     atom_position[:2],
@@ -496,7 +506,7 @@ class CrystalAnalyzer:
             else: # if input peak_positions does not contain the element
                 if coordinates.size == 0:
                     continue
-                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])/self.pixel_size
+                distance_ref = np.array([d for d in self.min_distances()[element_symbol].values()])/self.dx
                 # check if have any close peak within the search range
                 closest_peak = self.closest_peak(
                     self.peak_positions,
@@ -525,7 +535,7 @@ class CrystalAnalyzer:
                 for site_transformed in sites_transformed:
                     atom_type_site = int(site_transformed[3])
                     element_site = self.elements[atom_type_site]
-                    distance_ref = np.array([d for d in self.min_distances()[element_site].values()])/self.pixel_size
+                    distance_ref = np.array([d for d in self.min_distances()[element_site].values()])/self.dx
                     site_position = site_transformed[:3]
                     if np.ndim(coordinates) == 1:
                         candidate_peaks = coordinates[
@@ -554,7 +564,7 @@ class CrystalAnalyzer:
                 if len(displacement_list) > 0:
                     displacement = np.mean(displacement_list, axis=0)
                     atom_position[:2] = atom_position[:2] + displacement
-                # atom_position[:2] = atom_position[:2] * self.pixel_size
+                # atom_position[:2] = atom_position[:2] * self.dx
                 atom_position_3d = np.append(atom_position, atom_type)
                 coordinates = (
                     np.vstack([coordinates, atom_position_3d])
@@ -585,7 +595,7 @@ class CrystalAnalyzer:
 ####### export atomic structure #######
     def write_lammps(self, filename="ABO3.lammps"):
         coordinates = self.coordinates
-        coordinates[:, :2] = coordinates[:, :2] * self.pixel_size
+        coordinates[:, :2] = coordinates[:, :2] * self.dx
         total_atoms = len(self.coordinates)
         total_types = len(np.unique(self.coordinates[:, 3]))
         atom_types = self.coordinates[:, 3].astype(int)
@@ -632,7 +642,7 @@ class CrystalAnalyzer:
 
     def write_xyz(self, filename="ABO3.xyz"):
         coordinates = self.coordinates
-        coordinates[:, :2] = coordinates[:, :2] * self.pixel_size
+        coordinates[:, :2] = coordinates[:, :2] * self.dx
         total_atoms = len(coordinates)
         with open(filename, "w") as f:
             f.write(str(total_atoms) + "\n")
@@ -653,8 +663,14 @@ class CrystalAnalyzer:
         f.close()
 
     @staticmethod   
-    def transform_coordinates(frac_coords, a, b, c):
+    def transform_coordinates(frac_coords, a, b):
         # Construct the transformation matrix with a, b, c as its columns
+        # if a and b is 1D array with shape of (2,), convert to (3,) by adding 0
+        if a.ndim == 1 and a.size == 2:
+            a = np.append(a, 0)
+        if b.ndim == 1 and b.size == 2:
+            b = np.append(b, 0)
+        c = np.array([0, 0, 1])
         transform_matrix = np.array(
             [a, b, c]
         ).T  # Take the transpose to get the vectors as columns
