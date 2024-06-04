@@ -54,11 +54,11 @@ def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False)
     if invert_selection:
         bool_array = np.invert(bool_array)
     atom_positions_selected = atom_positions[bool_array]
-    return atom_positions_selected
+    return atom_positions_selected, bool_array
 
 
 class GetAtomSelection:
-    def __init__(self, image, atom_positions, invert_selection=False):
+    def __init__(self, image, atom_positions, invert_selection=False, size=1):
         """Get a subset of atom positions using interactive tool.
 
         Access the selected atom positions in the
@@ -79,6 +79,7 @@ class GetAtomSelection:
 
         """
         self.image = image
+        self.size = size
         self.atom_positions = np.array(atom_positions)
         self.invert_selection = invert_selection
         self.atom_positions_selected = np.ndarray(shape=(0, 2))
@@ -91,9 +92,10 @@ class GetAtomSelection:
         )
         self.cax = self.ax.imshow(self.image)
         self.line_non_selected = self.ax.plot(
-            self.atom_positions[:, 0], self.atom_positions[:, 1], "o", color="red"
+            self.atom_positions[:, 0], self.atom_positions[:, 1], "o", color="red", markersize=self.size
         )[0]
         self.line_selected = None
+        self.mask = None
         handle_props = dict(color="blue")
         props = dict(color="blue")
         self.poly = PolygonSelector(
@@ -102,10 +104,10 @@ class GetAtomSelection:
         self.fig.tight_layout()
 
     def onselect(self, verts):
-        atom_positions_selected = get_atom_selection_from_verts(
+        atom_positions_selected, selected = get_atom_selection_from_verts(
             self.atom_positions, verts, invert_selection=self.invert_selection
         )
-        atom_positions_not_selected = get_atom_selection_from_verts(
+        atom_positions_not_selected, not_selected = get_atom_selection_from_verts(
             self.atom_positions, verts, invert_selection=not self.invert_selection
         )
         if len(atom_positions_selected) != 0:
@@ -116,14 +118,17 @@ class GetAtomSelection:
                     "o",
                     color="green",
                 )[0]
-            else:
-                self.line_selected.set_data(
+
+        if self.invert_selection:
+            self.mask = not_selected
+            self.line_selected.set_data(
                     atom_positions_not_selected[:, 0], atom_positions_not_selected[:, 1]
                 )
+        else:
+            self.mask = selected
             self.line_selected.set_data(
                 atom_positions_selected[:, 0], atom_positions_selected[:, 1]
             )
-
         self.atom_positions_selected = atom_positions_selected
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()

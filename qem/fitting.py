@@ -23,6 +23,7 @@ from qem.utils import ( get_random_indices_in_batches, remove_close_coordinates)
 from qem.gui_classes import InteractivePlot
 from qem.voronoi import integrate
 from matplotlib_scalebar.scalebar import ScaleBar
+from qem.crystal_analyzer import CrystalAnalyzer
 
 logging.basicConfig(level=logging.INFO)
 class ImageModelFitting:
@@ -44,7 +45,7 @@ class ImageModelFitting:
         self.local_shape = image.shape
         self.dx = dx
         self.units = units
-        self._atom_types = np.array([])
+        self.atom_types = np.array([])
         self.atoms_selected = np.array([])
         self.coordinates = np.array([])
         self.fit_background = True
@@ -75,10 +76,6 @@ class ImageModelFitting:
         else:
             return butterworth_window(self.image.shape, 0.5, 10)
 
-    
-    @property
-    def atom_types(self):
-        return self._atom_types 
     
     @property
     def volume(self):
@@ -146,7 +143,10 @@ class ImageModelFitting:
             s (int, optional): The size of the atomic columns. Defaults to 1.
         """
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.coordinates[:, 0], self.coordinates[:, 1], color=color, s=s)
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            elements = self.elements[atom_type]
+            plt.scatter(self.coordinates[mask][:, 0], self.coordinates[mask][:, 1], s=s,label=elements)
 
 
     def import_atom_types(self, atom_types: np.ndarray):
@@ -156,7 +156,7 @@ class ImageModelFitting:
         Args:
             atom_types (np.array): The atom types of the atomic columns.
         """
-        self._atom_types = atom_types
+        self.atom_types = atom_types
 
     def map_lattice(self, cif_file:str, elements:list[str], min_distance=10,a_limit=25, b_limit=15, add_missing_atoms:bool=False):
         """
@@ -168,34 +168,34 @@ class ImageModelFitting:
             threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
             exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
         """
-        from qem.crystal_analyzer import CrystalAnalyzer
         crystal_analyzer = CrystalAnalyzer(image = self.image, dx = self.dx, peak_positions = self.coordinates, atom_types = self.atom_types, elements=elements,units=self.units)
         crystal_analyzer.read_cif(cif_file)
         crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
-        crystal_analyzer.generate_supercell_lattice(a_limit=a_limit, b_limit=b_limit)
-        peak_positions, atom_types = crystal_analyzer.supercell_project_2d()
+        supercell_in_image, supercell_atom_types = crystal_analyzer.generate_supercell_lattice(a_limit=a_limit, b_limit=b_limit)
+        peak_positions, atom_types = crystal_analyzer.supercell_project_2d(supercell_in_image, supercell_atom_types)
         crystal_analyzer.peak_positions = peak_positions
         crystal_analyzer.atom_types = atom_types
         crystal_analyzer.unitcell_mapping()
         self.coordinates = peak_positions
-        self._atom_types = atom_types
+        self.atom_types = atom_types
         return None
     
-    def select_region(self):
+    def select_region(self,invert_selection=False):
         from qem.gui_classes import GetAtomSelection
         atom_select = GetAtomSelection(
-            image=self.image, atom_positions=self.coordinates, invert_selection=False
+            image=self.image, atom_positions=self.coordinates, invert_selection=invert_selection
         )
         while plt.fignum_exists(atom_select.fig.number):
             plt.pause(0.1)
         peak_positions_selected = np.array(atom_select.atom_positions_selected)
+        selected = atom_select.mask
         if peak_positions_selected.shape[0] == 0:
             logging.info("No atoms selected.")
             return None
         else:
             logging.info(f"Selected {peak_positions_selected.shape[0]} atoms out of {self.num_coordinates} atoms.")
-            mask = np.isin(self.coordinates,peak_positions_selected).all(axis=1)
-            self._atom_types = self._atom_types[mask]
+            
+            self.atom_types = self.atom_types[selected]
             self.coordinates = peak_positions_selected
     
     def find_peaks(
@@ -223,10 +223,10 @@ class ImageModelFitting:
             exclude_border=exclude_border,
         )
         self.coordinates = peaks_locations[:,[1,0]].astype(float)
-        self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        self.atom_types = np.zeros(self.num_coordinates, dtype=int)
         self.add_or_remove_peaks(min_distance=min_distance, image=self.image
         )
-        self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        self.atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self.coordinates
 
     def refine_center_of_mass(self, windows_size:int=5, plot=False):
@@ -340,7 +340,7 @@ class ImageModelFitting:
         peaks_locations = [interactive_plot.pos_x, interactive_plot.pos_y]
         peaks_locations = np.array(peaks_locations).T.astype(float)
         self.coordinates = peaks_locations
-        self._atom_types = interactive_plot.atom_types
+        self.atom_types = interactive_plot.atom_types
         return peaks_locations
 
     def remove_peaks_outside_image(self):
