@@ -170,7 +170,7 @@ class ImageModelFitting:
         """
         from qem.crystal_analyzer import CrystalAnalyzer
         crystal_analyzer = CrystalAnalyzer(image = self.image, dx = self.dx, peak_positions = self.coordinates, atom_types = self.atom_types, elements=elements,units=self.units)
-        crystal_analyzer.import_crystal_structure(cif_file)
+        crystal_analyzer.read_cif(cif_file)
         crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
         crystal_analyzer.generate_supercell_lattice(a_limit=a_limit, b_limit=b_limit)
         peak_positions, atom_types = crystal_analyzer.supercell_project_2d()
