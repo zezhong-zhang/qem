@@ -1,18 +1,30 @@
-from distutils import dist
-import numpy as np
-import matplotlib.pyplot as plt
-from qem.gui_classes import InteractivePlot
-from pymatgen.core.structure import Structure
-from qem.color import get_unique_colors
-from pymatgen.transformations.advanced_transformations import SupercellTransformation
-from ase.io import read
-from ase import Atoms, Atom
 import re
+from distutils import dist
+
+import matplotlib.pyplot as plt
+import numpy as np
+from ase import Atom, Atoms
+from ase.io import read
 from ase.neighborlist import neighbor_list
+from pymatgen.core.structure import Structure
+from pymatgen.transformations.advanced_transformations import SupercellTransformation
 from skimage.feature import peak_local_max
 
+from qem.color import get_unique_colors
+from qem.gui_classes import InteractivePlot
+
+
 class CrystalAnalyzer:
-    def __init__(self, image:np.ndarray, dx:float, peak_positions:np.ndarray, atom_types:np.ndarray, elements:list[str], add_missing_elements:bool=True, units:str="A"):
+    def __init__(
+        self,
+        image: np.ndarray,
+        dx: float,
+        peak_positions: np.ndarray,
+        atom_types: np.ndarray,
+        elements: list[str],
+        add_missing_elements: bool = True,
+        units: str = "A",
+    ):
         self.image = image
         self.dx = dx
         self.units = units
@@ -56,34 +68,39 @@ class CrystalAnalyzer:
         - The selected origin, a, and b vectors.
         """
         real_plot = InteractivePlot(
-            image=self.image, 
+            image=self.image,
             peaks_locations=self.peak_positions,
             atom_types=self.atom_types,
             tolerance=tolerance,
             dx=self.dx,
-            units = self.units
+            units=self.units,
         )
         real_origin, real_a, real_b = real_plot.select_vectors()
 
         fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
-        fft_dx = 1/(self.dx*self.image.shape[0])
-        fft_tolerance = int(0.1/fft_dx)
-        fft_peaks = peak_local_max(fft_image, min_distance=fft_tolerance,threshold_abs=10*np.mean(fft_image))
-        fft_plot = InteractivePlot(np.log(fft_image),fft_peaks,dx=fft_dx,units=f"1/{self.units}",dimension='si-length-reciprocal',tolerance=fft_tolerance)
+        fft_dx = 1 / (self.dx * self.image.shape[0])
+        fft_tolerance = int(0.1 / fft_dx)
+        fft_peaks = peak_local_max(
+            fft_image, min_distance=fft_tolerance, threshold_abs=10 * np.mean(fft_image)
+        )
+        fft_plot = InteractivePlot(
+            np.log(fft_image),
+            fft_peaks,
+            dx=fft_dx,
+            units=f"1/{self.units}",
+            dimension="si-length-reciprocal",
+            tolerance=fft_tolerance,
+        )
         fft_origin, fft_a, fft_b = fft_plot.select_vectors()
         # normalize the fft vectors
         unit_vector_a = fft_a / np.linalg.norm(fft_a)
         unit_vector_b = fft_b / np.linalg.norm(fft_b)
-        scale_a = 1/(np.linalg.norm(fft_a) * fft_dx)/self.dx
-        scale_b = 1/(np.linalg.norm(fft_b) * fft_dx)/self.dx
+        scale_a = 1 / (np.linalg.norm(fft_a) * fft_dx) / self.dx
+        scale_b = 1 / (np.linalg.norm(fft_b) * fft_dx) / self.dx
         fft_real_a = unit_vector_a * scale_a
         fft_real_b = unit_vector_b * scale_b
         print(f"FFT real a: {fft_real_a} pixel, Real b: {fft_real_b} pixel")
 
-        # check origin, a, b are numpy array
-        assert isinstance(real_origin, np.ndarray), "origin should be a numpy array"
-        assert isinstance(fft_real_a, np.ndarray), "a should be a numpy array"
-        assert isinstance(fft_real_b, np.ndarray), "b should be a numpy array"
         self.origin = real_origin
         self.a = fft_real_a
         self.b = fft_real_b
@@ -114,12 +131,10 @@ class CrystalAnalyzer:
         if origin.size == 2:
             origin = np.append(origin, 0)
         c = self.unitcell.cell[2]
-        transform_matrix = np.array(
-            [a, b, c]
-        ).T
+        transform_matrix = np.array([a, b, c]).T
         # Convert the old coordinates to a numpy array (if not already)
         frac_coords = np.array(frac_coords)
-        
+
         # Multiply the transpose of T by the old coordinates to get the new coordinates
         new_coords = np.dot(transform_matrix, frac_coords.T).T
         new_coords = new_coords + origin
@@ -128,7 +143,7 @@ class CrystalAnalyzer:
     def get_unitcell_elements(self):
         """
         Get the elements present in the unit cell.
-    
+
         Returns:
         - element_symbols: The symbols of the elements present in the unit cell.
         """
@@ -136,7 +151,7 @@ class CrystalAnalyzer:
         formula = self.unitcell.symbols.__str__()
         assert isinstance(formula, str), "composition should be a string"
         # seperate the element symbols from the composition, split by numbers
-        elements = re.findall(r'[A-Z][a-z]*', formula)
+        elements = re.findall(r"[A-Z][a-z]*", formula)
         return elements
 
     def generate_supercell_lattice(self, a_limit=1, b_limit=1):
@@ -155,35 +170,41 @@ class CrystalAnalyzer:
         shift_origin_adaptive = self.shift_origin_adaptive(a_limit, b_limit)
 
         for translation, new_origin in shift_origin_adaptive.items():
-            unitcell, atom_types = self.unitcell_mapping(ref=(new_origin, self.a, self.b), plot=False)
+            unitcell, atom_types = self.unitcell_mapping(
+                ref=(new_origin, self.a, self.b), plot=False
+            )
             supercell = np.vstack([supercell, unitcell])
             supercell_atom_types = np.hstack([supercell_atom_types, atom_types])
 
-        mask = (supercell[:, :2] > 0).all(axis=1) & (supercell[:, [1,0]] < self.image.shape).all(axis=1)
+        mask = (supercell[:, :2] > 0).all(axis=1) & (
+            supercell[:, [1, 0]] < self.image.shape
+        ).all(axis=1)
         supercell_in_image = supercell[mask]
         supercell_atom_types = supercell_atom_types[mask].astype(int)
         mask_close = np.zeros(supercell_in_image.shape[0], dtype=bool)
         for idx, site in enumerate(supercell_in_image):
             element = self.elements[supercell_atom_types.astype(int)[idx]]
-            distance = np.linalg.norm(
-                self.peak_positions - site[:2], axis=1
-            )
-            distance_ref = self.min_distances[element]/self.dx
+            distance = np.linalg.norm(self.peak_positions - site[:2], axis=1)
+            distance_ref = self.min_distances[element] / self.dx
             if distance.min() < distance_ref:
                 mask_close[idx] = True
         self.coordinates = supercell_in_image[mask_close]
         self.atom_types = supercell_atom_types[mask_close]
         return supercell_in_image, supercell_atom_types
-    
+
     def supercell_project_2d(self, coordinates, atom_types):
         # get the unique 2d coordinates and atom types
-        unique_coordinates = np.unique(np.concatenate((coordinates[:, [0,1]],atom_types.reshape(-1,1)),axis=1), axis=0)
+        unique_coordinates = np.unique(
+            np.concatenate((coordinates[:, [0, 1]], atom_types.reshape(-1, 1)), axis=1),
+            axis=0,
+        )
         peak_positions = unique_coordinates[:, :2]
         atom_types = unique_coordinates[:, 2].astype(int)
         return peak_positions, atom_types
-    
+
     def select_region(self, peak_positions, atom_types):
         from qem.gui_classes import GetAtomSelection
+
         atom_select = GetAtomSelection(
             image=self.image, atom_positions=peak_positions, invert_selection=False
         )
@@ -191,7 +212,7 @@ class CrystalAnalyzer:
         while atom_select.atom_positions_selected.size == 0:
             plt.pause(0.1)
         peak_positions_selected = np.array(atom_select.atom_positions_selected)
-        mask = np.isin(peak_positions,peak_positions_selected).all(axis=1)
+        mask = np.isin(peak_positions, peak_positions_selected).all(axis=1)
         atom_types_selected = atom_types[mask]
         return peak_positions_selected, atom_types_selected
 
@@ -210,14 +231,13 @@ class CrystalAnalyzer:
         """
         if ref is not None:
             origin, a, b = ref
-        else:   
+        else:
             origin = self.origin
             a = self.a
             b = self.b
-        
+
         frac_positions = self.unitcell.cell.scaled_positions(self.unitcell.positions)
-        unitcell_transformed = self.transform(
-            frac_positions, a, b, origin)
+        unitcell_transformed = self.transform(frac_positions, a, b, origin)
         atom_types = []
         for site in self.unitcell:
             element_symbol = site.symbol
@@ -256,7 +276,7 @@ class CrystalAnalyzer:
             plt.legend()
             plt.setp(plt.gca(), aspect="equal", adjustable="box")
             # plt.gca().invert_yaxis()
-            
+
             # plot the a and b vectors
             plt.arrow(
                 self.origin[0],
@@ -294,7 +314,7 @@ class CrystalAnalyzer:
     def sites_mapping(self, sites, ref=None, plot=True):
         if ref is not None:
             origin, a, b = ref
-        else:   
+        else:
             origin = self.origin
             a = self.a
             b = self.b
@@ -391,8 +411,12 @@ class CrystalAnalyzer:
             # compute the distance in such meshgrid
             distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
             # apply the sort to the a_axis_mesh and b_axis_mesh
-            a_axis_mesh_sorted = a_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
-            b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
+            a_axis_mesh_sorted = a_axis_mesh.flatten()[
+                np.argsort(distance_mesh, axis=None)
+            ]
+            b_axis_mesh_sorted = b_axis_mesh.flatten()[
+                np.argsort(distance_mesh, axis=None)
+            ]
             order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
             # Find the closest peak to the origin to correct for drift
             shifted_origin_adaptive = {}
@@ -402,10 +426,12 @@ class CrystalAnalyzer:
                 # check if shifted_origin_rigid is within the image
                 boudary = np.linalg.norm(self.a) + np.linalg.norm(self.b)
                 boudaries = np.array([boudary, boudary])
-                if (shifted_origin_rigid[[1,0]] < -boudaries).any() or (shifted_origin_rigid[[1,0]] > self.image.shape + boudaries).any():
+                if (shifted_origin_rigid[[1, 0]] < -boudaries).any() or (
+                    shifted_origin_rigid[[1, 0]] > self.image.shape + boudaries
+                ).any():
                     continue
                 if a_shift == 0 and b_shift == 0:
-                    shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid                
+                    shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
                 else:
                     # find the closet point of the a_shift and b_shift in the current shifted_origin_adaptive
                     distance = np.linalg.norm(
@@ -429,8 +455,17 @@ class CrystalAnalyzer:
                         + self.b * b_shift_diff
                     )
                     # check if the unitcell is close to any exisiting peak positions
-                    unitcell,atom_types = self.unitcell_mapping(ref=(shifted_origin_adaptive[(a_shift, b_shift)], self.a, self.b), plot=False)
-                    mask = (unitcell[:, :2] > 0).all(axis=1) & (unitcell[:, [1,0]] < self.image.shape).all(axis=1)
+                    unitcell, atom_types = self.unitcell_mapping(
+                        ref=(
+                            shifted_origin_adaptive[(a_shift, b_shift)],
+                            self.a,
+                            self.b,
+                        ),
+                        plot=False,
+                    )
+                    mask = (unitcell[:, :2] > 0).all(axis=1) & (
+                        unitcell[:, [1, 0]] < self.image.shape
+                    ).all(axis=1)
                     unitcell_in_image = unitcell[mask]
                     displacement_list = []
                     if unitcell_in_image.size > 1:
@@ -438,17 +473,24 @@ class CrystalAnalyzer:
                             distance = np.linalg.norm(
                                 self.peak_positions - site[:2], axis=1
                             )
-                            distance_ref = np.array([d for d in self.min_distances.values()])/self.dx
-                            if len(distance)>0 and distance.min() < distance_ref.min()/2:
+                            distance_ref = (
+                                np.array([d for d in self.min_distances.values()])
+                                / self.dx
+                            )
+                            if (
+                                len(distance) > 0
+                                and distance.min() < distance_ref.min() / 2
+                            ):
                                 peak_selected = self.peak_positions[np.argmin(distance)]
                                 # get the displacement of the site_position
                                 displacement = peak_selected - site[:2]
                                 displacement_list.append(displacement)
                         # update the shifted_origin_adaptive with the average displacement
                         if len(displacement_list) > 0:
-                            displacement= np.mean(displacement_list, axis=0)
+                            displacement = np.mean(displacement_list, axis=0)
                             shifted_origin_adaptive[(a_shift, b_shift)] = (
-                                shifted_origin_adaptive[(a_shift, b_shift)] + displacement
+                                shifted_origin_adaptive[(a_shift, b_shift)]
+                                + displacement
                             )
             self._origin_adaptive = shifted_origin_adaptive
             return shifted_origin_adaptive
@@ -457,14 +499,14 @@ class CrystalAnalyzer:
         if site_idx in self.neighbor_site_dict:
             return self.neighbor_site_dict[site_idx]
         else:
-            i, j, d = neighbor_list("ijd", self.unitcell,cutoff)
+            i, j, d = neighbor_list("ijd", self.unitcell, cutoff)
             neighbors_indices = j[i == site_idx]
             neighbors_indices = np.unique(neighbors_indices)
             neighbor_sites = [self.unitcell[n_index] for n_index in neighbors_indices]
             self.neighbor_site_dict[site_idx] = neighbor_sites
         return neighbor_sites
 
-####### export atomic structure #######
+    ####### export atomic structure #######
     def write_lammps(self, filename="ABO3.lammps"):
         coordinates = self.coordinates
         coordinates[:, :2] = coordinates[:, :2] * self.dx
@@ -534,7 +576,7 @@ class CrystalAnalyzer:
                 )
         f.close()
 
-####### static methods #######
+    ####### static methods #######
     @staticmethod
     def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
         """
@@ -553,7 +595,7 @@ class CrystalAnalyzer:
             mask.append(site.symbol == element_symbol)
         return mask
 
-####### properties #######
+    ####### properties #######
     @property
     def min_distances(self):
         if self._min_distances is not None:
@@ -561,8 +603,8 @@ class CrystalAnalyzer:
         else:
             min_distances = {}
             # unitcell_in_image = self.unitcell_mapping(plot=False)
-            cutoff = max(self.unitcell.cell.lengths())*2
-            i, j, d = neighbor_list("ijd", self.unitcell,cutoff)
+            cutoff = max(self.unitcell.cell.lengths()) * 2
+            i, j, d = neighbor_list("ijd", self.unitcell, cutoff)
             for site in self.unitcell:
                 neighbor_sites = j[i == site.index]
                 distances = d[i == site.index]
@@ -572,7 +614,7 @@ class CrystalAnalyzer:
                 for other_element in np.unique(neighbor_elements):
                     mask = np.array(neighbor_elements) == other_element
                     distances_element = distances[mask]
-                    min_distance = distances_element[distances_element>0].min() / 2
+                    min_distance = distances_element[distances_element > 0].min() / 2
                     distances_list.append(min_distance)
                     # if element not in min_distances:
                     #     min_distances[element] = {}
@@ -580,4 +622,3 @@ class CrystalAnalyzer:
                 min_distances[element] = np.array(distances_list).min()
             self._min_distances = min_distances
             return min_distances
-

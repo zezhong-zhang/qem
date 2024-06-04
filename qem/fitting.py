@@ -6,26 +6,35 @@ import jax
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
-from scipy.ndimage import center_of_mass
 from hyperspy._signals.signal2d import Signal2D
 from jax import numpy as jnp
 from jax import value_and_grad
 from jax.example_libraries import optimizers
 from jaxopt import OptaxSolver
+from matplotlib_scalebar.scalebar import ScaleBar
+from scipy.ndimage import center_of_mass
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
+
 from qem.color import get_unique_colors
-from qem.model import (add_gaussian_at_positions, butterworth_window,
-                        gaussian_2d_numba, gaussian_sum_parallel, mask_grads, voigt_parallel)
-from qem.utils import ( get_random_indices_in_batches, remove_close_coordinates)
-from qem.gui_classes import InteractivePlot
-from qem.voronoi import integrate
-from matplotlib_scalebar.scalebar import ScaleBar
 from qem.crystal_analyzer import CrystalAnalyzer
+from qem.gui_classes import InteractivePlot
+from qem.model import (
+    add_gaussian_at_positions,
+    butterworth_window,
+    gaussian_2d_numba,
+    gaussian_sum_parallel,
+    mask_grads,
+    voigt_parallel,
+)
+from qem.utils import get_random_indices_in_batches, remove_close_coordinates
+from qem.voronoi import integrate
 
 logging.basicConfig(level=logging.INFO)
+
+
 class ImageModelFitting:
     def __init__(self, image: np.ndarray, dx: float = 1.0, units: str = "A"):
         """
@@ -58,8 +67,7 @@ class ImageModelFitting:
         y = np.arange(self.ny)
         self.X, self.Y = np.meshgrid(x, y, indexing="xy")
 
-
-### Properties
+    ### Properties
     @property
     def window(self):
         """
@@ -76,15 +84,28 @@ class ImageModelFitting:
         else:
             return butterworth_window(self.image.shape, 0.5, 10)
 
-    
     @property
     def volume(self):
         params = self.params
         if self.fitting_model == "gaussian":
-            return params["height"] * params["sigma"]**2 * np.pi * 2 *self.dx**2
+            return params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
         elif self.fitting_model == "voigt":
-            gaussian_contrib = params["height"] * params["sigma"]**2 * np.pi * 2 * params["ratio"] *self.dx**2
-            lorentzian_contrib = params["height"] * params["gamma"] * 2 * np.pi * (1 - params["ratio"]) *self.dx**2
+            gaussian_contrib = (
+                params["height"]
+                * params["sigma"] ** 2
+                * np.pi
+                * 2
+                * params["ratio"]
+                * self.dx**2
+            )
+            lorentzian_contrib = (
+                params["height"]
+                * params["gamma"]
+                * 2
+                * np.pi
+                * (1 - params["ratio"])
+                * self.dx**2
+            )
             return gaussian_contrib + lorentzian_contrib
 
     @property
@@ -97,8 +118,8 @@ class ImageModelFitting:
     def num_coordinates(self):
         return self.coordinates.shape[0]
 
-### voronoi integration
-    def voronoi_integration(self,plot=False):
+    ### voronoi integration
+    def voronoi_integration(self, plot=False):
         """
         Compute the Voronoi integration of the atomic columns.
 
@@ -114,17 +135,19 @@ class ImageModelFitting:
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
         max_radius = self.params["sigma"].max() * 5
-        integrated_intensity, intensity_record, point_record = integrate(s, pos_x, pos_y, max_radius=max_radius)
+        integrated_intensity, intensity_record, point_record = integrate(
+            s, pos_x, pos_y, max_radius=max_radius
+        )
         integrated_intensity = integrated_intensity * self.dx**2
         intensity_record = intensity_record * self.dx**2
         self._voronoi_volume = integrated_intensity
         self._voronoi_map = intensity_record
         self._voronoi_cell = point_record
         if plot:
-            intensity_record.plot(cmap='viridis')
+            intensity_record.plot(cmap="viridis")
         return integrated_intensity, intensity_record, point_record
 
-### init peaks and parameters
+    ### init peaks and parameters
     def import_coordinates(self, coordinates: np.ndarray):
         """
         Import the coordinates of the atomic columns.
@@ -146,8 +169,12 @@ class ImageModelFitting:
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
             elements = self.elements[atom_type]
-            plt.scatter(self.coordinates[mask][:, 0], self.coordinates[mask][:, 1], s=s,label=elements)
-
+            plt.scatter(
+                self.coordinates[mask][:, 0],
+                self.coordinates[mask][:, 1],
+                s=s,
+                label=elements,
+            )
 
     def import_atom_types(self, atom_types: np.ndarray):
         """
@@ -158,7 +185,15 @@ class ImageModelFitting:
         """
         self.atom_types = atom_types
 
-    def map_lattice(self, cif_file:str, elements:list[str], min_distance=10,a_limit=25, b_limit=15, add_missing_atoms:bool=False):
+    def map_lattice(
+        self,
+        cif_file: str,
+        elements: list[str],
+        min_distance=10,
+        a_limit=25,
+        b_limit=15,
+        add_missing_atoms: bool = False,
+    ):
         """
         Find the peaks in the image based on the CIF file.
 
@@ -168,22 +203,38 @@ class ImageModelFitting:
             threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
             exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
         """
-        crystal_analyzer = CrystalAnalyzer(image = self.image, dx = self.dx, peak_positions = self.coordinates, atom_types = self.atom_types, elements=elements,units=self.units)
+        crystal_analyzer = CrystalAnalyzer(
+            image=self.image,
+            dx=self.dx,
+            peak_positions=self.coordinates,
+            atom_types=self.atom_types,
+            elements=elements,
+            units=self.units,
+        )
         crystal_analyzer.read_cif(cif_file)
         crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
-        supercell_in_image, supercell_atom_types = crystal_analyzer.generate_supercell_lattice(a_limit=a_limit, b_limit=b_limit)
-        peak_positions, atom_types = crystal_analyzer.supercell_project_2d(supercell_in_image, supercell_atom_types)
+        supercell_in_image, supercell_atom_types = (
+            crystal_analyzer.generate_supercell_lattice(
+                a_limit=a_limit, b_limit=b_limit
+            )
+        )
+        peak_positions, atom_types = crystal_analyzer.supercell_project_2d(
+            supercell_in_image, supercell_atom_types
+        )
         crystal_analyzer.peak_positions = peak_positions
         crystal_analyzer.atom_types = atom_types
         crystal_analyzer.unitcell_mapping()
         self.coordinates = peak_positions
         self.atom_types = atom_types
         return None
-    
-    def select_region(self,invert_selection=False):
+
+    def select_region(self, invert_selection=False):
         from qem.gui_classes import GetAtomSelection
+
         atom_select = GetAtomSelection(
-            image=self.image, atom_positions=self.coordinates, invert_selection=invert_selection
+            image=self.image,
+            atom_positions=self.coordinates,
+            invert_selection=invert_selection,
         )
         while plt.fignum_exists(atom_select.fig.number):
             plt.pause(0.1)
@@ -193,13 +244,20 @@ class ImageModelFitting:
             logging.info("No atoms selected.")
             return None
         else:
-            logging.info(f"Selected {peak_positions_selected.shape[0]} atoms out of {self.num_coordinates} atoms.")
-            
+            logging.info(
+                f"Selected {peak_positions_selected.shape[0]} atoms out of {self.num_coordinates} atoms."
+            )
+
             self.atom_types = self.atom_types[selected]
             self.coordinates = peak_positions_selected
-    
+
     def find_peaks(
-        self, min_distance:int=10, threshold_rel:float=0.2, threshold_abs = None, exclude_border:bool=False, image=None
+        self,
+        min_distance: int = 10,
+        threshold_rel: float = 0.2,
+        threshold_abs=None,
+        exclude_border: bool = False,
+        image=None,
     ):
         """
         Find the peaks in the image.
@@ -222,14 +280,13 @@ class ImageModelFitting:
             threshold_abs=threshold_abs,
             exclude_border=exclude_border,
         )
-        self.coordinates = peaks_locations[:,[1,0]].astype(float)
+        self.coordinates = peaks_locations[:, [1, 0]].astype(float)
         self.atom_types = np.zeros(self.num_coordinates, dtype=int)
-        self.add_or_remove_peaks(min_distance=min_distance, image=self.image
-        )
+        self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
         self.atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self.coordinates
 
-    def refine_center_of_mass(self, windows_size:int=5, plot=False):
+    def refine_center_of_mass(self, windows_size: int = 5, plot=False):
         # do center of mass for each atom
         pre_coordinates = self.coordinates
         current_coordinates = self.coordinates
@@ -246,10 +303,13 @@ class ImageModelFitting:
                 local_y, local_x = center_of_mass(region)
                 assert isinstance(local_x, float), "local_x is not a float"
                 assert isinstance(local_y, float), "local_y is not a float"
-                current_coordinates[i] = np.array([
-                    int(x) - windows_size + local_x,
-                    int(y) - windows_size + local_y,
-                ], dtype=float)
+                current_coordinates[i] = np.array(
+                    [
+                        int(x) - windows_size + local_x,
+                        int(y) - windows_size + local_y,
+                    ],
+                    dtype=float,
+                )
                 if plot:
                     plt.clf()
                     plt.imshow(region, cmap="gray")
@@ -261,64 +321,102 @@ class ImageModelFitting:
                     plt.pause(1.0)
             converged = np.abs(current_coordinates - pre_coordinates).max() < 0.5
         return current_coordinates
-    
-    def refine_local_max(self, plot=False, min_distance=10,threshold_rel=0.3,threshold_abs=None,exclude_border=True):
-        windows_size = min_distance *2
+
+    def refine_local_max(
+        self,
+        plot=False,
+        min_distance=10,
+        threshold_rel=0.3,
+        threshold_abs=None,
+        exclude_border=True,
+    ):
+        windows_size = min_distance * 2
         peak_total = np.array([], dtype=int).reshape(0, 2)
         for i in range(self.num_coordinates):
             x, y = self.coordinates[i]
             top = max(int(x) - windows_size, 0)
-            bottom = min(int(x) + windows_size+1, self.nx)
+            bottom = min(int(x) + windows_size + 1, self.nx)
             left = max(int(y) - windows_size, 0)
-            right = min(int(y) + windows_size+1, self.ny)
+            right = min(int(y) + windows_size + 1, self.ny)
             # calculate the mask for distance < r
-            region = self.image[left : right, top : bottom]
+            region = self.image[left:right, top:bottom]
             peaks_locations = peak_local_max(
                 region,
-                min_distance= int(min_distance/4),
+                min_distance=int(min_distance / 4),
                 threshold_rel=threshold_rel,
                 threshold_abs=threshold_abs,
                 exclude_border=exclude_border,
             )
-            peaks_locations = peaks_locations[:,[1,0]].astype(int)
+            peaks_locations = peaks_locations[:, [1, 0]].astype(int)
             if peaks_locations.shape[0] > 0:
-                peak_total = np.append(peak_total, peaks_locations + np.array([int(x) - windows_size, int(y) - windows_size]), axis=0)
+                peak_total = np.append(
+                    peak_total,
+                    peaks_locations
+                    + np.array([int(x) - windows_size, int(y) - windows_size]),
+                    axis=0,
+                )
             if plot:
                 plt.clf()
                 plt.subplot(1, 2, 1)
                 plt.imshow(self.image, cmap="gray")
-                plt.scatter(self.coordinates[:, 0], self.coordinates[:, 1], color="blue",marker='o', s=1)
+                plt.scatter(
+                    self.coordinates[:, 0],
+                    self.coordinates[:, 1],
+                    color="blue",
+                    marker="o",
+                    s=1,
+                )
                 plt.scatter(x, y, color="red", s=2)
                 plt.subplot(1, 2, 2)
                 plt.imshow(region, cmap="gray")
-                plt.scatter(x%1+windows_size,y%1+windows_size, color='red',s = 2)
+                plt.scatter(
+                    x % 1 + windows_size, y % 1 + windows_size, color="red", s=2
+                )
                 if peaks_locations.shape[0] > 0:
-                    plt.scatter(peaks_locations[:,0], peaks_locations[:,1], color='green',marker='x',s = 2)
+                    plt.scatter(
+                        peaks_locations[:, 0],
+                        peaks_locations[:, 1],
+                        color="green",
+                        marker="x",
+                        s=2,
+                    )
                 plt.show()
                 plt.pause(1.0)
         self.coordinates = np.unique(peak_total, axis=0)
         # self.coordinates = self.refine_duplicate_peaks()
         return self.coordinates
 
-    def remove_close_coordinates(self, threshold:int=10):
+    def remove_close_coordinates(self, threshold: int = 10):
         if self.pbc:
             coords = remove_close_coordinates(self.coordinates.copy(), threshold)
             # find the coords near the boundary
-            mask_boundary = (coords[:, 0] < threshold) | (coords[:, 0] > self.nx - threshold) | (coords[:, 1] < threshold) | (coords[:, 1] > self.ny - threshold)
+            mask_boundary = (
+                (coords[:, 0] < threshold)
+                | (coords[:, 0] > self.nx - threshold)
+                | (coords[:, 1] < threshold)
+                | (coords[:, 1] > self.ny - threshold)
+            )
             # genearate the boundary coords under the pbc
             coords_boundary = coords[mask_boundary]
             # identify the coords in the coords_boundary that are close to the coords_boundary_pbc
             coords_boundary_pbc = coords_boundary.copy()
-            for (i, j) in [(1, 0), (0, 1), (1,1)]:
-                coords_boundary_shifted = coords_boundary + np.array([i*self.nx, j*self.ny])
-                for  row in coords_boundary:
-                    too_close = (np.linalg.norm(coords_boundary_shifted- row, axis=1) < threshold).any()
+            for i, j in [(1, 0), (0, 1), (1, 1)]:
+                coords_boundary_shifted = coords_boundary + np.array(
+                    [i * self.nx, j * self.ny]
+                )
+                for row in coords_boundary:
+                    too_close = (
+                        np.linalg.norm(coords_boundary_shifted - row, axis=1)
+                        < threshold
+                    ).any()
                     # same_type = coords_boundary_shifted[too_close,2] == row[2]
                     if too_close:
                         # find the index of the row in the coords_boundary_pbc
                         idx = np.where((coords_boundary_pbc == row).all(axis=1))[0]
                         # dump the row if it is too close to the boundary
-                        coords_boundary_pbc = np.delete(coords_boundary_pbc, idx, axis=0)
+                        coords_boundary_pbc = np.delete(
+                            coords_boundary_pbc, idx, axis=0
+                        )
             # now combine the coords that are not close to the boundary with the coords_boundary_pbc
             coords_final = np.vstack([coords[~mask_boundary], coords_boundary_pbc])
             self.coordinates = coords_final
@@ -326,7 +424,7 @@ class ImageModelFitting:
             self.coordinates = remove_close_coordinates(self.coordinates, threshold)
         return self.coordinates
 
-    def add_or_remove_peaks(self, min_distance:int=10, image=None):
+    def add_or_remove_peaks(self, min_distance: int = 10, image=None):
         if image is None:
             image = self.image
         peaks_locations = self.coordinates
@@ -363,7 +461,7 @@ class ImageModelFitting:
         plt.axis("off")
         scalebar = self.scalebar
         plt.gca().add_artist(scalebar)
-        plt.colorbar(im,fraction=0.046, pad=0.04)
+        plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.tight_layout()
         plt.gca().add_artist(scalebar)
         plt.gca().set_aspect("equal", adjustable="box")
@@ -374,7 +472,7 @@ class ImageModelFitting:
         plt.ylabel("Counts")
         plt.title("Intensity Histogram")
         plt.tight_layout()
-        
+
     @property
     def scalebar(self):
         scalebar = ScaleBar(
@@ -446,7 +544,7 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, atom_size:float=0.7, guess_radius:bool=False):            
+    def init_params(self, atom_size: float = 0.7, guess_radius: bool = False):
         if guess_radius:
             width = self.guess_radius()[0]
         else:
@@ -483,9 +581,9 @@ class ImageModelFitting:
         self.params = params
         return params
 
-### loss function and model prediction
+    ### loss function and model prediction
 
-    def loss(self, params:dict, image:np.ndarray, X:np.ndarray, Y:np.ndarray):
+    def loss(self, params: dict, image: np.ndarray, X: np.ndarray, Y: np.ndarray):
         # Compute the sum of the Gaussians
         prediction = self.predict(params, X, Y)
         diff = image - prediction
@@ -495,13 +593,13 @@ class ImageModelFitting:
         L1 = jnp.mean(jnp.abs(diff))
         return mse + L1
 
-    def residual(self, params:dict, image:np.ndarray, X:np.ndarray, Y:np.ndarray):
+    def residual(self, params: dict, image: np.ndarray, X: np.ndarray, Y: np.ndarray):
         # Compute the sum of the Gaussians
         prediction = self.predict(params, X, Y)
         diff = prediction - image
         return diff
 
-    def predict_local(self, params:dict):
+    def predict_local(self, params: dict):
         if self.fit_background:
             background = params["background"]
         else:
@@ -514,7 +612,9 @@ class ImageModelFitting:
         x = np.arange(-windos_size, windos_size + 1, 1)
         y = np.arange(-windos_size, windos_size + 1, 1)
         local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_2d_numba(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
+        gauss_local = gaussian_2d_numba(
+            local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
+        )
         gauss_local = np.array(gauss_local)
         prediction = (
             add_gaussian_at_positions(
@@ -523,7 +623,16 @@ class ImageModelFitting:
             + background
         )
         if self.pbc:
-            for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+            for i, j in [
+                (1, 0),
+                (0, 1),
+                (-1, 0),
+                (0, -1),
+                (1, 1),
+                (-1, -1),
+                (1, -1),
+                (-1, 1),
+            ]:
                 prediction += add_gaussian_at_positions(
                     np.zeros(self.image.shape),
                     pos_x + i * self.nx,
@@ -533,7 +642,7 @@ class ImageModelFitting:
                 )
         return prediction
 
-    def predict(self, params:dict, X:np.ndarray, Y:np.ndarray):
+    def predict(self, params: dict, X: np.ndarray, Y: np.ndarray):
         if self.fit_background:
             background = params["background"]
         else:
@@ -549,7 +658,16 @@ class ImageModelFitting:
                 background,
             )
             if self.pbc:
-                for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                for i, j in [
+                    (1, 0),
+                    (0, 1),
+                    (-1, 0),
+                    (0, -1),
+                    (1, 1),
+                    (-1, -1),
+                    (1, -1),
+                    (-1, 1),
+                ]:
                     prediction += gaussian_sum_parallel(
                         X,
                         Y,
@@ -572,7 +690,16 @@ class ImageModelFitting:
                 background,
             )
             if self.pbc:
-                for (i, j) in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                for i, j in [
+                    (1, 0),
+                    (0, 1),
+                    (-1, 0),
+                    (0, -1),
+                    (1, 1),
+                    (-1, -1),
+                    (1, -1),
+                    (-1, 1),
+                ]:
                     prediction += voigt_parallel(
                         X,
                         Y,
@@ -586,9 +713,9 @@ class ImageModelFitting:
                     )
         return prediction
 
-### fitting
+    ### fitting
 
-    def linear_estimator(self, params:dict):
+    def linear_estimator(self, params: dict):
         # create the design matrix as array of gaussian peaks + background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
@@ -601,7 +728,9 @@ class ImageModelFitting:
         x = np.arange(-window_size, window_size + 1, 1)
         y = np.arange(-window_size, window_size + 1, 1)
         local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_2d_numba(local_X, local_Y, pos_x%1, pos_y%1, height, sigma)
+        gauss_local = gaussian_2d_numba(
+            local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
+        )
 
         for i in range(self.num_coordinates):
             global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[
@@ -675,13 +804,23 @@ class ImageModelFitting:
                 input_negative_mask = params["height"] < 0
                 scale_neagtive_mask = height_scale < 0
                 height_scale[scale_neagtive_mask] = 1
-                params["height"][input_negative_mask] = -params["height"][input_negative_mask]
-            params["height"] = height_scale* params["height"]
+                params["height"][input_negative_mask] = -params["height"][
+                    input_negative_mask
+                ]
+            params["height"] = height_scale * params["height"]
         self.params = params
         return params
 
     def optimize(
-        self, image:np.ndarray, params:dict, X:np.ndarray, Y:np.ndarray, maxiter:int=1000, tol:float=1e-4, step_size:float=0.01, verbose:bool=False
+        self,
+        image: np.ndarray,
+        params: dict,
+        X: np.ndarray,
+        Y: np.ndarray,
+        maxiter: int = 1000,
+        tol: float = 1e-4,
+        step_size: float = 0.01,
+        verbose: bool = False,
     ):
         opt = optax.adam(learning_rate=step_size)
         solver = OptaxSolver(
@@ -693,14 +832,14 @@ class ImageModelFitting:
 
     def gradient_descent(
         self,
-        image:np.ndarray,
-        params:dict,
-        X:np.ndarray,
-        Y:np.ndarray,
-        keys_to_mask:list[str],
-        step_size:float=0.001,
-        maxiter:int=10000,
-        tol:float=1e-4,
+        image: np.ndarray,
+        params: dict,
+        X: np.ndarray,
+        Y: np.ndarray,
+        keys_to_mask: list[str],
+        step_size: float = 0.001,
+        maxiter: int = 10000,
+        tol: float = 1e-4,
     ):
         opt_init, opt_update, get_params = optimizers.adam(
             step_size=step_size, b1=0.9, b2=0.999
@@ -741,7 +880,14 @@ class ImageModelFitting:
         self.params = new_params
         return new_params
 
-    def fit_global(self, params: dict, maxiter:int=1000, tol:float=1e-3, step_size:float=0.01, verbose:bool=False):
+    def fit_global(
+        self,
+        params: dict,
+        maxiter: int = 1000,
+        tol: float = 1e-3,
+        step_size: float = 0.01,
+        verbose: bool = False,
+    ):
         self.fit_local = False
         params = self.optimize(
             self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
@@ -754,13 +900,13 @@ class ImageModelFitting:
     def fit_random_batch(
         self,
         params: dict,
-        num_epoch:int=5,
-        batch_size:int=500,
-        maxiter:int=50,
-        tol:float=1e-3,
-        step_size:float=1e-2,
-        verbose:bool=False,
-        plot:bool=False,
+        num_epoch: int = 5,
+        batch_size: int = 500,
+        maxiter: int = 50,
+        tol: float = 1e-3,
+        step_size: float = 1e-2,
+        verbose: bool = False,
+        plot: bool = False,
     ):
         self.fit_local = False
         self.converged = False
@@ -822,11 +968,11 @@ class ImageModelFitting:
         params: dict,
         fitting_region: list,
         update_region: list,
-        maxiter:int=1000,
-        tol:float=1e-4,
-        step_size:float=0.01,
-        plot:bool=False,
-        verbose:bool=False,
+        maxiter: int = 1000,
+        tol: float = 1e-4,
+        step_size: float = 0.01,
+        plot: bool = False,
+        verbose: bool = False,
     ):
         self.fit_local = True
         left, right, top, bottom = fitting_region
@@ -880,7 +1026,9 @@ class ImageModelFitting:
             step_size,
             verbose,
         )
-        params = self.update_from_local_params(params, local_params, mask_center, index_center_in_region)
+        params = self.update_from_local_params(
+            params, local_params, mask_center, index_center_in_region
+        )
         # params = self.update_from_local_params(params, local_params, mask_region)
         if plot:
             plt.subplots(1, 3, figsize=(15, 5))
@@ -932,16 +1080,16 @@ class ImageModelFitting:
     def fit_patch(
         self,
         params: dict,
-        step_size:float=0.01,
-        maxiter:int=1000,
-        tol:float=1e-4,
-        patch_size:int=100,
-        buffer_size:int=0,
-        stride_size:int=100,
-        plot:bool=False,
-        verbose:bool=False,
-        mode:str="sequential",
-        num_random_patches:int=10,
+        step_size: float = 0.01,
+        maxiter: int = 1000,
+        tol: float = 1e-4,
+        patch_size: int = 100,
+        buffer_size: int = 0,
+        stride_size: int = 100,
+        plot: bool = False,
+        verbose: bool = False,
+        mode: str = "sequential",
+        num_random_patches: int = 10,
     ):
         self.fit_local = True
         if buffer_size is None:
@@ -960,8 +1108,12 @@ class ImageModelFitting:
             ii = ii.ravel()
             jj = jj.ravel()
         elif mode == "random":
-            ii = np.random.randint(half_patch, max(self.nx - half_patch, patch_size), num_random_patches)
-            jj = np.random.randint(half_patch, max(self.ny - half_patch, patch_size), num_random_patches)
+            ii = np.random.randint(
+                half_patch, max(self.nx - half_patch, patch_size), num_random_patches
+            )
+            jj = np.random.randint(
+                half_patch, max(self.ny - half_patch, patch_size), num_random_patches
+            )
         params = self.linear_estimator(params)
         for index in tqdm(range(len(ii))):
             i, j = ii[index], jj[index]
@@ -984,7 +1136,9 @@ class ImageModelFitting:
             center_top = top + buffer_size if top > 0 else 0
             center_bottom = bottom - buffer_size if bottom < self.ny else self.ny
             if verbose:
-                logging.info(f"left = {left}, right = {right}, top = {top}, bottom = {bottom}")
+                logging.info(
+                    f"left = {left}, right = {right}, top = {top}, bottom = {bottom}"
+                )
                 logging.info(
                     f"center_left = {center_left}, center_right = {center_right}, center_top = {center_top}, center_bottom = {center_bottom}"
                 )
@@ -1006,8 +1160,8 @@ class ImageModelFitting:
         self.model = self.predict(params, self.X, self.Y)
         return params
 
-### parameters updates and convergence
-    def convergence(self, params:dict, pre_params:dict, tol:float=1e-2):
+    ### parameters updates and convergence
+    def convergence(self, params: dict, pre_params: dict, tol: float = 1e-2):
         """
         Checks if the parameters have converged within a specified tolerance.
 
@@ -1052,16 +1206,18 @@ class ImageModelFitting:
         logging.info("Convergence reached")
         return True
 
-    def select_params(self, params:dict, mask:np.ndarray):
+    def select_params(self, params: dict, mask: np.ndarray):
         select_params = {
             key: value[mask]
             for key, value in params.items()
             if key not in ["background"]
-            }
+        }
         select_params["background"] = params["background"]
         return select_params
 
-    def update_from_local_params(self, params:dict, local_params:dict, mask:np.ndarray, mask_local=None):
+    def update_from_local_params(
+        self, params: dict, local_params: dict, mask: np.ndarray, mask_local=None
+    ):
         for key, value in local_params.items():
             value = np.array(value)
             if key not in ["background"]:
@@ -1072,11 +1228,11 @@ class ImageModelFitting:
             else:
                 weight = mask.sum() / self.num_coordinates
                 update = value - params[key]
-                params[key] += update*weight
+                params[key] += update * weight
                 # params[key] = value
         return params
-    
-    def same_width_on_atom_type(self, params:dict):
+
+    def same_width_on_atom_type(self, params: dict):
         if self.same_width:
             unique_types = np.unique(self.atom_types)
             for atom_type in unique_types:
@@ -1096,7 +1252,7 @@ class ImageModelFitting:
                             params[key][mask] = mean_value
         return params
 
-    def project_params(self, params:dict):
+    def project_params(self, params: dict):
         for key, value in params.items():
             if key == "pos_x":
                 params[key] = jnp.clip(value, 0, self.nx - 1)
@@ -1114,7 +1270,7 @@ class ImageModelFitting:
                 params[key] = jnp.clip(value, 0, np.max(self.image))
         return params
 
-##### plot functions
+    ##### plot functions
     def plot_fitting(self):
         plt.figure(figsize=(15, 5))
         vmin = self.image.min()
