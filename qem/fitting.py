@@ -36,7 +36,7 @@ logging.basicConfig(level=logging.INFO)
 
 
 class ImageModelFitting:
-    def __init__(self, image: np.ndarray, dx: float = 1.0, units: str = "A"):
+    def __init__(self, image: np.ndarray, dx: float = 1.0, units: str = "A",elements: list[str] = ['Sr', 'Ti', 'O']):
         """
         Initialize the Fitting class.
 
@@ -55,6 +55,7 @@ class ImageModelFitting:
         self.dx = dx
         self.units = units
         self.atom_types = np.array([])
+        self.elements = elements    
         self.atoms_selected = np.array([])
         self.coordinates = np.array([])
         self.fit_background = True
@@ -175,6 +176,7 @@ class ImageModelFitting:
                 s=s,
                 label=elements,
             )
+        plt.legend()
 
     def import_atom_types(self, atom_types: np.ndarray):
         """
@@ -1293,3 +1295,29 @@ class ImageModelFitting:
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Residual")
         plt.tight_layout()
+
+    def plot_scs(self):
+        plt.subplots(1, 2, figsize=(15, 5))
+        plt.subplot(1, 2, 1)
+        plt.imshow(self.image, cmap="gray")
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            element = self.elements[atom_type]
+            plt.scatter(
+                self.coordinates[mask, 0],
+                self.coordinates[mask, 1],
+                s=1,
+                label=element,  
+            )
+        plt.legend()
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.title("Image")
+        plt.subplot(1, 2, 2)
+        pos_x = self.params["pos_x"] * self.dx
+        pos_y = self.params["pos_y"] * self.dx
+        im = plt.scatter(pos_x, pos_y, c=self.volume, s=2)
+        # make aspect ratio equal
+        plt.gca().invert_yaxis()
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.title(r"QEM refined scs ($\AA^2$)")
