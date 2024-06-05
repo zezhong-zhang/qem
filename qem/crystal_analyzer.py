@@ -48,8 +48,8 @@ class CrystalAnalyzer:
             mask = self.atom_types == atom_type
             element = self.elements[atom_type]
             plt.scatter(
-                self.peak_positions[mask][:, 0],
-                self.peak_positions[mask][:, 1],
+                self.coordinates[mask][:, 0],
+                self.coordinates[mask][:, 1],
                 label=element,
                 color=next(color_iterator),
             )
@@ -79,10 +79,13 @@ class CrystalAnalyzer:
 
         fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
         fft_dx = 1 / (self.dx * self.image.shape[0])
+        fft_dy = 1 / (self.dx * self.image.shape[1])
+        fft_pixel_size = np.array([fft_dy, fft_dx])
         fft_tolerance = int(0.1 / fft_dx)
         fft_peaks = peak_local_max(
             fft_image, min_distance=fft_tolerance, threshold_abs=10 * np.mean(fft_image)
         )
+        fft_peaks = fft_peaks[:, [1, 0]].astype(float)
         fft_plot = InteractivePlot(
             np.log(fft_image),
             fft_peaks,
@@ -93,10 +96,10 @@ class CrystalAnalyzer:
         )
         fft_origin, fft_a, fft_b = fft_plot.select_vectors()
         # normalize the fft vectors
-        unit_vector_a = fft_a / np.linalg.norm(fft_a)
-        unit_vector_b = fft_b / np.linalg.norm(fft_b)
-        scale_a = 1 / (np.linalg.norm(fft_a) * fft_dx) / self.dx
-        scale_b = 1 / (np.linalg.norm(fft_b) * fft_dx) / self.dx
+        unit_vector_a = fft_a * fft_pixel_size / np.linalg.norm(fft_a * fft_pixel_size)
+        unit_vector_b = fft_b * fft_pixel_size / np.linalg.norm(fft_b * fft_pixel_size)
+        scale_a = 1 / (np.linalg.norm(fft_a * fft_pixel_size) ) / self.dx
+        scale_b = 1 / (np.linalg.norm(fft_b* fft_pixel_size) ) / self.dx
         fft_real_a = unit_vector_a * scale_a
         fft_real_b = unit_vector_b * scale_b
         print(f"FFT real a: {fft_real_a} pixel, Real b: {fft_real_b} pixel")
@@ -104,7 +107,7 @@ class CrystalAnalyzer:
         self.origin = real_origin
         self.a = fft_real_a
         self.b = fft_real_b
-        return real_origin, real_a, real_b
+        return real_origin, fft_real_a, fft_real_b
 
     def read_cif(self, cif_file_path):
         structure = read(cif_file_path)
