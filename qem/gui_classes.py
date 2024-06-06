@@ -168,6 +168,7 @@ class InteractivePlot:
         self.origin = None
         self.vector_a = None
         self.vector_b = None
+        self.current_atom_type = 0  # Default atom type is 0
         self.selection_stage = (
             0  # 0: Select origin, 1: Select vector a, 2: Select vector b
         )
@@ -183,16 +184,20 @@ class InteractivePlot:
                 self.pos_y = np.delete(self.pos_y, index, axis=0)
                 self.atom_types = np.delete(self.atom_types, index, axis=0)
             else:
-                atom_type = get_atom_type()
-                if atom_type is not None:
-                    self.pos_x = np.append(self.pos_x, x)
-                    self.pos_y = np.append(self.pos_y, y)
-                    self.atom_types = np.append(self.atom_types, atom_type)
-                    logging.info(f"Adding peak at ({x}, {y}) with atom type {atom_type}.")
-                else:
-                    logging.info("No atom type entered. Peak not added.")
+
+                self.pos_x = np.append(self.pos_x, x)
+                self.pos_y = np.append(self.pos_y, y)
+                self.atom_types = np.append(self.atom_types, self.current_atom_type)
+                logging.info(f"Adding peak at ({x}, {y}) with atom type {self.current_atom_type}.")
             title = "Double click to add or remove peaks."
             self.update_plot(title)
+
+    def on_key_press(self, event):
+        try:
+            self.current_atom_type = int(event.key)
+            logging.info(f"Current atom type set to {self.current_atom_type}.")
+        except ValueError:
+            logging.info(f"Invalid atom type input: {event.key}. Atom type remains {self.current_atom_type}.")
 
     @property
     def scalebar(self):
@@ -230,6 +235,7 @@ class InteractivePlot:
         title = "Double click to add or remove peaks."
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_add_or_remove)
+        fig.canvas.mpl_connect('key_press_event', self.on_key_press)
         plt.show()
 
         while plt.fignum_exists(fig.number):
