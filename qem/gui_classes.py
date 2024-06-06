@@ -8,6 +8,8 @@ from qem.color import get_unique_colors
 import os 
 logging.basicConfig(level=logging.INFO)
 from matplotlib_scalebar.scalebar import ScaleBar
+import tkinter as tk
+from tkinter import simpledialog
 
 
 def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False):
@@ -56,6 +58,12 @@ def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False)
     atom_positions_selected = atom_positions[bool_array]
     return atom_positions_selected, bool_array
 
+def get_atom_type():
+    root = tk.Tk()
+    root.withdraw()  # Hide the main window
+    atom_type = simpledialog.askstring("Input", "Please enter the atom type:", parent=root)
+    root.destroy()  # Close the main window
+    return atom_type
 
 class GetAtomSelection:
     def __init__(self, image, atom_positions, invert_selection=False, size=1):
@@ -169,16 +177,20 @@ class InteractivePlot:
             x, y = event.xdata, event.ydata
             distance = np.sqrt((self.pos_x - x) ** 2 + (self.pos_y - y) ** 2)
             if distance.min() < self.tolerance:
-                i = np.argmin(distance)
-                logging.info(f"Removing peak at ({self.pos_x[i]}, {self.pos_y[i]}).")
-                self.pos_x = np.delete(self.pos_x, i, axis=0)
-                self.pos_y = np.delete(self.pos_y, i, axis=0)
-                self.atom_types = np.delete(self.atom_types, i, axis=0)
+                index = np.argmin(distance)
+                logging.info(f"Removing peak at ({self.pos_x[index]}, {self.pos_y[index]}).")
+                self.pos_x = np.delete(self.pos_x, index, axis=0)
+                self.pos_y = np.delete(self.pos_y, index, axis=0)
+                self.atom_types = np.delete(self.atom_types, index, axis=0)
             else:
-                self.pos_x = np.append(self.pos_x, x)
-                self.pos_y = np.append(self.pos_y, y)
-                self.atom_types = np.append(self.atom_types, 0)
-                logging.info(f"Adding peak at ({x}, {y}).")
+                atom_type = get_atom_type()
+                if atom_type is not None:
+                    self.pos_x = np.append(self.pos_x, x)
+                    self.pos_y = np.append(self.pos_y, y)
+                    self.atom_types = np.append(self.atom_types, atom_type)
+                    logging.info(f"Adding peak at ({x}, {y}) with atom type {atom_type}.")
+                else:
+                    logging.info("No atom type entered. Peak not added.")
             title = "Double click to add or remove peaks."
             self.update_plot(title)
 
@@ -189,6 +201,7 @@ class InteractivePlot:
             units=self.units,
             location="lower right",
             dimension=self.dimension,
+            box_alpha = 0.5,
         )
         return scalebar
 
@@ -208,6 +221,7 @@ class InteractivePlot:
                 s=1,
                 label=str(atom_type),
             )
+        plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
         plt.draw()
 
     def add_or_remove(self, tolerance: float = 10):
@@ -291,8 +305,6 @@ class InteractivePlot:
             start[1],
             dx,
             dy,
-            head_width=10,
-            head_length=10,
             fc="black",
             ec="black",
             length_includes_head=True,
