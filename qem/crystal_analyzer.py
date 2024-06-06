@@ -81,7 +81,7 @@ class CrystalAnalyzer:
         fft_dx = 1 / (self.dx * self.image.shape[0])
         fft_dy = 1 / (self.dx * self.image.shape[1])
         fft_pixel_size = np.array([fft_dy, fft_dx])
-        fft_tolerance = int(0.1 / fft_dx)
+        fft_tolerance = int(1/max(np.linalg.norm(real_a*self.dx), np.linalg.norm(real_b*self.dx)) / max(fft_dx,fft_dy))
         fft_peaks = peak_local_max(
             fft_image, min_distance=fft_tolerance, threshold_abs=10 * np.mean(fft_image)
         )

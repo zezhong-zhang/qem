@@ -166,6 +166,7 @@ class ImageModelFitting:
             color (str, optional): The color of the atomic columns. Defaults to "red".
             s (int, optional): The size of the atomic columns. Defaults to 1.
         """
+        plt.figure()
         plt.imshow(self.image, cmap="gray")
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
@@ -436,7 +437,7 @@ class ImageModelFitting:
             atom_types=self.atom_types,
             tolerance=min_distance,
         )
-        interactive_plot.add_or_remove()
+        interactive_plot.add_or_remove(tolerance=min_distance)
         peaks_locations = [interactive_plot.pos_x, interactive_plot.pos_y]
         peaks_locations = np.array(peaks_locations).T.astype(float)
         self.coordinates = peaks_locations
