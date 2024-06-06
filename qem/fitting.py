@@ -427,7 +427,7 @@ class ImageModelFitting:
             self.coordinates = remove_close_coordinates(self.coordinates, threshold)
         return self.coordinates
 
-    def add_or_remove_peaks(self, min_distance: int = 10, image=None):
+    def add_or_remove_peaks(self, min_distance: int = 2, image=None):
         if image is None:
             image = self.image
         peaks_locations = self.coordinates

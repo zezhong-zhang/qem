@@ -232,7 +232,7 @@ class InteractivePlot:
     def add_or_remove(self, tolerance: float = 10):
         self.tolerance = tolerance
         fig = plt.figure()
-        title = "Double click to add or remove peaks."
+        title = "Double click to add or remove peaks. Press a number key to set the current atom type."
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_add_or_remove)
         fig.canvas.mpl_connect('key_press_event', self.on_key_press)
