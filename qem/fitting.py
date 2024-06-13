@@ -31,7 +31,6 @@ from qem.model import (
 )
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import integrate
-
 logging.basicConfig(level=logging.INFO)
 
 
@@ -1322,3 +1321,29 @@ class ImageModelFitting:
         plt.gca().set_aspect('equal', adjustable='box')
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"QEM refined scs ($\AA^2$)")
+
+    def plot_scs_voronoi(self):
+        plt.subplots(1, 2, figsize=(15, 5))
+        plt.subplot(1, 2, 1)
+        plt.imshow(self.image, cmap="gray")
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            element = self.elements[atom_type]
+            plt.scatter(
+                self.coordinates[mask, 0],
+                self.coordinates[mask, 1],
+                s=1,
+                label=element,  
+            )
+        plt.legend()
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.title("Image")
+        plt.subplot(1, 2, 2)
+        pos_x = self.params["pos_x"] * self.dx
+        pos_y = self.params["pos_y"] * self.dx
+        im = plt.scatter(pos_x, pos_y, c=self.voronoi_volume, s=2)
+        # make aspect ratio equal
+        plt.gca().invert_yaxis()
+        plt.gca().set_aspect('equal', adjustable='box')
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.title(r"Voronoi scs ($\AA^2$)")        
