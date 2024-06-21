@@ -15,6 +15,7 @@ from matplotlib_scalebar.scalebar import ScaleBar
 from scipy.ndimage import center_of_mass
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
+from scipy.optimize import lsq_linear
 from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
 
@@ -61,6 +62,7 @@ class ImageModelFitting:
         self.same_width = True
         self.fitting_model = "gaussian"
         self.params = dict()
+        self._volume = None
         self.fit_local = False
         self.pbc = False
         x = np.arange(self.nx)
@@ -86,27 +88,32 @@ class ImageModelFitting:
 
     @property
     def volume(self):
-        params = self.params
-        if self.fitting_model == "gaussian":
-            return params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
-        elif self.fitting_model == "voigt":
-            gaussian_contrib = (
-                params["height"]
-                * params["sigma"] ** 2
-                * np.pi
-                * 2
-                * params["ratio"]
-                * self.dx**2
-            )
-            lorentzian_contrib = (
-                params["height"]
-                * params["gamma"]
-                * 2
-                * np.pi
-                * (1 - params["ratio"])
-                * self.dx**2
-            )
-            return gaussian_contrib + lorentzian_contrib
+        if self._volume is None:
+            params = self.params
+            if self.fitting_model == "gaussian":
+                volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
+            elif self.fitting_model == "voigt":
+                gaussian_contrib = (
+                    params["height"]
+                    * params["sigma"] ** 2
+                    * np.pi
+                    * 2
+                    * params["ratio"]
+                    * self.dx**2
+                )
+                lorentzian_contrib = (
+                    params["height"]
+                    * params["gamma"]
+                    * 2
+                    * np.pi
+                    * (1 - params["ratio"])
+                    * self.dx**2
+                )
+                volume =  gaussian_contrib + lorentzian_contrib
+            self._volume = volume
+            return volume
+        else:
+            return self._volume
 
     @property
     def voronoi_volume(self):
@@ -554,7 +561,8 @@ class ImageModelFitting:
         # self.center_of_mass()
         pos_x = copy.deepcopy(self.coordinates[:, 0])
         pos_y = copy.deepcopy(self.coordinates[:, 1])
-        background = np.percentile(self.image, 20)
+        # background = np.percentile(self.image, 20)
+        background = self.image.min()
         height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
         # get the lowest 20% of the intensity as the background
         width = np.tile(width, self.num_coordinates)
@@ -717,7 +725,7 @@ class ImageModelFitting:
 
     ### fitting
 
-    def linear_estimator(self, params: dict):
+    def linear_estimator(self, params: dict, non_negative=False):
         # create the design matrix as array of gaussian peaks + background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
@@ -762,15 +770,20 @@ class ImageModelFitting:
             # Attempt to solve the linear system
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always")
-                solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
-                # Check if any of the caught warnings are related to a singular matrix
-                if w and any(
-                    "singular matrix" in str(warning.message) for warning in w
-                ):
-                    logging.warning(
-                        "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
-                    )
-                    return params
+                if non_negative:
+                    design_matrix_csr = design_matrix.tocsr()
+                    result = lsq_linear(design_matrix_csr, b, bounds=(0, np.inf))
+                    solution = result.x
+                if non_negative is False:
+                    solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
+                    # Check if any of the caught warnings are related to a singular matrix
+                    if w and any(
+                        "singular matrix" in str(warning.message) for warning in w
+                    ):
+                        logging.warning(
+                            "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
+                        )
+                        return params
         except np.linalg.LinAlgError as e:
             if "Singular matrix" in str(e):
                 logging.warning("Error: Singular matrix encountered.")
