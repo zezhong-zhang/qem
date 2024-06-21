@@ -212,7 +212,7 @@ class InteractivePlot:
 
     def update_plot(self, title):
         plt.clf()
-        plt.imshow(self.image)
+        plt.imshow(self.image, cmap="gray")
         scalebar = self.scalebar
         plt.gca().add_artist(scalebar)
         plt.title(title)
@@ -256,7 +256,7 @@ class InteractivePlot:
     def select(self, tolerance: float = 10):
         self.tolerance = tolerance
         fig = plt.figure()
-        plt.imshow(self.image)
+        plt.imshow(self.image, cmap="gray")
         title = "Double click to select a peak."
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_select)
@@ -326,7 +326,7 @@ class InteractivePlot:
     def select_vectors(self, tolerance: float = 10):
         self.tolerance = tolerance
         fig = plt.figure()
-        plt.imshow(self.image)
+        plt.imshow(self.image, cmap="gray")
         title = "Double click to select origin, vector a, and vector b."
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_select_vectors)
