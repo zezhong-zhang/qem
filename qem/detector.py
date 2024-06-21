@@ -126,9 +126,9 @@ class Detector:
 
         return cleaned_data
 
-    def relative_threshold(self, percentile=25):
+    def relative_threshold(self, percent=25):
         # Determine the value corresponding to the given percentile
-        threshold_value = np.percentile(self.detector_smooth, 100 - percentile)
+        threshold_value = np.percentile(self.detector_smooth, percent)
         # Generate binary mask
         binary_mask = self.detector_smooth > threshold_value
         plt.imshow(binary_mask, cmap="gray")
@@ -167,6 +167,7 @@ class Detector:
 
     def plot_mask(self):
         self.otsu_mask()
+        # self.relative_threshold()
         center_x, center_y = self.find_center()
         plt.imshow(self.binary_mask, cmap="gray")
         plt.plot(center_x, center_y, "r+")
@@ -174,15 +175,20 @@ class Detector:
         plt.axis("off")
         # plt.colorbar()
 
-    def normalize(self, normalized=False):
+    def normalize(self, normalized=False, method="otsu",percent=25):
         if normalized:
             img = self.detector_normalised
         else:
             img = self.detector_smooth
-        binary_mask = self.otsu_mask(normalized=normalized)
+        if method == "otsu":
+            binary_mask = self.otsu_mask()
+        elif method == "relative":
+            binary_mask = self.relative_threshold(percent=percent)
+        # binary_mask = self.relative_threshold()
         # Calculate the mean value inside and outside of the mask
         detector_value = np.mean(img[binary_mask])
-        background = np.mean(img[~binary_mask])
+        background = np.percentile(self.detector_smooth, 20)
+        # background = np.mean(img[~binary_mask])
         self.detector_normalised = (img - background) / (detector_value - background)
         self.detector_normalised[self.detector_normalised < 0] = 0
         print(
