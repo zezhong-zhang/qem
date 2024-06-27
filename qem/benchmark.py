@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.ensemble import IsolationForest
 
 import qem
-from qem.fitting import ImageModelFitting
+from qem.image_model import ImageModelFitting
 
 
 def time_it(func):
