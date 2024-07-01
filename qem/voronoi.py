@@ -13,6 +13,7 @@ def integrate(
     show_progressbar=True,
     remove_edge_cells=False,
     edge_pixels=1,
+    pbc=False,
 ):
     """Given a spectrum image a set of points and a maximum outer radius,
     this function integrates around each point in an image, using either
@@ -101,7 +102,7 @@ def integrate(
             max_radius = max(image.shape[-2:])
         elif max_radius <= 0:
             raise ValueError("max_radius must be higher than 0.")
-        point_record = calculate_point_record(image, points, max_radius)
+        point_record = calculate_point_record(image, points, max_radius,pbc=pbc)
 
     elif method == "Watershed":
         if len(image.shape) > 2:
@@ -157,7 +158,7 @@ def integrate(
         )
     return integrated_intensity, intensity_record, point_record
 
-def calculate_point_record(image, points, max_radius):
+def calculate_point_record(image, points, max_radius,pbc=False):
     """
     Creates a Voronoi array where equal values belong to
     the same Voronoi cell
@@ -180,7 +181,7 @@ def calculate_point_record(image, points, max_radius):
         total=np.prod(point_record.shape),
         leave=False,
     ):
-        minIndex, distMin = find_smallest_distance(i, j, points)
+        minIndex, distMin = find_smallest_distance(i, j, points,image_shape = image.shape, pbc=pbc)
         if distMin >= max_radius:
             point_record[i][j] = 0
         else:
@@ -210,7 +211,7 @@ def get_integrated_intensity(point_record, image, point_index, include_edge_cell
     return integrated_record
 
 @nb.jit()
-def find_smallest_distance(i, j, points):
+def find_smallest_distance(i, j, points, image_shape=None, pbc=False):
     """
     Finds the smallest distance between coordinates (i, j)
     and a list of coordinates.
@@ -234,7 +235,15 @@ def find_smallest_distance(i, j, points):
     >>> smallest_distance = find_smallest_distance(i, j, points)
 
     """
-    distance_log = ((points[0] - float(i)) ** 2 + (points[1] - float(j)) ** 2) ** 0.5
+    if pbc:
+        height, width = image_shape
+        distance_log = np.inf * np.ones(points.shape[1])
+        for k in range(points.shape[1]):
+            dx = min(abs(points[0, k] - i), width - abs(points[0, k] - i))
+            dy = min(abs(points[1, k] - j), height - abs(points[1, k] - j))
+            distance_log[k] = (dx ** 2 + dy ** 2) ** 0.5
+    else:
+        distance_log = ((points[0] - float(i)) ** 2 + (points[1] - float(j)) ** 2) ** 0.5
     minIndex = np.argmin(distance_log)
     distMin = distance_log[minIndex]
     return minIndex, distMin
