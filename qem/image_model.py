@@ -126,7 +126,7 @@ class ImageModelFitting:
         return self.coordinates.shape[0]
 
     ### voronoi integration
-    def voronoi_integration(self, plot=False):
+    def voronoi_integration(self, plot=False,pbc=False):
         """
         Compute the Voronoi integration of the atomic columns.
 
@@ -143,7 +143,7 @@ class ImageModelFitting:
         pos_y = self.params["pos_y"]
         max_radius = self.params["sigma"].max() * 5
         integrated_intensity, intensity_record, point_record = integrate(
-            s, pos_x, pos_y, max_radius=max_radius
+            s, pos_x, pos_y, max_radius=max_radius, pbc=pbc
         )
         integrated_intensity = integrated_intensity * self.dx**2
         intensity_record = intensity_record * self.dx**2
@@ -372,7 +372,6 @@ class ImageModelFitting:
                     self.coordinates[:, 0],
                     self.coordinates[:, 1],
                     color="blue",
-                    marker="o",
                     s=1,
                 )
                 plt.scatter(x, y, color="red", s=2)
@@ -386,7 +385,6 @@ class ImageModelFitting:
                         peaks_locations[:, 0],
                         peaks_locations[:, 1],
                         color="green",
-                        marker="x",
                         s=2,
                     )
                 plt.show()
@@ -1309,9 +1307,13 @@ class ImageModelFitting:
         plt.title("Residual")
         plt.tight_layout()
 
-    def plot_scs(self):
-        plt.subplots(1, 2, figsize=(15, 5))
-        plt.subplot(1, 2, 1)
+    def plot_scs(self, layout='horizontal'):
+        if layout == 'horizontal':
+            row, col = 1, 2
+        elif layout == 'vertical':
+            row, col = 2, 1
+        plt.subplots(row, col)
+        plt.subplot(row, col, 1)
         plt.imshow(self.image, cmap="gray")
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
@@ -1325,7 +1327,7 @@ class ImageModelFitting:
         plt.legend()
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Image")
-        plt.subplot(1, 2, 2)
+        plt.subplot(row, col, 2)
         pos_x = self.params["pos_x"] * self.dx
         pos_y = self.params["pos_y"] * self.dx
         im = plt.scatter(pos_x, pos_y, c=self.volume, s=2)
@@ -1335,9 +1337,13 @@ class ImageModelFitting:
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"QEM refined scs ($\AA^2$)")
 
-    def plot_scs_voronoi(self):
-        plt.subplots(1, 2, figsize=(15, 5))
-        plt.subplot(1, 2, 1)
+    def plot_scs_voronoi(self,layout='horizontal'):
+        if layout == 'horizontal':
+            row, col = 1, 2
+        elif layout == 'vertical':
+            row, col = 2, 1
+        plt.subplots(row, col)
+        plt.subplot(row, col, 1)
         plt.imshow(self.image, cmap="gray")
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
@@ -1351,7 +1357,7 @@ class ImageModelFitting:
         plt.legend()
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Image")
-        plt.subplot(1, 2, 2)
+        plt.subplot(row, col, 2)
         pos_x = self.params["pos_x"] * self.dx
         pos_y = self.params["pos_y"] * self.dx
         im = plt.scatter(pos_x, pos_y, c=self.voronoi_volume, s=2)
