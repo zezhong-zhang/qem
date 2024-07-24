@@ -125,23 +125,37 @@ def gaussian_sum_batched(X, Y, pos_x, pos_y, height, width, background):
 
 
 @jit
-def voigt_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
+def voigt_sum_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
     R2 = (X[:, :, None] - pos_x[None, None, :]) ** 2 + (
         Y[:, :, None] - pos_y[None, None, :]
     ) ** 2
 
-    sum = (
+    total = (
         jnp.sum(
             height
             * (
                 ratio * jnp.exp(-(R2) / (2 * sigma**2))
-                + (1 - ratio) * gamma**2 / (R2 + gamma**2) ** (3 / 2)
+                + (1 - ratio) * gamma / (R2 + gamma**2) ** (3 / 2)
             ),
             axis=2,
         )
         + background
     )
-    return sum
+    return total
+
+@jit
+def lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background):
+    R2 = (X[:, :, None] - pos_x[None, None, :]) ** 2 + (
+        Y[:, :, None] - pos_y[None, None, :]
+    ) ** 2
+
+    total = (
+        jnp.sum(
+            height * gamma / (R2 + gamma**2)** (3 / 2), axis=2,
+        )
+        + background
+    )
+    return total
 
 
 def butterworth_window(shape, cutoff_radius_ftr, order):
