@@ -10,6 +10,7 @@ from scipy import ndimage as ndi
 
 class Detector:
     def __init__(self, array) -> None:
+        array = array.astype(float)
         self.detector = array
         self.detector_smooth = GaussianBlur(array, (5, 5), sigmaX=2, sigmaY=2)
         self.detector_normalised = np.zeros_like(array)
@@ -254,7 +255,7 @@ class Detector:
 
 class Calibrate_Dose(object):
     def __init__(
-        self, aperture_experiment_beam_file=None, aperture_detector_beam_file=None
+        self, aperture_experiment_beam_file=None, aperture_detector_beam_file=None, shutter=1
     ):
 
         data, dimensions, calibration, metadata = dm_load(aperture_experiment_beam_file)
@@ -267,6 +268,7 @@ class Calibrate_Dose(object):
         self.experiment_scan_value = 0
         self.detector_scan_value = 0
         self.scale = 1
+        self.shutter = shutter
         self.cleaned = False
 
     def remove_artifacts(self):
@@ -293,7 +295,7 @@ class Calibrate_Dose(object):
         self.detector_scan_value = detector_scan_value
         scale = (experiment_scan_value - background) / (
             detector_scan_value - background_detector
-        )
+        )/self.shutter
         self.scale = scale
         print(f"Dose scale between experiment scan and detector scale: {scale}")
         return scale
@@ -318,10 +320,10 @@ class Calibrate_Detector(object):
         self.detector = Detector(array)
 
     def read_dose_scale(
-        self, aperture_experiment_beam_file=None, aperture_detector_beam_file=None
+        self, aperture_experiment_beam_file=None, aperture_detector_beam_file=None, shutter=1,
     ):
         cali_dose = Calibrate_Dose(
-            aperture_experiment_beam_file, aperture_detector_beam_file
+            aperture_experiment_beam_file, aperture_detector_beam_file, shutter=shutter
         )
         self.dose_scale = cali_dose.dose_scale()
         cali_dose.plot()
