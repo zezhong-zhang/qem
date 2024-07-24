@@ -27,8 +27,9 @@ from qem.model import (
     butterworth_window,
     gaussian_2d_numba,
     gaussian_sum_parallel,
+    lorentzian_sum_parallel,
+    voigt_sum_parallel,
     mask_grads,
-    voigt_parallel,
 )
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import integrate
@@ -60,7 +61,7 @@ class ImageModelFitting:
         self.coordinates = np.array([])
         self.fit_background = True
         self.same_width = True
-        self.fitting_model = "gaussian"
+        self.model_type = "gaussian"
         self.params = dict()
         self._volume = None
         self.fit_local = False
@@ -90,9 +91,11 @@ class ImageModelFitting:
     def volume(self):
         if self._volume is None:
             params = self.params
-            if self.fitting_model == "gaussian":
+            if self.model_type == "gaussian":
                 volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
-            elif self.fitting_model == "voigt":
+            elif self.model_type == "lorentzian":
+                volume = params["height"] * params["gamma"] * 2 * np.pi * self.dx**2
+            elif self.model_type == "voigt":
                 gaussian_contrib = (
                     params["height"]
                     * params["sigma"] ** 2
@@ -565,7 +568,7 @@ class ImageModelFitting:
         # get the lowest 20% of the intensity as the background
         width = np.tile(width, self.num_coordinates)
         ratio = np.tile(0.9, self.num_coordinates)
-        if self.fitting_model == "gaussian":
+        if self.model_type == "gaussian":
             # Initialize the parameters
             params = {
                 "pos_x": pos_x,  # x position
@@ -573,15 +576,22 @@ class ImageModelFitting:
                 "height": height,  # height
                 "sigma": width,  # width
             }
-        elif self.fitting_model == "voigt":
+        elif self.model_type == "voigt":
             # Initialize the parameters
             params = {
                 "pos_x": pos_x,  # x position
                 "pos_y": pos_y,  # y position
                 "height": height,  # height
                 "sigma": width,  # width
-                "gamma": width / np.log(2),  # width
+                "gamma": width * np.sqrt(2*np.log(2)),  # width
                 "ratio": ratio,  # ratio
+            }
+        elif self.model_type == "lorentzian":
+            params = {
+                "pos_x": pos_x,  # x position
+                "pos_y": pos_y,  # y position
+                "height": height,  # height
+                "gamma": width * np.sqrt(2*np.log(2)) ,  # width
             }
         if self.fit_background:
             params["background"] = background.astype(float)
@@ -606,6 +616,49 @@ class ImageModelFitting:
         prediction = self.predict(params, X, Y)
         diff = prediction - image
         return diff
+
+    def apply_pbc(self, prediction, prediction_func, params, X, Y):
+        """
+        Apply periodic boundary conditions to the prediction.
+
+        Parameters:
+        -----------
+        prediction_func : function
+            The prediction function to use.
+        params : dict
+            Dictionary containing the parameters for the prediction.
+        X : np.ndarray
+            The x-coordinates for the prediction.
+        Y : np.ndarray
+            The y-coordinates for the prediction.
+        nx : int
+            Periodic boundary condition parameter in the x-direction.
+        ny : int
+            Periodic boundary condition parameter in the y-direction.
+        pbc : bool
+            Flag indicating whether to apply periodic boundary conditions.
+
+        Returns:
+        --------
+        np.ndarray
+            The prediction with periodic boundary conditions applied.
+        """
+        for i, j in [
+            (1, 0), (0, 1), (-1, 0), (0, -1),
+            (1, 1), (-1, -1), (1, -1), (-1, 1),
+        ]:
+            prediction += prediction_func(
+                X,
+                Y,
+                params["pos_x"] + i * self.nx,
+                params["pos_y"] + j * self.ny,
+                params["height"],
+                params.get("sigma"),
+                params.get("gamma"),
+                params.get("ratio"),
+                0
+            )
+        return prediction
 
     def predict_local(self, params: dict):
         if self.fit_background:
@@ -651,74 +704,34 @@ class ImageModelFitting:
         return prediction
 
     def predict(self, params: dict, X: np.ndarray, Y: np.ndarray):
-        if self.fit_background:
-            background = params["background"]
-        else:
-            background = 0
-        if self.fitting_model == "gaussian":
-            prediction = gaussian_sum_parallel(
-                X,
-                Y,
-                params["pos_x"],
-                params["pos_y"],
-                params["height"],
-                params["sigma"],
-                background,
+        background = params.get("background", 0) if self.fit_background else 0
+
+        if self.model_type == "gaussian":
+            prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: gaussian_sum_parallel(
+                X, Y, pos_x, pos_y, height, sigma, background
             )
-            if self.pbc:
-                for i, j in [
-                    (1, 0),
-                    (0, 1),
-                    (-1, 0),
-                    (0, -1),
-                    (1, 1),
-                    (-1, -1),
-                    (1, -1),
-                    (-1, 1),
-                ]:
-                    prediction += gaussian_sum_parallel(
-                        X,
-                        Y,
-                        params["pos_x"] + i * self.nx,
-                        params["pos_y"] + j * self.ny,
-                        params["height"],
-                        params["sigma"],
-                        0,
-                    )
-        elif self.fitting_model == "voigt":
-            prediction = voigt_parallel(
-                X,
-                Y,
-                params["pos_x"],
-                params["pos_y"],
-                params["height"],
-                params["sigma"],
-                params["gamma"],
-                params["ratio"],
-                background,
+        elif self.model_type == "voigt":
+            prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: voigt_sum_parallel(
+                X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background
             )
-            if self.pbc:
-                for i, j in [
-                    (1, 0),
-                    (0, 1),
-                    (-1, 0),
-                    (0, -1),
-                    (1, 1),
-                    (-1, -1),
-                    (1, -1),
-                    (-1, 1),
-                ]:
-                    prediction += voigt_parallel(
-                        X,
-                        Y,
-                        params["pos_x"] + i * self.nx,
-                        params["pos_y"] + j * self.ny,
-                        params["height"],
-                        params["sigma"],
-                        params["gamma"],
-                        params["ratio"],
-                        0,
-                    )
+        elif self.model_type == "lorentzian":
+            prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: lorentzian_sum_parallel(
+                X, Y, pos_x, pos_y, height, gamma, background
+            )
+
+        prediction = prediction_func(
+            X,
+            Y,
+            params["pos_x"],
+            params["pos_y"],
+            params["height"],
+            params.get("sigma"),
+            params.get("gamma"),
+            params.get("ratio"),
+            params.get("background", 0)
+            )
+        if self.pbc:
+            prediction = self.apply_pbc(prediction, prediction_func, params, X, Y)
         return prediction
 
     ### fitting
