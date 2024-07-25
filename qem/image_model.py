@@ -561,14 +561,14 @@ class ImageModelFitting:
         else:
             width = atom_size / self.dx
         # self.center_of_mass()
-        pos_x = copy.deepcopy(self.coordinates[:, 0])
-        pos_y = copy.deepcopy(self.coordinates[:, 1])
+        pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
+        pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
         # background = np.percentile(self.image, 20)
-        background = self.image.min()
+        background = self.image.min().astype(float)
         height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
         # get the lowest 20% of the intensity as the background
-        width = np.tile(width, self.num_coordinates)
-        ratio = np.tile(0.9, self.num_coordinates)
+        width = np.tile(width, self.num_coordinates).astype(float)
+        ratio = np.tile(0.9, self.num_coordinates).astype(float)
         if self.model_type == "gaussian":
             # Initialize the parameters
             params = {
