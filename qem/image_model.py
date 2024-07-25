@@ -64,7 +64,6 @@ class ImageModelFitting:
         self.same_width = True
         self.model_type = "gaussian"
         self.params = dict()
-        self._volume = None
         self.fit_local = False
         self.pbc = False
         x = np.arange(self.nx)
@@ -90,32 +89,29 @@ class ImageModelFitting:
 
     @property
     def volume(self):
-        if self._volume is None:
-            params = self.params
-            if self.model_type == "gaussian":
-                volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
-            elif self.model_type == "lorentzian":
-                volume = params["height"] * params["gamma"] ** 2 * np.pi * 2 * self.dx**2
-            elif self.model_type == "voigt":
-                gaussian_contrib = (
-                    params["height"]
-                    * params["sigma"] ** 2
-                    * 2
-                    * np.pi
-                    * self.dx**2
-                )
-                lorentzian_contrib = (
-                    params["height"]
-                    * params["gamma"]** 2
-                    * 2
-                    * np.pi
-                    * self.dx**2
-                )
-                volume =  gaussian_contrib * params["ratio"] + lorentzian_contrib * (1 - params["ratio"])
-            self._volume = volume
-            return volume
-        else:
-            return self._volume
+        params = self.params
+        if self.model_type == "gaussian":
+            volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
+        elif self.model_type == "lorentzian":
+            volume = params["height"] * params["gamma"] ** 2 * np.pi * 2 * self.dx**2
+        elif self.model_type == "voigt":
+            gaussian_contrib = (
+                params["height"]
+                * params["sigma"] ** 2
+                * 2
+                * np.pi
+                * self.dx**2
+            )
+            lorentzian_contrib = (
+                params["height"]
+                * params["gamma"]** 2
+                * 2
+                * np.pi
+                * self.dx**2
+            )
+            volume =  gaussian_contrib * params["ratio"] + lorentzian_contrib * (1 - params["ratio"])
+        return volume
+
 
     @property
     def voronoi_volume(self):
