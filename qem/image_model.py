@@ -33,7 +33,7 @@ from qem.model import (
     mask_grads,
 )
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
-from qem.voronoi import integrate
+from qem.voronoi import voronoi_integrate
 logging.basicConfig(level=logging.INFO)
 
 
@@ -56,10 +56,10 @@ class ImageModelFitting:
         self.local_shape = image.shape
         self.dx = dx
         self.units = units
-        self.atom_types = np.array([])
+        self._atom_types = np.array([])
         self.elements = elements    
         self.atoms_selected = np.array([])
-        self.coordinates = np.array([])
+        self._coordinates = np.array([])
         self.fit_background = True
         self.same_width = True
         self.model_type = "gaussian"
@@ -121,16 +121,17 @@ class ImageModelFitting:
 
     @property
     def voronoi_volume(self):
-        if self._voronoi_volume is None:
+        if hasattr(self, "_voronoi_volume") and self._voronoi_volume is not None:
+            return self._voronoi_volume
+        else:
             self.voronoi_integration()
-        return self._voronoi_volume
 
     @property
     def num_coordinates(self):
         return self.coordinates.shape[0]
 
     ### voronoi integration
-    def voronoi_integration(self, plot=False,pbc=False):
+    def voronoi_integration(self, plot=False):
         """
         Compute the Voronoi integration of the atomic columns.
 
@@ -162,14 +163,6 @@ class ImageModelFitting:
         return integrated_intensity, intensity_record, point_record
 
     ### init peaks and parameters
-    def import_coordinates(self, coordinates: np.ndarray):
-        """
-        Import the coordinates of the atomic columns.
-
-        Args:
-            coordinates (np.array): The coordinates of the atomic columns.
-        """
-        self.coordinates = coordinates
 
     def plot_coordinates(self, color="red", s=1):
         """
@@ -192,14 +185,23 @@ class ImageModelFitting:
             )
         plt.legend()
 
-    def import_atom_types(self, atom_types: np.ndarray):
-        """
-        Import the atom types of the atomic columns.
+    @property
+    def atom_types(self):
+        if len(self._atom_types) == 0:
+            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        return self._atom_types
 
-        Args:
-            atom_types (np.array): The atom types of the atomic columns.
-        """
-        self.atom_types = atom_types
+    @atom_types.setter
+    def atom_types(self, atom_types: np.ndarray):
+        self._atom_types = atom_types
+
+    @property
+    def coordinates(self):
+        return self._coordinates
+    
+    @coordinates.setter
+    def coordinates(self, coordinates: np.ndarray):
+        self._coordinates = coordinates
 
     def map_lattice(
         self,
@@ -1397,7 +1399,7 @@ class ImageModelFitting:
         plt.imshow(self.image, cmap="gray")
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
-            element = self.elements[atom_type]
+            element = self.elements[int(atom_type)]
             plt.scatter(
                 self.coordinates[mask, 0],
                 self.coordinates[mask, 1],
