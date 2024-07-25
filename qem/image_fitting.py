@@ -725,16 +725,20 @@ class ImageModelFitting:
         sigma = params.get("sigma")
         gamma = params.get("gamma")
         ratio = params.get("ratio")
+        if len(pos_x) < self.num_coordinates:
+            mask = self.atoms_selected
+        else:
+            mask = np.ones(self.num_coordinates, dtype=bool)
+
         if self.same_width:
             # broadcast the sigma, gamma and ratio according to the self.atom_types
             if self.model_type in {"voigt", "gaussian"}:
-                sigma = sigma[self.atom_types]
+                sigma = sigma[self.atom_types[mask]]
             # Check the model type and broadcast gamma and ratio as needed
             if self.model_type in {"voigt", "lorentzian"}:
-                gamma = gamma[self.atom_types]
+                gamma = gamma[self.atom_types[mask]]
             if self.model_type == "voigt":
-                ratio = ratio[self.atom_types]
-
+                ratio = ratio[self.atom_types[mask]]
         if self.model_type == "gaussian":
             prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: gaussian_sum_parallel(
                 X, Y, pos_x, pos_y, height, sigma, background
@@ -1032,6 +1036,7 @@ class ImageModelFitting:
             for index in tqdm(random_batches, desc="Fitting random batch"):
                 mask = np.zeros(self.num_coordinates, dtype=bool)
                 mask[index] = True
+                self.atoms_selected = mask
                 # params = self.same_width_on_atom_type(params)
                 select_params = self.select_params(params, mask)
                 global_prediction = self.predict(params, self.X, self.Y)
