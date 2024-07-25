@@ -906,12 +906,14 @@ class ImageModelFitting:
         # Update the model
         self.params = new_params
         return new_params
-
+    
     def minimize(
         self,
-        params: dict,
+        params: dict = None,
         tol: float = 1e-4,
     ):
+        if params is None:
+            params = self.params if self.params is not None else self.init_params()
         def objective_fn(params_array, param_shapes, param_keys, image, X, Y):
             # Convert 1D array back to dictionary of parameters
             params_dict = {}
@@ -953,11 +955,16 @@ class ImageModelFitting:
         self.model = self.predict(optimized_params, self.X, self.Y)
         return optimized_params
     
+    def fit_global(
+        self,
+        params: dict = None,
         maxiter: int = 1000,
         tol: float = 1e-3,
         step_size: float = 0.01,
         verbose: bool = False,
-    ):
+    ):  
+        if params is None:
+            params = self.params if self.params is not None else self.init_params()
         self.fit_local = False
         params = self.optimize(
             self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
@@ -969,7 +976,7 @@ class ImageModelFitting:
 
     def fit_random_batch(
         self,
-        params: dict,
+        params: dict = None,
         num_epoch: int = 5,
         batch_size: int = 500,
         maxiter: int = 50,
@@ -978,6 +985,9 @@ class ImageModelFitting:
         verbose: bool = False,
         plot: bool = False,
     ):
+        if params is None:
+            params = self.params if self.params is not None else self.init_params()
+
         self.fit_local = False
         self.converged = False
         while self.converged is False and num_epoch > 0:
@@ -1044,6 +1054,8 @@ class ImageModelFitting:
         plot: bool = False,
         verbose: bool = False,
     ):
+        if params is None:
+            params = self.params if self.params is not None else self.init_params()
         self.fit_local = True
         left, right, top, bottom = fitting_region
         center_left, center_right, center_top, center_bottom = update_region
@@ -1161,6 +1173,8 @@ class ImageModelFitting:
         mode: str = "sequential",
         num_random_patches: int = 10,
     ):
+        if params is None:
+            params = self.params if self.params is not None else self.init_params()
         self.fit_local = True
         if buffer_size is None:
             width, _, _ = (
