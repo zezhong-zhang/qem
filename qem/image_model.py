@@ -597,7 +597,7 @@ class ImageModelFitting:
                 "pos_y": pos_y,  # y position
                 "height": height,  # height
                 "sigma": width,  # width
-                "gamma": width * np.sqrt(2*np.log(2)),  # width
+                "gamma": width / np.sqrt(2*np.log(2)),  # width
                 "ratio": ratio,  # ratio
             }
         elif self.model_type == "lorentzian":
@@ -605,7 +605,7 @@ class ImageModelFitting:
                 "pos_x": pos_x,  # x position
                 "pos_y": pos_y,  # y position
                 "height": height,  # height
-                "gamma": width * np.sqrt(2*np.log(2)) ,  # width
+                "gamma": width / np.sqrt(2*np.log(2)) ,  # width
             }
         if self.fit_background:
             params["background"] = background.astype(float)
