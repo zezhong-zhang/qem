@@ -779,6 +779,8 @@ class ImageModelFitting:
         pos_y = params["pos_y"]
         sigma = params["sigma"]
         height = params["height"]
+        if self.same_width:
+            sigma = sigma[self.atom_types]
         rows = []
         cols = []
         data = []
