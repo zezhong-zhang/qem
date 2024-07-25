@@ -181,7 +181,7 @@ class ImageModelFitting:
 
     @property
     def atom_types(self):
-        if len(self._atom_types) == 0:
+        if len(self._atom_types) == 0 or self._atom_types is None:
             self._atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self._atom_types
 
@@ -200,6 +200,10 @@ class ImageModelFitting:
     @coordinates.setter
     def coordinates(self, coordinates: np.ndarray):
         self._coordinates = coordinates
+
+    def import_coordinates(self, coordinates: np.ndarray, atom_types: np.ndarray=None):
+        self.coordinates = coordinates
+        self.atom_types = atom_types
 
     def map_lattice(
         self,
@@ -1324,12 +1328,22 @@ class ImageModelFitting:
         return True
 
     def select_params(self, params: dict, mask: np.ndarray):
-        select_params = {
-            key: value[mask]
-            for key, value in params.items()
-            if key not in ["background"]
-        }
-        select_params["background"] = params["background"]
+        select_params = {}
+        if self.fit_background:
+            select_params["background"] = params["background"]
+        if self.same_width:
+            if self.model_type in {"voigt", "gaussian"}:
+                select_params["sigma"] = params["sigma"]
+            if self.model_type in {"voigt", "lorentzian"}:
+                select_params["gamma"] = params["gamma"]
+            if self.model_type == "voigt":
+                select_params["ratio"] = params["ratio"]
+            for key in ["pos_x", "pos_y", "height"]:
+                select_params[key] = params[key][mask]
+        else: 
+            for key, value in params.items():
+                if key != "background":
+                    select_params[key] = value[mask]
         return select_params
 
     def update_from_local_params(
@@ -1337,7 +1351,10 @@ class ImageModelFitting:
     ):
         for key, value in local_params.items():
             value = np.array(value)
-            if key not in ["background"]:
+            shared_value_list = ["background"]
+            if self.same_width:
+                shared_value_list += ["sigma", "gamma", "ratio"]
+            if key not in shared_value_list:
                 if mask_local is None:
                     params[key][mask] = value
                 else:
