@@ -145,9 +145,12 @@ class ImageModelFitting:
             s = Signal2D(self.image)
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
-        max_radius = self.params["sigma"].max() * 5
-        integrated_intensity, intensity_record, point_record = integrate(
-            s, pos_x, pos_y, max_radius=max_radius, pbc=pbc
+        try:
+            max_radius = self.params["sigma"].max() * 5
+        except KeyError:
+            max_radius = self.params["gamma"].max() * 5
+        integrated_intensity, intensity_record, point_record = voronoi_integrate(
+            s, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
         )
         integrated_intensity = integrated_intensity * self.dx**2
         intensity_record = intensity_record * self.dx**2
@@ -456,9 +459,9 @@ class ImageModelFitting:
         coordinates = self.coordinates
         mask = (
             (coordinates[:, 0] >= 0)
-            & (coordinates[:, 0] <= self.nx)
+            & (coordinates[:, 0] < self.nx)
             & (coordinates[:, 1] >= 0)
-            & (coordinates[:, 1] <= self.ny)
+            & (coordinates[:, 1] < self.ny)
         )
         self.coordinates = coordinates[mask]
         return self.coordinates
@@ -560,6 +563,12 @@ class ImageModelFitting:
             width = self.guess_radius()[0]
         else:
             width = atom_size / self.dx
+        if self.pbc:
+            mask = (self.coordinates[:, 0] < self.nx-1) & (self.coordinates[:, 1] < self.ny-1)
+            self.coordinates = self.coordinates[mask]
+            if len(self.atom_types) != self.num_coordinates:
+                self.atom_types = self.atom_types[mask]
+
         # self.center_of_mass()
         pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
         pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
