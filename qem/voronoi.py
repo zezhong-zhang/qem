@@ -4,7 +4,7 @@ from skimage.segmentation import watershed
 from hyperspy.signals import Signal2D, BaseSignal
 from tqdm import tqdm as progressbar
 
-def integrate(
+def voronoi_integrate(
     s,
     points_x,
     points_y,
