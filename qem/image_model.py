@@ -10,6 +10,7 @@ from hyperspy._signals.signal2d import Signal2D
 from jax import numpy as jnp
 from jax import value_and_grad
 from jax.example_libraries import optimizers
+from jax.scipy.optimize import minimize
 from jaxopt import OptaxSolver
 from matplotlib_scalebar.scalebar import ScaleBar
 from scipy.ndimage import center_of_mass
@@ -906,9 +907,52 @@ class ImageModelFitting:
         self.params = new_params
         return new_params
 
-    def fit_global(
+    def minimize(
         self,
         params: dict,
+        tol: float = 1e-4,
+    ):
+        def objective_fn(params_array, param_shapes, param_keys, image, X, Y):
+            # Convert 1D array back to dictionary of parameters
+            params_dict = {}
+            start = 0
+            for key, shape in zip(param_keys, param_shapes):
+                size = np.prod(shape)
+                end = start + size
+                params_dict[key] = params_array[start:end].reshape(shape)
+                start = end
+            return self.loss(params_dict, image=image, X=X, Y=Y)
+
+        # Flatten params into a 1D array and get shapes
+        param_keys = sorted(params.keys())
+        param_shapes = [params[key].shape for key in param_keys]
+        params_flat = np.concatenate([params[key].ravel() for key in param_keys])
+
+        # Define the method for minimize
+        method = 'BFGS'  # Example method, you can choose others like 'CG', 'L-BFGS-B', etc.
+
+        # Perform the optimization
+        res = minimize(
+            fun=objective_fn,
+            x0=params_flat,
+            args=(param_shapes, param_keys, self.image, self.X, self.Y),
+            method=method,
+            tol=tol,
+        )
+
+        # Unflatten the parameters back into the dictionary form
+        optimized_params = {}
+        start = 0
+        for key, shape in zip(param_keys, param_shapes):
+            size = np.prod(shape)
+            end = start + size
+            optimized_params[key] = res.x[start:end].reshape(shape)
+            start = end
+        params = self.same_width_on_atom_type(optimized_params)
+        self.params = optimized_params
+        self.model = self.predict(optimized_params, self.X, self.Y)
+        return optimized_params
+    
         maxiter: int = 1000,
         tol: float = 1e-3,
         step_size: float = 0.01,
