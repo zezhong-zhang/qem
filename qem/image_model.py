@@ -94,7 +94,7 @@ class ImageModelFitting:
             if self.model_type == "gaussian":
                 volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
             elif self.model_type == "lorentzian":
-                volume = params["height"] * params["gamma"] * 2 * np.pi * self.dx**2
+                volume = params["height"] * params["gamma"] ** 2 * 2 * np.pi * self.dx**2
             elif self.model_type == "voigt":
                 gaussian_contrib = (
                     params["height"]
@@ -106,7 +106,7 @@ class ImageModelFitting:
                 )
                 lorentzian_contrib = (
                     params["height"]
-                    * params["gamma"]
+                    * params["gamma"]** 2
                     * 2
                     * np.pi
                     * (1 - params["ratio"])

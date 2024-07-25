@@ -135,7 +135,7 @@ def voigt_sum_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, backgrou
             height
             * (
                 ratio * jnp.exp(-(R2) / (2 * sigma**2))
-                + (1 - ratio) * gamma / (R2 + gamma**2) ** (3 / 2)
+                + (1 - ratio) * gamma**3 / (R2 + gamma**2) ** (3 / 2)
             ),
             axis=2,
         )
@@ -151,7 +151,7 @@ def lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background):
 
     total = (
         jnp.sum(
-            height * gamma / (R2 + gamma**2)** (3 / 2), axis=2,
+            height * gamma**3 / (R2 + gamma**2)** (3 / 2), axis=2,
         )
         + background
     )
