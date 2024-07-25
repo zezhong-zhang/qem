@@ -95,14 +95,13 @@ class ImageModelFitting:
             if self.model_type == "gaussian":
                 volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
             elif self.model_type == "lorentzian":
-                volume = params["height"] * params["gamma"] ** 2 * 2 * np.pi * self.dx**2
+                volume = params["height"] * params["gamma"] ** 2 * np.pi * 2 * self.dx**2
             elif self.model_type == "voigt":
                 gaussian_contrib = (
                     params["height"]
                     * params["sigma"] ** 2
-                    * np.pi
                     * 2
-                    * params["ratio"]
+                    * np.pi
                     * self.dx**2
                 )
                 lorentzian_contrib = (
@@ -110,10 +109,9 @@ class ImageModelFitting:
                     * params["gamma"]** 2
                     * 2
                     * np.pi
-                    * (1 - params["ratio"])
                     * self.dx**2
                 )
-                volume =  gaussian_contrib + lorentzian_contrib
+                volume =  gaussian_contrib * params["ratio"] + lorentzian_contrib * (1 - params["ratio"])
             self._volume = volume
             return volume
         else:
@@ -194,6 +192,10 @@ class ImageModelFitting:
     @atom_types.setter
     def atom_types(self, atom_types: np.ndarray):
         self._atom_types = atom_types
+
+    @property
+    def num_atom_types(self):
+        return len(np.unique(self.atom_types))
 
     @property
     def coordinates(self):
@@ -578,8 +580,12 @@ class ImageModelFitting:
         background = self.image.min().astype(float)
         height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
         # get the lowest 20% of the intensity as the background
-        width = np.tile(width, self.num_coordinates).astype(float)
-        ratio = np.tile(0.9, self.num_coordinates).astype(float)
+        if self.same_width:
+            width = np.tile(width, self.num_atom_types).astype(float)
+            ratio = np.tile(0.9, self.num_atom_types).astype(float)
+        else:
+            width = np.tile(width, self.num_coordinates).astype(float)
+            ratio = np.tile(0.9, self.num_coordinates).astype(float)
         if self.model_type == "gaussian":
             # Initialize the parameters
             params = {
@@ -716,7 +722,22 @@ class ImageModelFitting:
         return prediction
 
     def predict(self, params: dict, X: np.ndarray, Y: np.ndarray):
-        background = params.get("background", 0) if self.fit_background else 0
+        background = params.get("background", 0)
+        pos_x = params["pos_x"]
+        pos_y = params["pos_y"]
+        height = params["height"]
+        sigma = params.get("sigma")
+        gamma = params.get("gamma")
+        ratio = params.get("ratio")
+        if self.same_width:
+            # broadcast the sigma, gamma and ratio according to the self.atom_types
+            if self.model_type in {"voigt", "gaussian"}:
+                sigma = sigma[self.atom_types]
+            # Check the model type and broadcast gamma and ratio as needed
+            if self.model_type in {"voigt", "lorentzian"}:
+                gamma = gamma[self.atom_types]
+            if self.model_type == "voigt":
+                ratio = ratio[self.atom_types]
 
         if self.model_type == "gaussian":
             prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: gaussian_sum_parallel(
@@ -734,13 +755,13 @@ class ImageModelFitting:
         prediction = prediction_func(
             X,
             Y,
-            params["pos_x"],
-            params["pos_y"],
-            params["height"],
-            params.get("sigma"),
-            params.get("gamma"),
-            params.get("ratio"),
-            params.get("background", 0)
+            pos_x,
+            pos_y,
+            height,
+            sigma,
+            gamma,
+            ratio,
+            background,
             )
         if self.pbc:
             prediction = self.apply_pbc(prediction, prediction_func, params, X, Y)
@@ -961,7 +982,7 @@ class ImageModelFitting:
             end = start + size
             optimized_params[key] = res.x[start:end].reshape(shape)
             start = end
-        params = self.same_width_on_atom_type(optimized_params)
+        # params = self.same_width_on_atom_type(optimized_params)
         self.params = optimized_params
         self.model = self.predict(optimized_params, self.X, self.Y)
         return optimized_params
@@ -980,7 +1001,7 @@ class ImageModelFitting:
         params = self.optimize(
             self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
         )
-        params = self.same_width_on_atom_type(params)
+        # params = self.same_width_on_atom_type(params)
         self.params = params
         self.model = self.predict(params, self.X, self.Y)
         return params
@@ -1015,7 +1036,7 @@ class ImageModelFitting:
             for index in tqdm(random_batches, desc="Fitting random batch"):
                 mask = np.zeros(self.num_coordinates, dtype=bool)
                 mask[index] = True
-                params = self.same_width_on_atom_type(params)
+                # params = self.same_width_on_atom_type(params)
                 select_params = self.select_params(params, mask)
                 global_prediction = self.predict(params, self.X, self.Y)
                 local_prediction = self.predict(select_params, self.X, self.Y)
@@ -1047,7 +1068,7 @@ class ImageModelFitting:
                     plt.imshow(image - global_prediction, cmap="gray")
                     plt.gca().set_aspect("equal", adjustable="box")
                     plt.show()
-            params = self.same_width_on_atom_type(params)
+            # params = self.same_width_on_atom_type(params)
             self.converged = self.convergence(params, pre_params, tol)
         params = self.linear_estimator(params)
         self.params = params
@@ -1249,7 +1270,7 @@ class ImageModelFitting:
             )
 
         # have a linear estimator of the background and height of the gaussian peaks
-        self.same_width_on_atom_type(params)
+        # self.same_width_on_atom_type(params)
         params = self.linear_estimator(params)
         self.params = params
         self.model = self.predict(params, self.X, self.Y)
