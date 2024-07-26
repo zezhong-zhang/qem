@@ -57,7 +57,7 @@ class CrystalAnalyzer:
         plt.legend()
         plt.show()
 
-    def choose_lattice_vectors(self, tolerance=10):
+    def choose_lattice_vectors(self, tolerance=10, reciprocal=False):
         """
         Choose the lattice vectors based on the given tolerance.
 
@@ -76,41 +76,45 @@ class CrystalAnalyzer:
             units=self.units,
         )
         real_origin, real_a, real_b = real_plot.select_vectors()
-
-        fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
-        fft_dx = 1 / (self.dx * self.image.shape[1])
-        fft_dy = 1 / (self.dx * self.image.shape[0])
-        fft_pixel_size = np.array([fft_dx, fft_dy])
-        fft_tolerance = int(1/min(np.linalg.norm(real_a*self.dx), np.linalg.norm(real_b*self.dx)) / max(fft_dx,fft_dy)/2)
-        fft_peaks = peak_local_max(
-            fft_image, min_distance=fft_tolerance
-        )
-        fft_peaks = fft_peaks[:, [1, 0]].astype(float)
-        fft_plot = InteractivePlot(
-            np.log(fft_image),
-            fft_peaks,
-            dx=fft_dx,
-            units=f"1/{self.units}",
-            dimension="si-length-reciprocal",
-            tolerance=fft_tolerance,
-        )
-        fft_origin, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors()
-        # normalize the fft vectors
-        fft_a = fft_a_pixel * fft_pixel_size
-        fft_b = fft_b_pixel * fft_pixel_size
-        matrix_fft = np.vstack([fft_a, fft_b])
-        matrix_real = np.linalg.inv(matrix_fft)
-        # get the matrix in real space
-        vec_a = matrix_real[:,0] 
-        vec_b = matrix_real[:,1]
-        vec_a_pixel = vec_a / self.dx
-        vec_b_pixel = vec_b / self.dx
-        print(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
-
-        self.origin = real_origin
-        self.a = vec_a_pixel
-        self.b = vec_b_pixel
-        return real_origin, vec_a_pixel, vec_b_pixel
+        if reciprocal:
+            fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
+            fft_dx = 1 / (self.dx * self.image.shape[1])
+            fft_dy = 1 / (self.dx * self.image.shape[0])
+            fft_pixel_size = np.array([fft_dx, fft_dy])
+            fft_tolerance = int(1/min(np.linalg.norm(real_a*self.dx), np.linalg.norm(real_b*self.dx)) / max(fft_dx,fft_dy)/2)
+            fft_peaks = peak_local_max(
+                fft_image, min_distance=fft_tolerance
+            )
+            fft_peaks = fft_peaks[:, [1, 0]].astype(float)
+            fft_plot = InteractivePlot(
+                np.log(fft_image),
+                fft_peaks,
+                dx=fft_dx,
+                units=f"1/{self.units}",
+                dimension="si-length-reciprocal",
+                tolerance=fft_tolerance,
+            )
+            fft_origin, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors()
+            # normalize the fft vectors
+            fft_a = fft_a_pixel * fft_pixel_size
+            fft_b = fft_b_pixel * fft_pixel_size
+            matrix_fft = np.vstack([fft_a, fft_b])
+            matrix_real = np.linalg.inv(matrix_fft)
+            # get the matrix in real space
+            vec_a = matrix_real[:,0] 
+            vec_b = matrix_real[:,1]
+            vec_a_pixel = vec_a / self.dx
+            vec_b_pixel = vec_b / self.dx
+            print(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
+            self.a = vec_a_pixel
+            self.b = vec_b_pixel
+            self.origin = real_origin
+            return real_origin, vec_a_pixel, vec_b_pixel
+        else:
+            self.a = real_a
+            self.b = real_b
+            self.origin = real_origin
+            return real_origin, real_a, real_b
 
     def read_cif(self, cif_file_path):
         structure = read(cif_file_path)
