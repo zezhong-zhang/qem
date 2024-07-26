@@ -151,7 +151,7 @@ def lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background):
 
     total = (
         jnp.sum(
-            height * gamma**3 / (R2 + gamma**2)** (3 / 2), axis=2,
+            height * gamma**4 / (R2 + gamma**2)** (2), axis=2,
         )
         + background
     )

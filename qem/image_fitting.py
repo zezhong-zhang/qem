@@ -89,11 +89,18 @@ class ImageModelFitting:
 
     @property
     def volume(self):
-        params = self.params
+        params = self.params.copy()
+        if self.same_width:
+            if self.model_type in {"gaussian", "voigt"}:
+                params["sigma"] = params["sigma"][self.atom_types]
+            elif self.model_type in {"lorentzian"}:
+                params["gamma"] = params["gamma"][self.atom_types]
+            elif self.model_type == "voigt":
+                params["ratio"] = params["ratio"][self.atom_types]
         if self.model_type == "gaussian":
             volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
         elif self.model_type == "lorentzian":
-            volume = params["height"] * params["gamma"] ** 2 * np.pi * 2 * self.dx**2
+            volume = params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
         elif self.model_type == "voigt":
             gaussian_contrib = (
                 params["height"]
@@ -105,7 +112,6 @@ class ImageModelFitting:
             lorentzian_contrib = (
                 params["height"]
                 * params["gamma"]** 2
-                * 2
                 * np.pi
                 * self.dx**2
             )
