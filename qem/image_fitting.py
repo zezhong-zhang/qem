@@ -207,9 +207,8 @@ class ImageModelFitting:
     def coordinates(self, coordinates: np.ndarray):
         self._coordinates = coordinates
 
-    def import_coordinates(self, coordinates: np.ndarray, atom_types: np.ndarray=None):
+    def import_coordinates(self, coordinates: np.ndarray):
         self.coordinates = coordinates
-        self.atom_types = atom_types
 
     def map_lattice(
         self,
@@ -742,12 +741,12 @@ class ImageModelFitting:
 
         if self.same_width:
             # broadcast the sigma, gamma and ratio according to the self.atom_types
-            if self.model_type in {"voigt", "gaussian"}:
+            if self.model_type in {"voigt", "gaussian"} and sigma is not None:
                 sigma = sigma[self.atom_types[mask]]
             # Check the model type and broadcast gamma and ratio as needed
-            if self.model_type in {"voigt", "lorentzian"}:
+            if self.model_type in {"voigt", "lorentzian"} and gamma is not None:
                 gamma = gamma[self.atom_types[mask]]
-            if self.model_type == "voigt":
+            if self.model_type == "voigt" and ratio is not None:
                 ratio = ratio[self.atom_types[mask]]
         if self.model_type == "gaussian":
             prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: gaussian_sum_parallel(
@@ -1467,6 +1466,7 @@ class ImageModelFitting:
         plt.title(r"QEM refined scs ($\AA^2$)")
 
     def plot_scs_voronoi(self,layout='horizontal'):
+        assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
         if layout == 'horizontal':
             row, col = 1, 2
         elif layout == 'vertical':
