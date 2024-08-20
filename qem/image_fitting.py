@@ -218,6 +218,7 @@ class ImageModelFitting:
         a_limit=25,
         b_limit=15,
         add_missing_atoms: bool = False,
+        reciprocal: bool = False,
     ):
         """
         Find the peaks in the image based on the CIF file.
@@ -237,7 +238,7 @@ class ImageModelFitting:
             units=self.units,
         )
         crystal_analyzer.read_cif(cif_file)
-        crystal_analyzer.choose_lattice_vectors(tolerance=min_distance)
+        crystal_analyzer.choose_lattice_vectors(tolerance=min_distance, reciprocal=reciprocal)
         supercell_in_image, supercell_atom_types = (
             crystal_analyzer.generate_supercell_lattice(
                 a_limit=a_limit, b_limit=b_limit
@@ -308,7 +309,6 @@ class ImageModelFitting:
         self.coordinates = peaks_locations[:, [1, 0]].astype(float)
         self.atom_types = np.zeros(self.num_coordinates, dtype=int)
         self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
-        self.atom_types = np.zeros(self.num_coordinates, dtype=int)
         return self.coordinates
 
     def refine_center_of_mass(self, windows_size: int = 5, plot=False):
@@ -1495,3 +1495,14 @@ class ImageModelFitting:
         plt.gca().set_aspect('equal', adjustable='box')
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"Voronoi scs ($\AA^2$)")        
+
+    def plot_scs_histogram(self):
+        plt.figure()
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            element = self.elements[atom_type]
+            plt.hist(self.volume[mask], bins=100, alpha=0.5, label=element)
+        plt.legend()
+        plt.xlabel(r"Refined SCS ($\AA^2$)")
+        plt.ylabel("Frequency")
+        plt.title("Histogram of QEM refined SCS")
