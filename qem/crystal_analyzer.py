@@ -6,8 +6,8 @@ import numpy as np
 from ase import Atom, Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
-from pymatgen.core.structure import Structure
-from pymatgen.transformations.advanced_transformations import SupercellTransformation
+# from pymatgen.core.structure import Structure
+# from pymatgen.transformations.advanced_transformations import SupercellTransformation
 from skimage.feature import peak_local_max
 
 from qem.color import get_unique_colors
@@ -588,7 +588,7 @@ class CrystalAnalyzer:
 
     ####### static methods #######
     @staticmethod
-    def check_element_in_unitcell(unitcell: Structure, element_symbol: str) -> list:
+    def check_element_in_unitcell(unitcell, element_symbol: str) -> list:
         """
         Checks if the given element is present in each site of the unit cell.
 
