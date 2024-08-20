@@ -12,3 +12,5 @@ tests/__pycache__/test_preprocessing.cpython-311-pytest-8.1.1.pyc
 examples/*.cif
 examples/*.lmp
 examples/*.xyz
+examples/dataset/
+examples/runs/
