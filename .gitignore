@@ -14,3 +14,4 @@ examples/*.lmp
 examples/*.xyz
 examples/dataset/
 examples/runs/
+examples/yolov8n.pt
