@@ -704,7 +704,7 @@ class ImageModelFitting:
             )
         return prediction
 
-    def predict_local(self, params: dict):
+    def predict_local(self, params: dict, use_mask=False):
         if self.fit_background:
             background = params["background"]
         else:
@@ -713,6 +713,11 @@ class ImageModelFitting:
         pos_y = params["pos_y"]
         height = params["height"]
         sigma = params["sigma"]
+        if self.same_width:
+            sigma = sigma[self.atom_types]
+        if use_mask:
+            sigma = sigma[self.atoms_selected]
+
         windos_size = int(sigma.max() * 5)
         x = np.arange(-windos_size, windos_size + 1, 1)
         y = np.arange(-windos_size, windos_size + 1, 1)
