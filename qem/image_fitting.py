@@ -212,12 +212,12 @@ class ImageModelFitting:
 
     def map_lattice(
         self,
-        cif_file: str,
         elements: list[str],
+        cif_file: str = None,
+        unitcell: list = None,
         min_distance=10,
-        a_limit=25,
-        b_limit=15,
-        add_missing_atoms: bool = False,
+        a_limit: int =0,
+        b_limit: int =0,
         reciprocal: bool = False,
     ):
         """
@@ -237,8 +237,15 @@ class ImageModelFitting:
             elements=elements,
             units=self.units,
         )
-        crystal_analyzer.read_cif(cif_file)
+        if unitcell is not None:
+            crystal_analyzer.unitcell = unitcell
+        if cif_file is not None:
+            crystal_analyzer.read_cif(cif_file)
         crystal_analyzer.choose_lattice_vectors(tolerance=min_distance, reciprocal=reciprocal)
+        if a_limit == 0:
+            a_limit = np.ceil(max(self.nx-crystal_analyzer.origin[0], crystal_analyzer.origin[0]) * self.dx / crystal_analyzer.unitcell.get_cell()[0][0]).astype(int)
+        if b_limit == 0:
+            b_limit = np.ceil(max(self.ny-crystal_analyzer.origin[1], crystal_analyzer.origin[1]) * self.dx / crystal_analyzer.unitcell.get_cell()[1][1]).astype(int)
         supercell_in_image, supercell_atom_types = (
             crystal_analyzer.generate_supercell_lattice(
                 a_limit=a_limit, b_limit=b_limit
@@ -250,8 +257,22 @@ class ImageModelFitting:
         crystal_analyzer.peak_positions = peak_positions
         crystal_analyzer.atom_types = atom_types
         crystal_analyzer.unitcell_mapping()
-        self.coordinates = peak_positions
-        self.atom_types = atom_types
+        # use the current coordinates to filter the peak_positions
+        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
+        mask = np.zeros(self.image.shape, dtype=bool)
+        for i in range(self.num_coordinates):
+            x, y = self.coordinates[i]
+            sigma = 1 / self.dx
+            mask[int(x - 3 * sigma) : int(x + 3 * sigma), int(y - 3 * sigma) : int(y + 3 * sigma)] = True
+        # find the peak_positions that are not in the mask
+        mask_peaks = np.ones(peak_positions.shape[0], dtype=bool)
+        for i in range(peak_positions.shape[0]):
+            x, y = peak_positions[i]
+            if not mask[int(x), int(y)]:
+                mask_peaks[i] = False
+
+        self.coordinates = peak_positions[mask_peaks]
+        self.atom_types = atom_types[mask_peaks]
         return None
 
     def select_region(self, invert_selection=False):
