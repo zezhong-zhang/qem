@@ -54,10 +54,18 @@ class ImageModelFitting:
         self.image = image.astype(np.float32)
         self.model = np.zeros(image.shape)
         self.local_shape = image.shape
-        self.dx = dx
-        self.units = units
+
+        units_dict = {"A": 1, "nm": 10, "pm": 0.01, "um": 1e4}
+        assert units in units_dict.keys(), "The units should be in A, nm, pm or um."
+        scale_factor = units_dict[units]
+
+        self.dx = dx * scale_factor
+        self.units = "A"
         self._atom_types = np.array([])
-        self.elements = elements    
+        logging.info(
+            f"Elements in the following order: {elements}, which is used for the atom types."
+        )
+        self.elements = elements
         self.atoms_selected = np.array([])
         self._coordinates = np.array([])
         self.fit_background = True
