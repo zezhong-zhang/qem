@@ -9,6 +9,7 @@ import optax
 from hyperspy._signals.signal2d import Signal2D
 from jax import numpy as jnp
 from jax import value_and_grad
+from jax.lib.xla_extension import XlaRuntimeError
 from jax.example_libraries import optimizers
 from jax.scipy.optimize import minimize
 from jaxopt import OptaxSolver
@@ -70,7 +71,7 @@ class ImageModelFitting:
         self.units = "A"
         self._atom_types = np.array([])
         logging.info(
-            f"Elements in the following order: {elements}, which is used for the atom types."
+            f"Elements: {elements}, the order is used for the atom types."
         )
         self.elements = elements
         self.atoms_selected = np.array([])
@@ -1118,8 +1119,8 @@ class ImageModelFitting:
                         global_prediction = self.predict(params, X, Y)
                         local_prediction = self.predict(select_params, X, Y)
                     else:
-                        raise MemoryError  # Explicitly raise an exception to use the fallback
-                except (MemoryError, "XlaRuntimeError"):  # Catch specific exceptions
+                        raise XlaRuntimeError("GPU memory limit exceeded, using the fallback of local prediction.")  # Explicitly raise an exception to use the fallback
+                except XlaRuntimeError as e:
                     self.gpu_memory_limit = True
                     global_prediction = self.predict_local(params)
                     local_prediction = self.predict_local(select_params, use_mask=True)
