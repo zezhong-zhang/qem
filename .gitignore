@@ -15,3 +15,4 @@ examples/*.xyz
 examples/dataset/
 examples/runs/
 examples/yolov8n.pt
+examples/yolo/dataset/

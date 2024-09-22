@@ -1085,7 +1085,7 @@ class ImageModelFitting:
                         local_prediction = self.predict(select_params, X, Y)
                     else:
                         raise MemoryError  # Explicitly raise an exception to use the fallback
-                except MemoryError:  # Catch specific exceptions
+                except (MemoryError,"XlaRuntimeError"):  # Catch specific exceptions
                     self.gpu_memory_limit = True
                     global_prediction = self.predict_local(params)
                     local_prediction = self.predict_local(select_params, use_mask=True)
