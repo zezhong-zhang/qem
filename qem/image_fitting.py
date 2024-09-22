@@ -262,13 +262,12 @@ class ImageModelFitting:
         for i in range(self.num_coordinates):
             x, y = self.coordinates[i]
             sigma = 1 / self.dx
-
-            mask[int(max(x - 3 * sigma,0)) : int(min(x + 3 * sigma, self.nx)), int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny))] = True
+            mask[int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)), int(max(x - 3 * sigma,0)) : int(min(x + 3 * sigma, self.nx))] = True
         # find the peak_positions that are not in the mask
         mask_peaks = np.ones(peak_positions.shape[0], dtype=bool)
         for i in range(peak_positions.shape[0]):
-            x, y = peak_positions[i]
-            if not mask[int(x), int(y)]:
+            x,y = peak_positions[i]
+            if not mask[int(y), int(x)]:
                 mask_peaks[i] = False
 
         crystal_analyzer.peak_positions = peak_positions[mask_peaks]
