@@ -1,6 +1,4 @@
 import re
-from distutils import dist
-
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atom, Atoms
@@ -563,6 +561,7 @@ class CrystalAnalyzer:
                         + str(position[2])
                         + "\n"
                     )
+        f.close()
 
     def write_xyz(self, filename="ABO3.xyz"):
         coordinates = self.coordinates
