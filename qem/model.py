@@ -18,6 +18,7 @@ def gaussian_2d_numba(X, Y, pos_x, pos_y, height, width):
     )
     return gauss
 
+
 @jit
 def gaussian_2d_jax(X, Y, pos_x, pos_y, height, width):
     # Unpack the parameters
@@ -143,6 +144,7 @@ def voigt_sum_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, backgrou
     )
     return total
 
+
 @jit
 def lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background):
     R2 = (X[:, :, None] - pos_x[None, None, :]) ** 2 + (
@@ -151,7 +153,8 @@ def lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background):
 
     total = (
         jnp.sum(
-            height * gamma**4 / (R2 + gamma**2)** (2), axis=2,
+            height * gamma**4 / (R2 + gamma**2) ** (2),
+            axis=2,
         )
         + background
     )

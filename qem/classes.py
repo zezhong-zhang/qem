@@ -10,9 +10,17 @@ from multiprocessing import Pool
 import timeit
 import math
 from numba import jit
-from qem.archieve.model_numba import gaussian,gaussian_sum_same_sigma, gaussian_sum_different_sigma, calc_fit_outcome, loss
+from qem.archieve.model_numba import (
+    gaussian,
+    gaussian_sum_same_sigma,
+    gaussian_sum_different_sigma,
+    calc_fit_outcome,
+    loss,
+)
 from tqdm import tqdm
+
 # import partial
+
 
 class Image:
     """
@@ -391,8 +399,6 @@ class ImageProcess:
         if atom_type is not None:
             self.atom_type = atom_type
 
-
-
     def find_peak(self, th_dist=0, th_inten=0, b_user_confirm=True, confirm_list=None):
         img = self.remove_freq(self.image, 0, 1 / th_dist)
         bitmap = self.local_max(img)
@@ -432,13 +438,20 @@ class ImageProcess:
         mean = self.coordinate[id]
         sig = np.ones(len(weight)) * r / 2
 
-        params = {'sigma': sig[0], 'weight': weight, 'pos_x': mean[0], 'pos_y': mean[1], 'background': background, 'r': r}
-        optimized_params = self.__update_global__(params,intensity)
-        sig = optimized_params['sigma'] * np.ones(len(weight))
-        background = optimized_params['background']
+        params = {
+            "sigma": sig[0],
+            "weight": weight,
+            "pos_x": mean[0],
+            "pos_y": mean[1],
+            "background": background,
+            "r": r,
+        }
+        optimized_params = self.__update_global__(params, intensity)
+        sig = optimized_params["sigma"] * np.ones(len(weight))
+        background = optimized_params["background"]
 
         intensity_fit = calc_fit_outcome(
-            self.nx,self.ny, weight, mean[0], mean[1], sig, background, r * 3
+            self.nx, self.ny, weight, mean[0], mean[1], sig, background, r * 3
         )
         mse = ((intensity_fit - intensity) ** 2).mean()
         weight *= intensity.mean() / intensity_fit.mean()
@@ -458,7 +471,6 @@ class ImageProcess:
         background_new = np.copy(background)
         mse_list = []
         chage_rate_list = []
-
 
         while (
             change_rate > 5e-3 and fail_cnt < 5 and cnt < limit and not finish_postpone
@@ -515,9 +527,7 @@ class ImageProcess:
                         mean_new[0, i] = mean[0, i]
                         mean_new[1, i] = mean[1, i]
                         sig_new[i] = sig[i]
-                        self.image_fitted[
-                            id, coorx, coory
-                        ] = int_update + gaussian(
+                        self.image_fitted[id, coorx, coory] = int_update + gaussian(
                             coorx,
                             coory,
                             weight_new[i],
@@ -528,10 +538,10 @@ class ImageProcess:
                         )
                         self.image_fitted[id] *= map
 
-
             background_new = background
             intensity_fit = calc_fit_outcome(
-                self.nx,self.ny,
+                self.nx,
+                self.ny,
                 weight_new,
                 mean_new[0],
                 mean_new[1],
@@ -546,7 +556,8 @@ class ImageProcess:
                 print("step size:", step_size)
                 fail_cnt += 1
                 intensity_fit = calc_fit_outcome(
-                    self.nx,self.ny,
+                    self.nx,
+                    self.ny,
                     weight,
                     mean[0],
                     mean[1],
@@ -565,7 +576,6 @@ class ImageProcess:
                 component_map = self.update_component_map(mean)
                 mse_list.append(mse)
                 chage_rate_list.append(change_rate)
-
 
                 self.image_fitted[id] = np.copy(intensity_fit)
 
@@ -602,10 +612,10 @@ class ImageProcess:
             axs[1].set_title("Fitting result")
             axs[2].imshow(self.image[id] - self.image_fitted[id])
             axs[2].set_title("Difference")
-            # turn off the axis 
-            axs[0].axis('off')
-            axs[1].axis('off')
-            axs[2].axis('off')
+            # turn off the axis
+            axs[0].axis("off")
+            axs[1].axis("off")
+            axs[2].axis("off")
             plt.show(block=False)
             plt.title("Fitting result")
 
@@ -617,7 +627,7 @@ class ImageProcess:
             "background": background,
         }
         self.image_fitted[id] = calc_fit_outcome(
-            self.nx,self.ny, weight, mean[0], mean[1], sig, background, r * 3
+            self.nx, self.ny, weight, mean[0], mean[1], sig, background, r * 3
         )
 
     def __update_global__(self, initial_params, intensity):
@@ -627,46 +637,63 @@ class ImageProcess:
         # that accepts a list of parameters and converts it to the expected dictionary format
         def loss_wrapper(param_list):
             updated_params = initial_params.copy()
-            updated_params['sigma'], updated_params['background'] = param_list
+            updated_params["sigma"], updated_params["background"] = param_list
             return loss(intensity, updated_params)
-        
+
         # Initial guess list for fmin
-        p0 = [initial_params['sigma'], initial_params['background']]
+        p0 = [initial_params["sigma"], initial_params["background"]]
 
         # Use fmin with the wrapper function
         optimized_params_list = fmin(loss_wrapper, p0)
 
         # Update the original parameters dictionary with the optimized values
         optimized_params = initial_params.copy()
-        optimized_params['sigma'] = optimized_params_list[0]
-        optimized_params['background'] = optimized_params_list[1]
+        optimized_params["sigma"] = optimized_params_list[0]
+        optimized_params["background"] = optimized_params_list[1]
 
         return optimized_params
 
     def __update_local__(
-        self, i, weight, mean, sig, r, id, component_map, different_width=False, different_background=False
+        self,
+        i,
+        weight,
+        mean,
+        sig,
+        r,
+        id,
+        component_map,
+        different_width=False,
+        different_background=False,
     ):
-        i_l, i_r = np.maximum(mean[0, i] - r, 0).astype(int), np.minimum(mean[0, i] + r + 1, self.nx).astype(int)
-        i_u, i_d = np.maximum(mean[1, i] - r, 0).astype(int), np.minimum(mean[1, i] + r + 1, self.ny).astype(int)
-        
+        i_l, i_r = np.maximum(mean[0, i] - r, 0).astype(int), np.minimum(
+            mean[0, i] + r + 1, self.nx
+        ).astype(int)
+        i_u, i_d = np.maximum(mean[1, i] - r, 0).astype(int), np.minimum(
+            mean[1, i] + r + 1, self.ny
+        ).astype(int)
+
         # Flatten the intensity and fitting arrays
         intensity = self.image_cropped[id][i_l:i_r, i_u:i_d].ravel()
         intensity_fit = self.image_fitted[id][i_l:i_r, i_u:i_d].ravel()
-        
+
         # Create meshgrid and flatten
-        xv, yv = np.meshgrid(np.arange(i_l, i_r), np.arange(i_u, i_d), indexing='ij')
+        xv, yv = np.meshgrid(np.arange(i_l, i_r), np.arange(i_u, i_d), indexing="ij")
         xv, yv = xv.flatten(), yv.flatten()
 
         # Initialize background to 0
         bg = 0
-        
+
         # Construct fitting_input based on conditions
         fitting_input = np.vstack([xv, yv])
         if different_width:
             if not different_background:
                 fitting_input = np.vstack([fitting_input, np.full(xv.size, bg)])
         else:
-            sig_value = np.full(xv.size, sig[0]) if different_background else np.full(xv.size, sig[i])
+            sig_value = (
+                np.full(xv.size, sig[0])
+                if different_background
+                else np.full(xv.size, sig[i])
+            )
             fitting_input = np.vstack([fitting_input, sig_value, np.full(xv.size, bg)])
 
         # remove contribution from neighbors
@@ -687,18 +714,49 @@ class ImageProcess:
         bounds_lower = [0, i_l, i_u] + ([0] if different_width else [])
         bounds_upper = [np.inf, i_r, i_d] + ([np.inf] if different_width else [])
         bounds = (bounds_lower, bounds_upper)
-        
+
         # Curve fitting
         try:
-            fitting_func = gaussian_sum_different_sigma if different_width else gaussian_sum_same_sigma
-            optimized_params, _ = curve_fit(fitting_func, fitting_input, intensity, p0, bounds=bounds)
+            fitting_func = (
+                gaussian_sum_different_sigma
+                if different_width
+                else gaussian_sum_same_sigma
+            )
+            optimized_params, _ = curve_fit(
+                fitting_func, fitting_input, intensity, p0, bounds=bounds
+            )
             if different_width:
-                result = (list(optimized_params) + [bg, intensity_fit_target, fitting_input[0, :].astype("int16"), fitting_input[1, :].astype("int16"), True])
+                result = list(optimized_params) + [
+                    bg,
+                    intensity_fit_target,
+                    fitting_input[0, :].astype("int16"),
+                    fitting_input[1, :].astype("int16"),
+                    True,
+                ]
             else:
-                result = (list(optimized_params) + [sig[i], bg, intensity_fit_target, fitting_input[0, :].astype("int16"), fitting_input[1, :].astype("int16"), True])
+                result = list(optimized_params) + [
+                    sig[i],
+                    bg,
+                    intensity_fit_target,
+                    fitting_input[0, :].astype("int16"),
+                    fitting_input[1, :].astype("int16"),
+                    True,
+                ]
         except RuntimeError:
-            print(f"Fitting for component {i} Failed! Coordinate: ({mean[0, i]}, {mean[1, i]}).")
-            result = (weight[i], mean[0, i], mean[1, i], sig[i], bg, intensity_fit_target, fitting_input[0, :].astype("int16"), fitting_input[1, :].astype("int16"), False)
+            print(
+                f"Fitting for component {i} Failed! Coordinate: ({mean[0, i]}, {mean[1, i]})."
+            )
+            result = (
+                weight[i],
+                mean[0, i],
+                mean[1, i],
+                sig[i],
+                bg,
+                intensity_fit_target,
+                fitting_input[0, :].astype("int16"),
+                fitting_input[1, :].astype("int16"),
+                False,
+            )
         return result
 
     def plot_image(self, id=0):
@@ -1153,9 +1211,7 @@ class GaussianMixtureModel:
 
     @staticmethod
     def polyCurve_6(x, a, b, c, d, e, f, g):
-        return (
-            x**6 * a + x**5 * b + x**4 * c + x**3 * d + x**2 * e + x * f + g
-        )
+        return x**6 * a + x**5 * b + x**4 * c + x**3 * d + x**2 * e + x * f + g
 
 
 class GmmResult:

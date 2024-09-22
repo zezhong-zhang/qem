@@ -14,9 +14,9 @@ from jax.scipy.optimize import minimize
 from jaxopt import OptaxSolver
 from matplotlib_scalebar.scalebar import ScaleBar
 from scipy.ndimage import center_of_mass
+from scipy.optimize import lsq_linear
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
-from scipy.optimize import lsq_linear
 from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
 
@@ -29,16 +29,23 @@ from qem.model import (
     gaussian_2d_numba,
     gaussian_sum_parallel,
     lorentzian_sum_parallel,
-    voigt_sum_parallel,
     mask_grads,
+    voigt_sum_parallel,
 )
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import voronoi_integrate
+
 logging.basicConfig(level=logging.INFO)
 
 
 class ImageModelFitting:
-    def __init__(self, image: np.ndarray, dx: float = 1.0, units: str = "A",elements: list[str] = ['Sr', 'Ti', 'O']):
+    def __init__(
+        self,
+        image: np.ndarray,
+        dx: float = 1.0,
+        units: str = "A",
+        elements: list[str] = ["Sr", "Ti", "O"],
+    ):
         """
         Initialize the Fitting class.
 
@@ -112,21 +119,15 @@ class ImageModelFitting:
             volume = params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
         elif self.model_type == "voigt":
             gaussian_contrib = (
-                params["height"]
-                * params["sigma"] ** 2
-                * 2
-                * np.pi
-                * self.dx**2
+                params["height"] * params["sigma"] ** 2 * 2 * np.pi * self.dx**2
             )
             lorentzian_contrib = (
-                params["height"]
-                * params["gamma"]** 2
-                * np.pi
-                * self.dx**2
+                params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
             )
-            volume =  gaussian_contrib * params["ratio"] + lorentzian_contrib * (1 - params["ratio"])
+            volume = gaussian_contrib * params["ratio"] + lorentzian_contrib * (
+                1 - params["ratio"]
+            )
         return volume
-
 
     @property
     def voronoi_volume(self):
@@ -211,7 +212,7 @@ class ImageModelFitting:
     @property
     def coordinates(self):
         return self._coordinates
-    
+
     @coordinates.setter
     def coordinates(self, coordinates: np.ndarray):
         self._coordinates = coordinates
@@ -225,8 +226,8 @@ class ImageModelFitting:
         cif_file: str = None,
         unitcell: list = None,
         min_distance=10,
-        a_limit: int =0,
-        b_limit: int =0,
+        a_limit: int = 0,
+        b_limit: int = 0,
         reciprocal: bool = False,
     ):
         """
@@ -250,11 +251,21 @@ class ImageModelFitting:
             crystal_analyzer.unitcell = unitcell
         if cif_file is not None:
             crystal_analyzer.read_cif(cif_file)
-        crystal_analyzer.choose_lattice_vectors(tolerance=min_distance, reciprocal=reciprocal)
+        crystal_analyzer.choose_lattice_vectors(
+            tolerance=min_distance, reciprocal=reciprocal
+        )
         if a_limit == 0:
-            a_limit = np.ceil(max(self.nx-crystal_analyzer.origin[0], crystal_analyzer.origin[0]) * self.dx / crystal_analyzer.unitcell.get_cell()[0][0]).astype(int)
+            a_limit = np.ceil(
+                max(self.nx - crystal_analyzer.origin[0], crystal_analyzer.origin[0])
+                * self.dx
+                / crystal_analyzer.unitcell.get_cell()[0][0]
+            ).astype(int)
         if b_limit == 0:
-            b_limit = np.ceil(max(self.ny-crystal_analyzer.origin[1], crystal_analyzer.origin[1]) * self.dx / crystal_analyzer.unitcell.get_cell()[1][1]).astype(int)
+            b_limit = np.ceil(
+                max(self.ny - crystal_analyzer.origin[1], crystal_analyzer.origin[1])
+                * self.dx
+                / crystal_analyzer.unitcell.get_cell()[1][1]
+            ).astype(int)
         supercell_in_image, supercell_atom_types = (
             crystal_analyzer.generate_supercell_lattice(
                 a_limit=a_limit, b_limit=b_limit
@@ -270,18 +281,21 @@ class ImageModelFitting:
         for i in range(self.num_coordinates):
             x, y = self.coordinates[i]
             sigma = 1 / self.dx
-            mask[int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)), int(max(x - 3 * sigma,0)) : int(min(x + 3 * sigma, self.nx))] = True
+            mask[
+                int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
+                int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
+            ] = True
         # find the peak_positions that are not in the mask
         mask_peaks = np.ones(peak_positions.shape[0], dtype=bool)
         for i in range(peak_positions.shape[0]):
-            x,y = peak_positions[i]
+            x, y = peak_positions[i]
             if not mask[int(y), int(x)]:
                 mask_peaks[i] = False
 
         crystal_analyzer.peak_positions = peak_positions[mask_peaks]
         crystal_analyzer.atom_types = atom_types[mask_peaks]
         crystal_analyzer.unitcell_mapping()
-        
+
         self.coordinates = peak_positions[mask_peaks]
         self.atom_types = atom_types[mask_peaks]
         return None
@@ -605,7 +619,9 @@ class ImageModelFitting:
         else:
             width = atom_size / self.dx
         if self.pbc:
-            mask = (self.coordinates[:, 0] < self.nx-1) & (self.coordinates[:, 1] < self.ny-1)
+            mask = (self.coordinates[:, 0] < self.nx - 1) & (
+                self.coordinates[:, 1] < self.ny - 1
+            )
             self.coordinates = self.coordinates[mask]
             if len(self.atom_types) != self.num_coordinates:
                 self.atom_types = self.atom_types[mask]
@@ -638,7 +654,7 @@ class ImageModelFitting:
                 "pos_y": pos_y,  # y position
                 "height": height,  # height
                 "sigma": width,  # width
-                "gamma": width / np.sqrt(2*np.log(2)),  # width
+                "gamma": width / np.sqrt(2 * np.log(2)),  # width
                 "ratio": ratio,  # ratio
             }
         elif self.model_type == "lorentzian":
@@ -646,7 +662,7 @@ class ImageModelFitting:
                 "pos_x": pos_x,  # x position
                 "pos_y": pos_y,  # y position
                 "height": height,  # height
-                "gamma": width / np.sqrt(2*np.log(2)) ,  # width
+                "gamma": width / np.sqrt(2 * np.log(2)),  # width
             }
         if self.fit_background:
             params["background"] = background.astype(float)
@@ -699,8 +715,14 @@ class ImageModelFitting:
             The prediction with periodic boundary conditions applied.
         """
         for i, j in [
-            (1, 0), (0, 1), (-1, 0), (0, -1),
-            (1, 1), (-1, -1), (1, -1), (-1, 1),
+            (1, 0),
+            (0, 1),
+            (-1, 0),
+            (0, -1),
+            (1, 1),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
         ]:
             prediction += prediction_func(
                 X,
@@ -711,7 +733,7 @@ class ImageModelFitting:
                 params.get("sigma"),
                 params.get("gamma"),
                 params.get("ratio"),
-                0
+                0,
             )
         return prediction
 
@@ -808,7 +830,7 @@ class ImageModelFitting:
             gamma,
             ratio,
             background,
-            )
+        )
         if self.pbc:
             prediction = self.apply_pbc(prediction, prediction_func, params, X, Y)
         return prediction
@@ -866,7 +888,9 @@ class ImageModelFitting:
                     result = lsq_linear(design_matrix_csr, b, bounds=(0, np.inf))
                     solution = result.x
                 if non_negative is False:
-                    solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
+                    solution = spsolve(
+                        design_matrix.T @ design_matrix, design_matrix.T @ b
+                    )
                     # Check if any of the caught warnings are related to a singular matrix
                     if w and any(
                         "singular matrix" in str(warning.message) for warning in w
@@ -985,7 +1009,7 @@ class ImageModelFitting:
         # Update the model
         self.params = new_params
         return new_params
-    
+
     def minimize(
         self,
         params: dict = None,
@@ -993,6 +1017,7 @@ class ImageModelFitting:
     ):
         if params is None:
             params = self.params if self.params is not None else self.init_params()
+
         def objective_fn(params_array, param_shapes, param_keys, image, X, Y):
             # Convert 1D array back to dictionary of parameters
             params_dict = {}
@@ -1010,7 +1035,9 @@ class ImageModelFitting:
         params_flat = np.concatenate([params[key].ravel() for key in param_keys])
 
         # Define the method for minimize
-        method = 'BFGS'  # Example method, you can choose others like 'CG', 'L-BFGS-B', etc.
+        method = (
+            "BFGS"  # Example method, you can choose others like 'CG', 'L-BFGS-B', etc.
+        )
 
         # Perform the optimization
         res = minimize(
@@ -1033,7 +1060,7 @@ class ImageModelFitting:
         self.params = optimized_params
         self.model = self.predict(optimized_params, self.X, self.Y)
         return optimized_params
-    
+
     def fit_global(
         self,
         params: dict = None,
@@ -1041,7 +1068,7 @@ class ImageModelFitting:
         tol: float = 1e-3,
         step_size: float = 0.01,
         verbose: bool = False,
-    ):  
+    ):
         if params is None:
             params = self.params if self.params is not None else self.init_params()
         self.fit_local = False
@@ -1092,7 +1119,7 @@ class ImageModelFitting:
                         local_prediction = self.predict(select_params, X, Y)
                     else:
                         raise MemoryError  # Explicitly raise an exception to use the fallback
-                except (MemoryError,"XlaRuntimeError"):  # Catch specific exceptions
+                except (MemoryError, "XlaRuntimeError"):  # Catch specific exceptions
                     self.gpu_memory_limit = True
                     global_prediction = self.predict_local(params)
                     local_prediction = self.predict_local(select_params, use_mask=True)
@@ -1391,7 +1418,7 @@ class ImageModelFitting:
                 select_params["ratio"] = params["ratio"]
             for key in ["pos_x", "pos_y", "height"]:
                 select_params[key] = params[key][mask]
-        else: 
+        else:
             for key, value in params.items():
                 if key != "background":
                     select_params[key] = value[mask]
@@ -1479,10 +1506,10 @@ class ImageModelFitting:
         plt.title("Residual")
         plt.tight_layout()
 
-    def plot_scs(self, layout='horizontal'):
-        if layout == 'horizontal':
+    def plot_scs(self, layout="horizontal"):
+        if layout == "horizontal":
             row, col = 1, 2
-        elif layout == 'vertical':
+        elif layout == "vertical":
             row, col = 2, 1
         plt.subplots(row, col)
         plt.subplot(row, col, 1)
@@ -1494,7 +1521,7 @@ class ImageModelFitting:
                 self.coordinates[mask, 0],
                 self.coordinates[mask, 1],
                 s=1,
-                label=element,  
+                label=element,
             )
         plt.legend()
         plt.gca().set_aspect("equal", adjustable="box")
@@ -1505,15 +1532,15 @@ class ImageModelFitting:
         im = plt.scatter(pos_x, pos_y, c=self.volume, s=2)
         # make aspect ratio equal
         plt.gca().invert_yaxis()
-        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"QEM refined scs ($\AA^2$)")
 
-    def plot_scs_voronoi(self,layout='horizontal'):
+    def plot_scs_voronoi(self, layout="horizontal"):
         assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
-        if layout == 'horizontal':
+        if layout == "horizontal":
             row, col = 1, 2
-        elif layout == 'vertical':
+        elif layout == "vertical":
             row, col = 2, 1
         plt.subplots(row, col)
         plt.subplot(row, col, 1)
@@ -1525,7 +1552,7 @@ class ImageModelFitting:
                 self.coordinates[mask, 0],
                 self.coordinates[mask, 1],
                 s=1,
-                label=element,  
+                label=element,
             )
         plt.legend()
         plt.gca().set_aspect("equal", adjustable="box")
@@ -1536,9 +1563,9 @@ class ImageModelFitting:
         im = plt.scatter(pos_x, pos_y, c=self.voronoi_volume, s=2)
         # make aspect ratio equal
         plt.gca().invert_yaxis()
-        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.colorbar(im, fraction=0.046, pad=0.04)
-        plt.title(r"Voronoi scs ($\AA^2$)")        
+        plt.title(r"Voronoi scs ($\AA^2$)")
 
     def plot_scs_histogram(self):
         plt.figure()

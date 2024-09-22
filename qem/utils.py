@@ -7,6 +7,7 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
+
 def plot_image(image, x_labels, y_labels, colormap="gray", colorbar=True):
     """
     Plot an image. with x and y labels.
@@ -93,7 +94,6 @@ def ifft2d(array):
     return np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(array)))
 
 
-
 def remove_freq(image, low, high):
     nx, ny = image.shape[1:]
     x = np.linspace(-nx / 2, nx / 2, nx) / nx
@@ -116,6 +116,7 @@ def apply_threshold(image, image_ref, threshold):
         m = np.amax(image_ref[i])
         img[i, :, :] = np.where(image_ref[i] < threshold[i] * m, 0, image[i])
     return img
+
 
 @jit(nopython=True)
 def make_mask_circle_centre(arr, radius):
@@ -156,8 +157,9 @@ def make_mask_circle_centre(arr, radius):
 
     x = np.expand_dims(np.arange(-centerX, imageSizeX - centerX), axis=1)
     y = np.arange(-centerY, imageSizeY - centerY)
-    mask = x**2 + y **2 < radius**2
+    mask = x**2 + y**2 < radius**2
     return mask
+
 
 def find_duplicate_row_indices(array):
     """
@@ -182,6 +184,7 @@ def find_duplicate_row_indices(array):
     idx_duplicates = np.where(mask)[0]
 
     return idx_duplicates
+
 
 def find_row_indices(array1, array2):
     """
@@ -210,7 +213,14 @@ def find_element_indices(array1, array2):
     :return: A list of indices indicating the position of each element of array1 in array2.
              If an element from array1 is not found in array2, the corresponding index is -1.
     """
-    indices = [np.where((array2 == element).all(axis=1))[0][0] if (array2 == element).all(axis=1).any() else -1 for element in array1]
+    indices = [
+        (
+            np.where((array2 == element).all(axis=1))[0][0]
+            if (array2 == element).all(axis=1).any()
+            else -1
+        )
+        for element in array1
+    ]
     indices = np.array(indices)
     # drop the -1s
     indices = indices[indices != -1]
@@ -239,13 +249,18 @@ def remove_close_coordinates(coordinates, threshold):
         diffs = np.abs(coordinates - coord)
 
         # Find coordinates too close in either x or y (excluding the current one)
-        too_close_mask = (diffs[:, 0] < threshold) & (diffs[:, 1] < threshold) & (np.arange(len(coordinates)) != i)
+        too_close_mask = (
+            (diffs[:, 0] < threshold)
+            & (diffs[:, 1] < threshold)
+            & (np.arange(len(coordinates)) != i)
+        )
 
         # Update the keep mask
         keep_mask[too_close_mask] = False
 
     # Filter coordinates based on the keep mask
     return coordinates[keep_mask], keep_mask
+
 
 def export_params(params, filename):
     """
@@ -260,9 +275,12 @@ def export_params(params, filename):
             f.create_dataset(key, data=value)
     f.close()
 
+
 def get_random_indices_in_batches(total_examples, batch_size):
     all_indices = np.random.permutation(total_examples)
-    batches = [all_indices[i:i + batch_size] for i in range(0, total_examples, batch_size)]
+    batches = [
+        all_indices[i : i + batch_size] for i in range(0, total_examples, batch_size)
+    ]
     return batches
 
 
@@ -291,6 +309,7 @@ def is_point_in_polygon(point, polygon):
         px, py = qx, qy
     return inside
 
+
 def find_peaks_in_rectangle(peaks, origin, a, b):
     """
     Find all peaks that lie within the rectangle defined by origin, origin+a, origin+b, and origin+a+b.
@@ -309,7 +328,7 @@ def find_peaks_in_rectangle(peaks, origin, a, b):
     b = np.array(b)
     peaks = np.array(peaks)
     # Define the rectangle's vertices
-    vertices = [origin, origin+a, origin+a+b, origin+b]
+    vertices = [origin, origin + a, origin + a + b, origin + b]
 
     # Initialize a list to hold indices of peaks within the rectangle
     indices_inside = []
@@ -323,6 +342,7 @@ def find_peaks_in_rectangle(peaks, origin, a, b):
     peaks_inside = peaks[indices_inside]
 
     return peaks_inside, np.array(indices_inside)
+
 
 def rotate_vector(vector, axis, angle):
     # Rotate a vector around a specified axis by a given angle

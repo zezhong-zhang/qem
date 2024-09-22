@@ -20,7 +20,7 @@ setup(
         "optax",
         "numba",
     ],
-    python_requires='>=3.6',
+    python_requires=">=3.6",
     extras_require={
         "dev": [
             "build",
@@ -34,7 +34,7 @@ setup(
             "plotly",
             "jaxopt",
             "optax",
-            "ase"
+            "ase",
         ],
     },
     tests_require=["pytest", "pytest-cov"],

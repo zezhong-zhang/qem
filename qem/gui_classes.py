@@ -5,7 +5,8 @@ from matplotlib.widgets import PolygonSelector
 from matplotlib.path import Path
 import logging
 from qem.color import get_unique_colors
-import os 
+import os
+
 logging.basicConfig(level=logging.INFO)
 from matplotlib_scalebar.scalebar import ScaleBar
 import tkinter as tk
@@ -58,12 +59,16 @@ def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False)
     atom_positions_selected = atom_positions[bool_array]
     return atom_positions_selected, bool_array
 
+
 def get_atom_type():
     root = tk.Tk()
     root.withdraw()  # Hide the main window
-    atom_type = simpledialog.askstring("Input", "Please enter the atom type:", parent=root)
+    atom_type = simpledialog.askstring(
+        "Input", "Please enter the atom type:", parent=root
+    )
     root.destroy()  # Close the main window
     return atom_type
+
 
 class GetAtomSelection:
     def __init__(self, image, atom_positions, invert_selection=False, size=1):
@@ -100,7 +105,11 @@ class GetAtomSelection:
         )
         self.cax = self.ax.imshow(self.image)
         self.line_non_selected = self.ax.plot(
-            self.atom_positions[:, 0], self.atom_positions[:, 1], "o", color="red", markersize=self.size
+            self.atom_positions[:, 0],
+            self.atom_positions[:, 1],
+            "o",
+            color="red",
+            markersize=self.size,
         )[0]
         self.line_selected = None
         self.mask = None
@@ -130,8 +139,8 @@ class GetAtomSelection:
         if self.invert_selection:
             self.mask = not_selected
             self.line_selected.set_data(
-                    atom_positions_not_selected[:, 0], atom_positions_not_selected[:, 1]
-                )
+                atom_positions_not_selected[:, 0], atom_positions_not_selected[:, 1]
+            )
         else:
             self.mask = selected
             self.line_selected.set_data(
@@ -151,7 +160,7 @@ class InteractivePlot:
         tolerance: float = 10,
         dx: float = 1,
         units: str = "A",
-        dimension:str ="si-length",
+        dimension: str = "si-length",
     ):
         self.pos_x = peaks_locations[:, 0]
         self.pos_y = peaks_locations[:, 1]
@@ -179,7 +188,9 @@ class InteractivePlot:
             distance = np.sqrt((self.pos_x - x) ** 2 + (self.pos_y - y) ** 2)
             if distance.min() < self.tolerance:
                 index = np.argmin(distance)
-                logging.info(f"Removing peak at ({self.pos_x[index]}, {self.pos_y[index]}).")
+                logging.info(
+                    f"Removing peak at ({self.pos_x[index]}, {self.pos_y[index]})."
+                )
                 self.pos_x = np.delete(self.pos_x, index, axis=0)
                 self.pos_y = np.delete(self.pos_y, index, axis=0)
                 self.atom_types = np.delete(self.atom_types, index, axis=0)
@@ -188,7 +199,9 @@ class InteractivePlot:
                 self.pos_x = np.append(self.pos_x, x)
                 self.pos_y = np.append(self.pos_y, y)
                 self.atom_types = np.append(self.atom_types, self.current_atom_type)
-                logging.info(f"Adding peak at ({x}, {y}) with atom type {self.current_atom_type}.")
+                logging.info(
+                    f"Adding peak at ({x}, {y}) with atom type {self.current_atom_type}."
+                )
             title = "Double click to add or remove peaks."
             self.update_plot(title)
 
@@ -197,7 +210,9 @@ class InteractivePlot:
             self.current_atom_type = int(event.key)
             logging.info(f"Current atom type set to {self.current_atom_type}.")
         except ValueError:
-            logging.info(f"Invalid atom type input: {event.key}. Atom type remains {self.current_atom_type}.")
+            logging.info(
+                f"Invalid atom type input: {event.key}. Atom type remains {self.current_atom_type}."
+            )
 
     @property
     def scalebar(self):
@@ -206,7 +221,7 @@ class InteractivePlot:
             units=self.units,
             location="lower right",
             dimension=self.dimension,
-            box_alpha = 0.5,
+            box_alpha=0.5,
         )
         return scalebar
 
@@ -235,7 +250,7 @@ class InteractivePlot:
         title = "Double click to add or remove peaks. Press a number key to set the current atom type."
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_add_or_remove)
-        fig.canvas.mpl_connect('key_press_event', self.on_key_press)
+        fig.canvas.mpl_connect("key_press_event", self.on_key_press)
         plt.show()
 
         while plt.fignum_exists(fig.number):
@@ -250,7 +265,9 @@ class InteractivePlot:
             if distance.min() < self.tolerance:
                 i = np.argmin(distance)
                 self.selected_point = (self.pos_x[i], self.pos_y[i])
-                plt.scatter(self.pos_x[i], self.pos_y[i], color="red", s=5, edgecolors="black")
+                plt.scatter(
+                    self.pos_x[i], self.pos_y[i], color="red", s=5, edgecolors="black"
+                )
                 plt.draw()
 
     def select(self, tolerance: float = 10):
@@ -275,7 +292,9 @@ class InteractivePlot:
             if distance.min() < self.tolerance:
                 i = np.argmin(distance)
                 point = np.array([self.pos_x[i], self.pos_y[i]])
-                plt.scatter(self.pos_x[i], self.pos_y[i], color="red",edgecolors='black', s=10)
+                plt.scatter(
+                    self.pos_x[i], self.pos_y[i], color="red", edgecolors="black", s=10
+                )
                 plt.draw()
             else:
                 # If the point is not close to any peak, add it to the list
@@ -344,7 +363,9 @@ class InteractivePlot:
             print(
                 f"In pixel: Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}"
             )
-            print(f"In space: Origin: {self.origin*self.dx} {self.units}, Vector a: {self.vector_a*self.dx} {self.units}, Vector b: {self.vector_b*self.dx} {self.units}")
+            print(
+                f"In space: Origin: {self.origin*self.dx} {self.units}, Vector a: {self.vector_a*self.dx} {self.units}, Vector b: {self.vector_b*self.dx} {self.units}"
+            )
             return self.origin, self.vector_a, self.vector_b
         else:
             print("Selection incomplete.")

@@ -82,11 +82,31 @@ class Benchmark:
             )
 
     @time_it
-    def refine(self, atom_size = 0.7, guess_radius = False, tol = 1e-2, maxiter = 50, step_size = 1e-2, num_epoch = 10, batch_size = 1000, verbose = False, plot = True) -> None:
-        model=ImageModelFitting(self.image, dx=self.dx)
-        model.coordinates=self.input_coordinates/self.dx
+    def refine(
+        self,
+        atom_size=0.7,
+        guess_radius=False,
+        tol=1e-2,
+        maxiter=50,
+        step_size=1e-2,
+        num_epoch=10,
+        batch_size=1000,
+        verbose=False,
+        plot=True,
+    ) -> None:
+        model = ImageModelFitting(self.image, dx=self.dx)
+        model.coordinates = self.input_coordinates / self.dx
         params = model.init_params(atom_size=atom_size, guess_radius=guess_radius)
-        params = model.fit_random_batch(params, tol=tol, maxiter=maxiter, step_size=step_size, num_epoch=num_epoch, batch_size=batch_size, verbose=verbose, plot=plot)
+        params = model.fit_random_batch(
+            params,
+            tol=tol,
+            maxiter=maxiter,
+            step_size=step_size,
+            num_epoch=num_epoch,
+            batch_size=batch_size,
+            verbose=verbose,
+            plot=plot,
+        )
         self.qem = model
         self.model_qem = model.model
         self.scs_qem = model.volume
@@ -94,27 +114,44 @@ class Benchmark:
         self.qem.voronoi_integration(plot=True)
         self.scs_voronoi = self.qem.voronoi_volume
 
-
     def compare_scs_voronoi(self, folder_path=None, file_path=None, save=False):
         plt.figure(figsize=(15, 5))
         plt.subplot(1, 3, 1)
-        im = plt.scatter(self.qem.params['pos_x'], self.qem.params['pos_y'], s=1, c=self.scs_qem, cmap='viridis')
+        im = plt.scatter(
+            self.qem.params["pos_x"],
+            self.qem.params["pos_y"],
+            s=1,
+            c=self.scs_qem,
+            cmap="viridis",
+        )
         plt.gca().invert_yaxis()
         plt.colorbar(im, fraction=0.046, pad=0.04)
-        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.title("QEM refined scs ($\AA^2$)")
         plt.tight_layout()
         plt.subplot(1, 3, 2)
-        im = plt.scatter(self.qem.params['pos_x'], self.qem.params['pos_y'], s=1, c=self.scs_voronoi, cmap='viridis')
+        im = plt.scatter(
+            self.qem.params["pos_x"],
+            self.qem.params["pos_y"],
+            s=1,
+            c=self.scs_voronoi,
+            cmap="viridis",
+        )
         plt.gca().invert_yaxis()
-        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title("Voronoi refined scs ($\AA^2$)")
         plt.tight_layout()
         plt.subplot(1, 3, 3)
-        im = plt.scatter(self.qem.params['pos_x'], self.qem.params['pos_y'], s=1, c=self.scs_voronoi-self.scs_qem, cmap='viridis')
+        im = plt.scatter(
+            self.qem.params["pos_x"],
+            self.qem.params["pos_y"],
+            s=1,
+            c=self.scs_voronoi - self.scs_qem,
+            cmap="viridis",
+        )
         plt.gca().invert_yaxis()
-        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title("difference refined scs ($\AA^2$)")
         plt.clim(-self.scs_qem.mean() / 10, self.scs_qem.mean() / 10)
@@ -126,7 +163,6 @@ class Benchmark:
                 os.makedirs(folder_path, exist_ok=True)
             full_path = os.path.join(folder_path, file_path)
             plt.savefig(full_path, dpi=300)
-
 
     def compare_residual(
         self, mode="both", folder_path=None, file_path=None, save=False
@@ -221,8 +257,8 @@ class Benchmark:
     def compare_scs_map(self, folder_path=None, file_path=None, save=False):
         volume_qem = self.scs_qem
         volume_statstem = self.scs_statstem
-        pos_x = self.params_qem['pos_x']*self.dx
-        pos_y = self.params_qem['pos_y']*self.dx
+        pos_x = self.params_qem["pos_x"] * self.dx
+        pos_y = self.params_qem["pos_y"] * self.dx
         pos_x_statstem = self.output_coordinates[:, 0]
         pos_y_statstem = self.output_coordinates[:, 1]
         index_statstem_in_qem = np.array(
@@ -236,19 +272,18 @@ class Benchmark:
         pos_x_statstem = pos_x_statstem[index_statstem_in_qem]
         pos_y_statstem = pos_y_statstem[index_statstem_in_qem]
         volume_statstem = volume_statstem[index_statstem_in_qem]
-        
 
-        plt.subplots(figsize=(15,5))
-        plt.subplot(1,3,1)
+        plt.subplots(figsize=(15, 5))
+        plt.subplot(1, 3, 1)
         im = plt.scatter(pos_x, pos_y, c=volume_qem, s=2)
         # make aspect ratio equal
         plt.gca().invert_yaxis()
-        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"QEM refined scs ($\AA^2$)")
         plt.tight_layout()
-        plt.subplot(1,3,2)
-        im = plt.scatter(pos_x_statstem,pos_y_statstem, c=volume_statstem, s=2)
+        plt.subplot(1, 3, 2)
+        im = plt.scatter(pos_x_statstem, pos_y_statstem, c=volume_statstem, s=2)
         plt.gca().invert_yaxis()
         plt.clim(volume_qem.min(), volume_qem.max())
         # make aspect ratio equal
@@ -257,10 +292,10 @@ class Benchmark:
         plt.title(r"Matlab StatSTEM refined scs ($\AA^2$)")
         plt.tight_layout()
 
-        plt.subplot(1,3,3)
-        im = plt.scatter(pos_x, pos_y, c=volume_statstem-volume_qem, s=2)
+        plt.subplot(1, 3, 3)
+        im = plt.scatter(pos_x, pos_y, c=volume_statstem - volume_qem, s=2)
         plt.gca().invert_yaxis()
-        plt.gca().set_aspect('equal', adjustable='box')
+        plt.gca().set_aspect("equal", adjustable="box")
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.title(r"difference refined scs ($\AA^2$)")
         plt.tight_layout()
@@ -305,12 +340,12 @@ class Benchmark:
             full_path = os.path.join(folder_path, file_path)
             plt.savefig(full_path, dpi=300)
 
-    def scs_error(self, relative = True):
+    def scs_error(self, relative=True):
         volume_qem = self.scs_qem
         volume_statstem = self.scs_statstem
         if volume_qem.shape != volume_statstem.shape:
-            pos_x = self.params_qem['pos_x']*self.dx
-            pos_y = self.params_qem['pos_y']*self.dx
+            pos_x = self.params_qem["pos_x"] * self.dx
+            pos_y = self.params_qem["pos_y"] * self.dx
             pos_x_statstem = self.output_coordinates[:, 0]
             pos_y_statstem = self.output_coordinates[:, 1]
             index_statstem_in_qem = np.array(
@@ -322,9 +357,11 @@ class Benchmark:
                 ]
             )
             volume_statstem = volume_statstem[index_statstem_in_qem]
-        mask = (volume_statstem>np.percentile(volume_statstem, 0.1)) & (volume_statstem<np.percentile(volume_statstem, 99.9))
+        mask = (volume_statstem > np.percentile(volume_statstem, 0.1)) & (
+            volume_statstem < np.percentile(volume_statstem, 99.9)
+        )
         if relative:
-            error = (volume_statstem-volume_qem)/volume_qem
+            error = (volume_statstem - volume_qem) / volume_qem
         else:
-            error = volume_statstem-volume_qem
+            error = volume_statstem - volume_qem
         return error[mask].mean(), error[mask].std()

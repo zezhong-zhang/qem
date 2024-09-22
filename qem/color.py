@@ -1,5 +1,7 @@
 import itertools
 import colorsys
+
+
 def get_unique_colors():
     """
     An iterator to generate unique colors by cycling through the HSV color space.

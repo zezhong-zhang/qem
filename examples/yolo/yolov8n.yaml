@@ -1,27 +1,28 @@
 # YOLOv8n nano model configuration
 
 # Model architecture
-nc: 1  # Number of classes, adjust this according to your dataset (1 for atomic columns)
-depth_multiple: 0.33  # Depth factor for scaling the model
-width_multiple: 0.25  # Width factor for scaling the model
+nc: 1 # Number of classes, adjust this according to your dataset (1 for atomic columns)
+depth_multiple: 0.33 # Depth factor for scaling the model
+width_multiple: 0.25 # Width factor for scaling the model
 
 backbone:
   # [from, number, module, args]
-  [[-1, 1, Conv, [64, 3, 2]],  # 0-P1/2
-   [-1, 1, Bottleneck, [64]],  # 1
-   [-1, 1, BottleneckCSP, [128, 3]],  # 2-P2/4
-   [-1, 1, BottleneckCSP, [256, 3]],  # 3-P3/8
-   [-1, 1, BottleneckCSP, [512, 3]],  # 4-P4/16
-   [-1, 1, BottleneckCSP, [1024, 3]],  # 5-P5/32
-   [-1, 1, SPP, [1024, 5]],  # 6
+  [
+    [-1, 1, Conv, [64, 3, 2]], # 0-P1/2
+    [-1, 1, Bottleneck, [64]], # 1
+    [-1, 1, BottleneckCSP, [128, 3]], # 2-P2/4
+    [-1, 1, BottleneckCSP, [256, 3]], # 3-P3/8
+    [-1, 1, BottleneckCSP, [512, 3]], # 4-P4/16
+    [-1, 1, BottleneckCSP, [1024, 3]], # 5-P5/32
+    [-1, 1, SPP, [1024, 5]], # 6
   ]
 
-head:
-  [[-1, 1, Conv, [512, 1, 1]],  # 7
-   [-1, 1, Conv, [1024, 3, 1]],  # 8
-   [-1, 1, nn.Conv2d, [nc, 1, 1]],  # 9-Output classes
+head: [
+    [-1, 1, Conv, [512, 1, 1]], # 7
+    [-1, 1, Conv, [1024, 3, 1]], # 8
+    [-1, 1, nn.Conv2d, [nc, 1, 1]], # 9-Output classes
   ]
-  
+
 # Hyperparameters (optional, can be fine-tuned)
 optimizer: SGD
 lr0: 0.01

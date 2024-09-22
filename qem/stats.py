@@ -4,6 +4,7 @@ import jax.random as random
 import matplotlib.pyplot as plt
 import numpy as np
 
+
 def add_poisson_noise(image):
     """
     Adds Poisson noise to an image.
@@ -18,6 +19,7 @@ def add_poisson_noise(image):
     key = random.PRNGKey(0)
     noisy_image = random.poisson(key, image)
     return noisy_image
+
 
 def compute_fim(model_func, params):
     """
@@ -44,16 +46,17 @@ def compute_fim(model_func, params):
     for i in range(num_params):
         # small perturb of the parameter
         delta = 1e-6
-        params_perturb = params.at[i].set(params[i] + delta) 
+        params_perturb = params.at[i].set(params[i] + delta)
         grad = (model_func(params_perturb) - model_func_vals) / delta
         grads_list.append(grad)
     grads = np.array(grads_list)
 
     for i in range(num_params):
         for j in range(num_params):
-            result = np.sum(grads[i,:,:] * grads[j,:,:]/model_func_vals)
-            FIM[i,j] = result
+            result = np.sum(grads[i, :, :] * grads[j, :, :] / model_func_vals)
+            FIM[i, j] = result
     return FIM
+
 
 def compute_crb(fim):
     """
@@ -69,6 +72,7 @@ def compute_crb(fim):
     vars = np.diag(FIM_inv)
     crb = np.sqrt(vars)
     return crb
+
 
 def joint_probability_2d(observations, params, model_func):
     """
@@ -86,11 +90,15 @@ def joint_probability_2d(observations, params, model_func):
     """
     # Compute the expected values lambda_k (same shape as the observations)
     lambda_k = model_func(params)
-    
+
     # Compute the individual probabilities for each pixel
-    individual_probs = (lambda_k**observations) * jnp.exp(-lambda_k) / jax.scipy.special.factorial(observations)
-    
+    individual_probs = (
+        (lambda_k**observations)
+        * jnp.exp(-lambda_k)
+        / jax.scipy.special.factorial(observations)
+    )
+
     # Compute the joint probability by taking the product of all pixel probabilities
     joint_prob = jnp.prod(individual_probs)
-    
+
     return joint_prob

@@ -5,6 +5,7 @@ from skimage import segmentation
 from .dm import dm_load
 from skimage.feature import canny
 from scipy import ndimage as ndi
+
 # from numba import jit, njit, prange
 
 
@@ -176,7 +177,7 @@ class Detector:
         plt.axis("off")
         # plt.colorbar()
 
-    def normalize(self, normalized=False, method="otsu",percent=25):
+    def normalize(self, normalized=False, method="otsu", percent=25):
         if normalized:
             img = self.detector_normalised
         else:
@@ -255,7 +256,10 @@ class Detector:
 
 class Calibrate_Dose(object):
     def __init__(
-        self, aperture_experiment_beam_file=None, aperture_detector_beam_file=None, shutter=1
+        self,
+        aperture_experiment_beam_file=None,
+        aperture_detector_beam_file=None,
+        shutter=1,
     ):
 
         data, dimensions, calibration, metadata = dm_load(aperture_experiment_beam_file)
@@ -293,9 +297,11 @@ class Calibrate_Dose(object):
         self.background = background
         self.experiment_scan_value = experiment_scan_value
         self.detector_scan_value = detector_scan_value
-        scale = (experiment_scan_value - background) / (
-            detector_scan_value - background_detector
-        )/self.shutter
+        scale = (
+            (experiment_scan_value - background)
+            / (detector_scan_value - background_detector)
+            / self.shutter
+        )
         self.scale = scale
         print(f"Dose scale between experiment scan and detector scale: {scale}")
         return scale
@@ -320,7 +326,10 @@ class Calibrate_Detector(object):
         self.detector = Detector(array)
 
     def read_dose_scale(
-        self, aperture_experiment_beam_file=None, aperture_detector_beam_file=None, shutter=1,
+        self,
+        aperture_experiment_beam_file=None,
+        aperture_detector_beam_file=None,
+        shutter=1,
     ):
         cali_dose = Calibrate_Dose(
             aperture_experiment_beam_file, aperture_detector_beam_file, shutter=shutter

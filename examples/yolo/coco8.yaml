@@ -1,8 +1,8 @@
 # YOLOv8 Dataset Configuration
 
-train: dataset/train/images  # Path to the training images
-val: dataset/val/images    # Path to the validation images (can be the same as train if no separate validation set)
+train: dataset/train/images # Path to the training images
+val: dataset/val/images # Path to the validation images (can be the same as train if no separate validation set)
 
 # Classes
-nc: 2  # Number of classes
-names: ['Sr_atomic_column','Ti_atomic_column']  # List of class names
+nc: 2 # Number of classes
+names: ["Sr_atomic_column", "Ti_atomic_column"] # List of class names

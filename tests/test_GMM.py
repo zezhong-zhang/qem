@@ -1,10 +1,11 @@
-#%%
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
 import qem
 from qem.gaussian_mixture_model import GaussianMixtureModel
 from qem.classes import AtomicColumns
 import pytest
+
 
 def test_GMM(path_to_data="../examples/Example_PtIr.mat", plot=False):
     # Load data for comparison
@@ -25,8 +26,8 @@ def test_GMM(path_to_data="../examples/Example_PtIr.mat", plot=False):
     # gmm_obj = pyStatSTEM.GaussianMixtureModelObject(columns.scs["HAADF"], columns.pos)
     # gmm_obj.GMM(20, criteria=["icl"], pos_init=(1, 0))
     gmm_obj = GaussianMixtureModel(columns.scs["HAADF"])
-    gmm_obj.GMM("test", 20, score_method=['icl'])
-    
+    gmm_obj.GMM("test", 20, score_method=["icl"])
+
     if plot:
         # Plot the results for comparison (should be deleted later)
         plt.plot(range(1, 21), atomcountsStatSTEM["ICL"], "-k")
@@ -43,8 +44,10 @@ def test_GMM(path_to_data="../examples/Example_PtIr.mat", plot=False):
     # and be compared to the results from the legacy code
     # or known results
     assert np.all(
-        gmm_obj.result["test"].score["icl"] == pytest.approx(atomcountsStatSTEM["ICL"], rel=1e-2)
+        gmm_obj.result["test"].score["icl"]
+        == pytest.approx(atomcountsStatSTEM["ICL"], rel=1e-2)
     )
+
 
 # %%
 test_GMM(plot=True)

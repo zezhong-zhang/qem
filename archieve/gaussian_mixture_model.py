@@ -4,6 +4,7 @@ from tqdm import tqdm
 from qem.utils import safe_ln
 import matplotlib.pyplot as plt
 
+
 class GaussianMixtureModel:
     """
     Represents a Gaussian Mixture Model.
@@ -207,27 +208,27 @@ class GaussianMixtureModel:
         return wmw_list[idx], min_score
 
     def initWeight(self, n_component):
-            """
-            Initializes the weights for the Gaussian mixture model.
+        """
+        Initializes the weights for the Gaussian mixture model.
 
-            Parameters:
-            - n_component (int): The number of components in the Gaussian mixture model.
+        Parameters:
+        - n_component (int): The number of components in the Gaussian mixture model.
 
-            Returns:
-            - weight (ndarray): An array of weights for each component.
+        Returns:
+        - weight (ndarray): An array of weights for each component.
 
-            If `given_weight` is None, the weights are initialized as equal weights.
-            If `given_weight` is a list, the weight for the `n_component`-th component is used.
-            If `given_weight` is an ndarray, the first `n_component` weights are used.
-            """
-            if self.given_weight is None:
-                weight = np.ones(n_component) / n_component
+        If `given_weight` is None, the weights are initialized as equal weights.
+        If `given_weight` is a list, the weight for the `n_component`-th component is used.
+        If `given_weight` is an ndarray, the first `n_component` weights are used.
+        """
+        if self.given_weight is None:
+            weight = np.ones(n_component) / n_component
+        else:
+            if isinstance(self.given_weight, list):
+                weight = self.given_weight[n_component - 1]
             else:
-                if isinstance(self.given_weight, list):
-                    weight = self.given_weight[n_component - 1]
-                else:
-                    weight = self.given_weight[:n_component]
-            return weight
+                weight = self.given_weight[:n_component]
+        return weight
 
     def initWidth(self, n_component):
         """
@@ -346,7 +347,7 @@ class GaussianMixtureModel:
             width (ndarray): The initial widths (variances) of the Gaussian components.
 
         Returns:
-            tuple: A tuple containing the updated weights, means, and widths of the Gaussian components, 
+            tuple: A tuple containing the updated weights, means, and widths of the Gaussian components,
                    and the score of the fitting.
 
         Raises:
@@ -382,7 +383,7 @@ class GaussianMixtureModel:
         self._coordinates = coordinate
         self._num_column = np.size(coordinate, 1)
 
-    def plot_thickness(self, n_component,  show_component=None):
+    def plot_thickness(self, n_component, show_component=None):
         component_case = n_component - 1
         self.component = self.result.idxComponentOfScs(component_case)
         plt.figure()
@@ -393,7 +394,7 @@ class GaussianMixtureModel:
             c=self.component,
         )
         ax = plt.gca()
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
         plt.colorbar()
         plt.show(block=False)
         if show_component is not None:
@@ -412,24 +413,25 @@ class GaussianMixtureModel:
             )
             plt.scatter(x, y, marker="x", c=t)
             ax = plt.gca()
-            ax.set_aspect('equal')
+            ax.set_aspect("equal")
             plt.show(block=False)
             plt.pause(1)
         return None
 
     def plot_criteria(self, criteria=None):
         xaxis = self.n_component_list
-        fig, ax = plt.subplots(1,1)
+        fig, ax = plt.subplots(1, 1)
         for cri in criteria:
             plt.plot(xaxis, self.result.score[cri], label=cri)
             plt.plot(
-                np.argmin(self.result.score[cri])+1, min(self.result.score[cri]), 'o')
+                np.argmin(self.result.score[cri]) + 1, min(self.result.score[cri]), "o"
+            )
         legend = ax.legend(loc="upper center")
         plt.show(block=False)
         plt.pause(1)
         return None
 
-    def plot_histogram(self, n_component:int, use_dim=None, bin=None):
+    def plot_histogram(self, n_component: int, use_dim=None, bin=None):
         if use_dim is None or use_dim > self.scs.shape[1]:
             use_dim = self.scs.shape[1]
         if bin is None:
@@ -446,8 +448,12 @@ class GaussianMixtureModel:
             plt.hist(self.val[0, :], bins=bin)
 
         if n_component is None:
-            min_icl_comp = np.argmin(self.result.score['icl'])
-            print("Number of components is chosen to be ", min_icl_comp+1, "based on ICL.\n")
+            min_icl_comp = np.argmin(self.result.score["icl"])
+            print(
+                "Number of components is chosen to be ",
+                min_icl_comp + 1,
+                "based on ICL.\n",
+            )
             component_case = n_component - 1
         else:
             component_case = n_component - 1
@@ -474,13 +480,13 @@ class GaussianMixtureModel:
                 for c in range(component_case):
                     mu = mean[c]
                     sigma = width[c] ** 0.5
-                    x = mu[0,0] + sigma[0,0]*np.cos(t)
-                    y = mu[0,1] + sigma[0,1]*np.sin(t)
-                    plt.plot(x,y)
-                    plt.text(mu[0,0], mu[0,1], str(c + 1))
+                    x = mu[0, 0] + sigma[0, 0] * np.cos(t)
+                    y = mu[0, 1] + sigma[0, 1] * np.sin(t)
+                    plt.plot(x, y)
+                    plt.text(mu[0, 0], mu[0, 1], str(c + 1))
         plt.show(block=False)
         return None
-    
+
     @staticmethod
     def meanCoincide(mean):
         """
@@ -613,16 +619,16 @@ class GaussianMixtureModel:
         return score
 
     def failedScore(self):
-            """
-            Returns a dictionary with the score method as keys and infinity as values.
+        """
+        Returns a dictionary with the score method as keys and infinity as values.
 
-            Returns:
-                dict: A dictionary with the score method as keys and infinity as values.
-            """
-            score = {}
-            for key in self.score_method:
-                score[key] = np.inf
-            return score
+        Returns:
+            dict: A dictionary with the score method as keys and infinity as values.
+        """
+        score = {}
+        for key in self.score_method:
+            score[key] = np.inf
+        return score
 
     def applyConstraint(self, weight, mean, width):
         """
@@ -715,10 +721,7 @@ class GaussianMixtureModel:
 
     @staticmethod
     def polyCurve_6(x, a, b, c, d, e, f, g):
-        return (
-            x**6 * a + x**5 * b + x**4 * c + x**3 * d + x**2 * e + x * f + g
-        )
-
+        return x**6 * a + x**5 * b + x**4 * c + x**3 * d + x**2 * e + x * f + g
 
 
 class GmmResult:
@@ -999,6 +1002,7 @@ class GaussianComponents:
         ).sum()
         return nllh
 
+
 #### extra code
 class GaussianMixtureModelObject:
     """
@@ -1059,15 +1063,17 @@ class GaussianMixtureModelObject:
         assert self._num_column == np.size(
             self._coordinates, 1
         ), "GaussianMixtureModelObject._num_coordinates does noth match with _num_column"
-        
+
     def remove_edge(self, edge_width, image_size):
         lx, ly = image_size
         delete_list = []
         for i in range(self._num_column):
-            if (self._coordinates[0,i] < edge_width or 
-                self._coordinates[0,i] > lx-edge_width or 
-                self._coordinates[1,i] < edge_width or 
-                self._coordinates[1,i] > ly-edge_width):
+            if (
+                self._coordinates[0, i] < edge_width
+                or self._coordinates[0, i] > lx - edge_width
+                or self._coordinates[1, i] < edge_width
+                or self._coordinates[1, i] > ly - edge_width
+            ):
                 delete_list.append(i)
         self._coordinates = np.delete(self._coordinates, delete_list, 1)
         self._value = np.delete(self._value, delete_list, 1)
@@ -1136,7 +1142,7 @@ class GaussianMixtureModelObject:
             x = value[0, :, 0]
             y = value[0, :, 1:]
             # coef = np.linalg.lstsq(x, y, rcond=None)[0]
-            coef = np.squeeze(np.polyfit(x,y,3))
+            coef = np.squeeze(np.polyfit(x, y, 3))
             p = np.poly1d(coef)
             b_multi_d = True
 
@@ -1167,14 +1173,13 @@ class GaussianMixtureModelObject:
                 )
                 weight, mean, var, cri = self.__EM__(weight, mean, var, value, criteria)
             else:
-                mean_last = self.mean_list[num_component - 2][
-                    :, 0, 0]
+                mean_last = self.mean_list[num_component - 2][:, 0, 0]
                 mean_scale = np.insert(
                     mean_last, (0, num_component - 2), (v_min[0, 0], v_max[0, 0])
                 )
                 weight_t, mean_t, var_t, cri_t, choose_t = [], [], [], [], []
                 criteria_plus = criteria.copy()
-                criteria_plus.append('nllh')
+                criteria_plus.append("nllh")
                 for i in range(num_component):
                     mean_0 = np.append(
                         mean_last, (mean_scale[i] + mean_scale[i + 1]) / 2
@@ -1218,12 +1223,13 @@ class GaussianMixtureModelObject:
                 )
                 weight, mean, var, cri = self.__EM__(weight, mean, var, value, criteria)
             else:
-                mean_last = self.mean_list[num_component - 2][
-                    :, 0, 0]
-                mean_scale = np.linspace(v_min[0, 0], v_max[0, 0], self.max_n_components)
+                mean_last = self.mean_list[num_component - 2][:, 0, 0]
+                mean_scale = np.linspace(
+                    v_min[0, 0], v_max[0, 0], self.max_n_components
+                )
                 weight_t, mean_t, var_t, cri_t, choose_t = [], [], [], [], []
                 criteria_plus = criteria.copy()
-                criteria_plus.append('nllh')
+                criteria_plus.append("nllh")
                 for i in range(self.max_n_components):
                     mean_0 = np.append(mean_last, mean_scale[i])
                     if b_multi_d:
@@ -1251,7 +1257,7 @@ class GaussianMixtureModelObject:
             weight, _, var = self.__init_wmv__(
                 v_max, v_min, mean[:, 0, 0], num_component, self._use_dim
             )
-            weight, mean, var, cri = self.__EM__(weight, mean, var*2, value, criteria)
+            weight, mean, var, cri = self.__EM__(weight, mean, var * 2, value, criteria)
 
         return weight, mean, var, cri
 
@@ -1266,8 +1272,9 @@ class GaussianMixtureModelObject:
         change_ratio = 1
         cnt = 0
         while change_ratio > 1e-7:
-            tau_array = ca / np.sum(ca, 0)            
-            if 0 in np.sum(tau_array, (1, 2)): break
+            tau_array = ca / np.sum(ca, 0)
+            if 0 in np.sum(tau_array, (1, 2)):
+                break
             weight = np.sum(tau_array, (1, 2)) / num_column
             if num_component != 1:
                 weight[-1] = 1 - np.sum(weight[:-1])
@@ -1294,9 +1301,7 @@ class GaussianMixtureModelObject:
         cri = self.cri_test(criteria, llh, num_para, num_column, 2, tau_array)
         return weight, mean, var, cri
 
-    def GMM(
-        self, max_component: int, use_dim=None, criteria=["icl"], pos_init=(1, 0)
-    ):
+    def GMM(self, max_component: int, use_dim=None, criteria=["icl"], pos_init=(1, 0)):
         """
         Find components of Gaussian mixture model
 
@@ -1342,7 +1347,7 @@ class GaussianMixtureModelObject:
 
         value = np.expand_dims(self._value[: self._use_dim, :].T, axis=0)
 
-        for n_component in tqdm(range(1, self.max_n_components+1)):
+        for n_component in tqdm(range(1, self.max_n_components + 1)):
             weight, mean, var, cri = self.__search__(
                 value, criteria, n_component, pos_init=pos_init
             )
@@ -1352,8 +1357,10 @@ class GaussianMixtureModelObject:
             self._criteria_list.append(cri)
 
         self._criteria_list = np.transpose(self._criteria_list)
-        self.criteria_dict = {key: value for key, value in zip(criteria, self._criteria_list)}
-      
+        self.criteria_dict = {
+            key: value for key, value in zip(criteria, self._criteria_list)
+        }
+
     def plot_thickness(self, n_component, show_component=None):
         component_case = n_component - 1
         xmin = np.amin(self._coordinates[0, :])
@@ -1377,7 +1384,7 @@ class GaussianMixtureModelObject:
         ax = plt.gca()
         ax.set_xlim([xmin - 10, xmax + 10])
         ax.set_ylim([ymin - 10, ymax + 10])
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
         plt.show(block=False)
         plt.pause(1)
         if show_component is not None:
@@ -1399,22 +1406,25 @@ class GaussianMixtureModelObject:
             ax = plt.gca()
             ax.set_xlim([xmin - 10, xmax + 10])
             ax.set_ylim([ymin - 10, ymax + 10])
-            ax.set_aspect('equal')
+            ax.set_aspect("equal")
             plt.show(block=False)
             plt.pause(1)
 
     def plot_criteria(self, criteria=None):
         xaxis = np.arange(self.max_n_components)
-        fig, ax = plt.subplots(1,1)
+        fig, ax = plt.subplots(1, 1)
         for cri in criteria:
             plt.plot(xaxis, self.criteria_dict[cri], label=cri)
             plt.plot(
-                np.argmin(self.criteria_dict[cri])+1, self.criteria_dict[cri].min(), 'o')
+                np.argmin(self.criteria_dict[cri]) + 1,
+                self.criteria_dict[cri].min(),
+                "o",
+            )
         legend = ax.legend(loc="upper center")
         plt.show(block=False)
         plt.pause(1)
 
-    def plot_histogram(self, n_component:int, use_dim=None, bin=None):
+    def plot_histogram(self, n_component: int, use_dim=None, bin=None):
         if use_dim is None or use_dim > self._use_dim:
             use_dim = self._use_dim
         if bin is None:
@@ -1431,8 +1441,12 @@ class GaussianMixtureModelObject:
             plt.hist(self._value[0, :], bins=bin)
 
         if n_component is None:
-            min_icl_comp = np.argmin(self.criteria_dict['icl'])
-            print("Number of components is chosen to be ", min_icl_comp+1, "based on ICL.\n")
+            min_icl_comp = np.argmin(self.criteria_dict["icl"])
+            print(
+                "Number of components is chosen to be ",
+                min_icl_comp + 1,
+                "based on ICL.\n",
+            )
             component_case = n_component - 1
         else:
             component_case = n_component - 1
@@ -1457,9 +1471,9 @@ class GaussianMixtureModelObject:
                 sigma = var[0] ** 0.5
                 for c in range(component_case):
                     mu = mean[c]
-                    x = mu[0,0] + sigma[0,0]*np.cos(t)
-                    y = mu[0,1] + sigma[0,1]*np.sin(t)
-                    plt.plot(x,y)
-                    plt.text(mu[0,0], mu[0,1], c+1)
+                    x = mu[0, 0] + sigma[0, 0] * np.cos(t)
+                    y = mu[0, 1] + sigma[0, 1] * np.sin(t)
+                    plt.plot(x, y)
+                    plt.text(mu[0, 0], mu[0, 1], c + 1)
         plt.show(block=False)
         plt.pause(1)

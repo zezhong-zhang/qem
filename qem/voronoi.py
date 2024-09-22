@@ -4,6 +4,7 @@ from skimage.segmentation import watershed
 from hyperspy.signals import Signal2D, BaseSignal
 from tqdm import tqdm as progressbar
 
+
 def voronoi_integrate(
     s,
     points_x,
@@ -102,7 +103,7 @@ def voronoi_integrate(
             max_radius = max(image.shape[-2:])
         elif max_radius <= 0:
             raise ValueError("max_radius must be higher than 0.")
-        point_record = calculate_point_record(image, points, max_radius,pbc=pbc)
+        point_record = calculate_point_record(image, points, max_radius, pbc=pbc)
 
     elif method == "Watershed":
         if len(image.shape) > 2:
@@ -158,7 +159,8 @@ def voronoi_integrate(
         )
     return integrated_intensity, intensity_record, point_record
 
-def calculate_point_record(image, points, max_radius,pbc=False):
+
+def calculate_point_record(image, points, max_radius, pbc=False):
     """
     Creates a Voronoi array where equal values belong to
     the same Voronoi cell
@@ -181,7 +183,9 @@ def calculate_point_record(image, points, max_radius,pbc=False):
         total=np.prod(point_record.shape),
         leave=False,
     ):
-        minIndex, distMin = find_smallest_distance(i, j, points,image_shape = image.shape, pbc=pbc)
+        minIndex, distMin = find_smallest_distance(
+            i, j, points, image_shape=image.shape, pbc=pbc
+        )
         if distMin >= max_radius:
             point_record[i][j] = 0
         else:
@@ -209,6 +213,7 @@ def get_integrated_intensity(point_record, image, point_index, include_edge_cell
     currentFeature = currentMask * image
     integrated_record = np.sum(currentFeature, axis=(-1, -2))
     return integrated_record
+
 
 @nb.jit()
 def find_smallest_distance(i, j, points, image_shape=None, pbc=False):
@@ -241,12 +246,15 @@ def find_smallest_distance(i, j, points, image_shape=None, pbc=False):
         for k in range(points.shape[1]):
             dx = min(abs(points[0, k] - i), width - abs(points[0, k] - i))
             dy = min(abs(points[1, k] - j), height - abs(points[1, k] - j))
-            distance_log[k] = (dx ** 2 + dy ** 2) ** 0.5
+            distance_log[k] = (dx**2 + dy**2) ** 0.5
     else:
-        distance_log = ((points[0] - float(i)) ** 2 + (points[1] - float(j)) ** 2) ** 0.5
+        distance_log = (
+            (points[0] - float(i)) ** 2 + (points[1] - float(j)) ** 2
+        ) ** 0.5
     minIndex = np.argmin(distance_log)
     distMin = distance_log[minIndex]
     return minIndex, distMin
+
 
 def remove_integrated_edge_cells(
     i_points, i_record, p_record, edge_pixels=1, use_nans=True, inplace=False
@@ -311,6 +319,7 @@ def remove_integrated_edge_cells(
     if not inplace:
         return i_points, i_record, p_record
 
+
 def _make_mask(image, points_x, points_y):
     """
     Create points_map for the watershed integration
@@ -321,6 +330,7 @@ def _make_mask(image, points_x, points_y):
     values = np.arange(len(points_x))
     mask[tuple(indices)] = values
     return mask
+
 
 def _border_elems(image, pixels=1):
     """

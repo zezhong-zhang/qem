@@ -4,6 +4,7 @@ import numpy as np
 from ase import Atom, Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
+
 # from pymatgen.core.structure import Structure
 # from pymatgen.transformations.advanced_transformations import SupercellTransformation
 from skimage.feature import peak_local_max
@@ -79,10 +80,15 @@ class CrystalAnalyzer:
             fft_dx = 1 / (self.dx * self.image.shape[1])
             fft_dy = 1 / (self.dx * self.image.shape[0])
             fft_pixel_size = np.array([fft_dx, fft_dy])
-            fft_tolerance = int(1/min(np.linalg.norm(real_a*self.dx), np.linalg.norm(real_b*self.dx)) / max(fft_dx,fft_dy)/2)
-            fft_peaks = peak_local_max(
-                fft_image, min_distance=fft_tolerance
+            fft_tolerance = int(
+                1
+                / min(
+                    np.linalg.norm(real_a * self.dx), np.linalg.norm(real_b * self.dx)
+                )
+                / max(fft_dx, fft_dy)
+                / 2
             )
+            fft_peaks = peak_local_max(fft_image, min_distance=fft_tolerance)
             fft_peaks = fft_peaks[:, [1, 0]].astype(float)
             fft_plot = InteractivePlot(
                 np.log(fft_image),
@@ -99,8 +105,8 @@ class CrystalAnalyzer:
             matrix_fft = np.vstack([fft_a, fft_b])
             matrix_real = np.linalg.inv(matrix_fft)
             # get the matrix in real space
-            vec_a = matrix_real[:,0] 
-            vec_b = matrix_real[:,1]
+            vec_a = matrix_real[:, 0]
+            vec_b = matrix_real[:, 1]
             vec_a_pixel = vec_a / self.dx
             vec_b_pixel = vec_b / self.dx
             print(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")

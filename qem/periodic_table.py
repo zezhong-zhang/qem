@@ -1,4 +1,3 @@
-
 chemical_symbols = [
     # 0
     "X",
