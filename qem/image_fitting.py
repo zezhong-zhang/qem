@@ -66,6 +66,7 @@ class ImageModelFitting:
         self.params = dict()
         self.fit_local = False
         self.pbc = False
+        self.gpu_memory_limit = False
         x = np.arange(self.nx)
         y = np.arange(self.ny)
         self.X, self.Y = np.meshgrid(x, y, indexing="xy")
@@ -846,7 +847,6 @@ class ImageModelFitting:
         # create the target as the image
         b = self.image.ravel()
         # solve the linear equation
-        # solution = lsqr(design_matrix, b)[0]
         try:
             # Attempt to solve the linear system
             with warnings.catch_warnings(record=True) as w:
@@ -1076,8 +1076,16 @@ class ImageModelFitting:
                 self.atoms_selected = mask
                 # params = self.same_width_on_atom_type(params)
                 select_params = self.select_params(params, mask)
-                global_prediction = self.predict(params, self.X, self.Y)
-                local_prediction = self.predict(select_params, self.X, self.Y)
+                try:
+                    if not self.gpu_memory_limit:
+                        global_prediction = self.predict(params, X, Y)
+                        local_prediction = self.predict(select_params, X, Y)
+                    else:
+                        raise MemoryError  # Explicitly raise an exception to use the fallback
+                except MemoryError:  # Catch specific exceptions
+                    self.gpu_memory_limit = True
+                    global_prediction = self.predict_local(params)
+                    local_prediction = self.predict_local(select_params, use_mask=True)
                 local_residual = global_prediction - local_prediction
                 local_target = image - local_residual
                 select_params = self.optimize(
