@@ -125,24 +125,25 @@ columns_data = dict()
 file = '/home/zzhang/OneDrive/code/qem/data/STO/adf_average_STO.txt'
 image = np.loadtxt(file)
 
-for i in range(0,6):
+for i in range(12,13):
     image_name = f"image_{i}"
     # select random part of the image with a size of 256 x 256
-    image_region = select_random_region(image, (128, 128))
+    image_region = select_random_region(image, (512, 512))
     dx= 0.1645429228960236	
     model=ImageModelFitting(image_region, dx=dx,units='A')
     model.find_peaks()
     cif_file = '/home/zzhang/OneDrive/code/qem/data/STO/SrTiO3_mp-5229_conventional_standard.cif'
-    model.map_lattice(cif_file=cif_file,elements=['Sr','Ti'],min_distance=20,a_limit=20, b_limit=20,reciprocal=True)
+    model.map_lattice(cif_file=cif_file,elements=['Sr','Ti'],min_distance=10, reciprocal=True)
     # model.select_region()
-    model.fit_background = True
-    params = model.init_params()
-    model.fit_global(params)
-    model.coordinates = np.array([model.params['pos_x'],model.params['pos_y']]).T
+    # model.fit_background = True
+    # params = model.init_params()
+    # model.fit_global(params)
+    # model.coordinates = np.array([model.params['pos_x'],model.params['pos_y']]).T
     model.add_or_remove_peaks(min_distance=10)
-
+    
+    sigma =5
     images_data[image_name] = model.image
-    columns_data[image_name] = [(x, y, s, c) for x, y, s, c in zip(model.coordinates[:,0],model.coordinates[:,1], np.tile(model.params['sigma'].mean(),len(model.atom_types)),model.atom_types)]
+    columns_data[image_name] = [(x, y, s, c) for x, y, s, c in zip(model.coordinates[:,0],model.coordinates[:,1], np.tile(sigma,len(model.atom_types)),model.atom_types)]
 
 # Generate labels for each image
 for image_name, image_array in images_data.items():
@@ -150,49 +151,89 @@ for image_name, image_array in images_data.items():
     # save image in data/images/train
     save_image(image_name, image_array, f'dataset/{mode}/images')
     generate_yolo_labels_from_numpy(image_name, image_array, columns, output_dir)
-# %%
-# %%
-from ultralytics import YOLO
-
-
-%load_ext tensorboard
-%tensorboard --logdir 
-
-# Load a YOLOv8n model (nano model)
-# model = YOLO('yolov8n.yaml')  # You can also use yolov8s.yaml for a small model, yolov8m.yaml for medium, etc.
-model = YOLO('/home/zzhang/OneDrive/code/qem/examples/yolov8n.pt')  # You can also use yolov8s.yaml for a small model, yolov8m.yaml for medium, etc.
-
-# Train the model
-model.train(data='/home/zzhang/OneDrive/code/qem/examples/coco8.yaml', epochs=50, imgsz=256, batch=3)
-
-# Evaluate the model
-# model.val()
-
-# Export the model to ONNX or other formats if needed
-model.export()
-
-
-# %%
-from ultralytics import YOLO
+#%%
 import numpy as np
-from PIL import Image
+import matplotlib.pyplot as plt
+import PIL 
 
 file = '/home/zzhang/OneDrive/code/qem/data/STO/adf_average_STO.txt'
 image = np.loadtxt(file)
-image = (image - np.min(image))/(np.max(image)-np.min(image))*255
-image = image.astype(np.uint8)
-image = Image.fromarray(image)
-image.save('STO.jpg')
+# save the array to a png file
+# plt.figure(figsize=(image.shape[1] / 100, image.shape[0] / 100), dpi=100)
+# plt.imshow(image, cmap='gray')
+# plt.axis('off')
+# plt.savefig('adf_average_STO.png', bbox_inches='tight', pad_inches=0, dpi=100)
 
-# Load a pretrained YOLOv8n model
-model = YOLO("yolov8n.pt")
-
-# Define path to the image file
-source = "bus.jpg"
-
-# Run inference on the source
-results = model(source,save=True)  # list of Results objects
 # %%
-# model.predict(source, save=True, imgsz=256, conf=0.5)
+from PIL import Image
+import random
+from qem.image_fitting import ImageModelFitting
 
+def select_random_region(image_array, region_size):
+    """
+    Selects a random region from an image.
+
+    Parameters:
+    - image_path: str, path to the image file.
+    - region_size: tuple, (height, width) of the region to extract.
+
+    Returns:
+    - region: PIL Image, the extracted random region.
+    """
+    
+    # Load the image and convert it to a NumPy array
+
+
+    # Get the dimensions of the image
+    image_height, image_width = image_array.shape
+
+    # Calculate the maximum top-left corner (y, x) that can be chosen
+    max_x = image_width - region_size[1]
+    max_y = image_height - region_size[0]
+
+    # Randomly select the top-left corner within the allowable range
+    random_x = random.randint(0, max_x)
+    random_y = random.randint(0, max_y)
+
+    # Extract the region
+    region_np = image_array[random_y:random_y + region_size[0], random_x:random_x + region_size[1]]
+
+    # Convert the numpy array back to an image
+    return region_np
+
+for i in range(0,1):
+    region = select_random_region(image,(512,512))
+    plt.figure(figsize=(region.shape[1] / 100, region.shape[0] / 100), dpi=100)
+    plt.imshow(region, cmap='gray')
+    plt.axis('off')
+    plt.savefig(f'random_region_{i}.png', bbox_inches='tight', pad_inches=0, dpi=100)
+# %%
+from ultralytics import YOLO
+
+# Load a model
+# model = YOLO("yolov8n.yaml")  # build a new model from YAML
+model = YOLO("yolov8n_atom.pt")  # load a pretrained model (recommended for training)
+# model = YOLO("yolov8n.yaml").load("yolov8n.pt")  # build from YAML and transfer weights
+
+# Train the model
+results = model.train(data="/home/zzhang/OneDrive/code/qem/examples/coco8.yaml", epochs=10, imgsz=640)
+model.save("yolov8n_atom.pt")  # save the model to disk
+# %%
+from ultralytics import YOLO
+
+# Load a model
+model = YOLO("yolov8n_atom.pt")  # pretrained YOLOv8n model
+
+# Run batched inference on a list of images
+results = model(["random_region_0.png"])  # return a list of Results objects
+
+# Process results list
+for result in results:
+    boxes = result.boxes  # Boxes object for bounding box outputs
+    masks = result.masks  # Masks object for segmentation masks outputs
+    keypoints = result.keypoints  # Keypoints object for pose outputs
+    probs = result.probs  # Probs object for classification outputs
+    obb = result.obb  # Oriented boxes object for OBB outputs
+    result.show()  # display to screen
+    result.save(filename="result.jpg")  # save to disk
 # %%
