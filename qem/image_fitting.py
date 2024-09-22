@@ -255,9 +255,7 @@ class ImageModelFitting:
         peak_positions, atom_types = crystal_analyzer.supercell_project_2d(
             supercell_in_image, supercell_atom_types
         )
-        crystal_analyzer.peak_positions = peak_positions
-        crystal_analyzer.atom_types = atom_types
-        crystal_analyzer.unitcell_mapping()
+
         # use the current coordinates to filter the peak_positions
         # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
         mask = np.zeros(self.image.shape, dtype=bool)
@@ -273,6 +271,10 @@ class ImageModelFitting:
             if not mask[int(x), int(y)]:
                 mask_peaks[i] = False
 
+        crystal_analyzer.peak_positions = peak_positions[mask_peaks]
+        crystal_analyzer.atom_types = atom_types[mask_peaks]
+        crystal_analyzer.unitcell_mapping()
+        
         self.coordinates = peak_positions[mask_peaks]
         self.atom_types = atom_types[mask_peaks]
         return None
