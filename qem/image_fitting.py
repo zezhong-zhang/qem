@@ -45,7 +45,7 @@ class ImageModelFitting:
         image: np.ndarray,
         dx: float = 1.0,
         units: str = "A",
-        elements: list[str] = ["Sr", "Ti", "O"],
+        elements: list[str] = None,
     ):
         """
         Initialize the Fitting class.
@@ -53,7 +53,12 @@ class ImageModelFitting:
         Args:
             image (np.array): The input image as a numpy array.
             dx (float, optional): The size of each pixel. Defaults to 1.
+            units (str, optional): The units of the image. Defaults to "A".
+            elements (list[str], optional): The elements in the image. Defaults to None. If None, the elements are ["Sr", "Ti", "O"].
         """
+
+        if elements is None:
+            elements = ["Sr", "Ti", "O"]
 
         if len(image.shape) == 2:
             self.ny, self.nx = image.shape
