@@ -434,7 +434,7 @@ class ImageModelFitting:
 
     def remove_close_coordinates(self, threshold: int = 10):
         if self.pbc:
-            coords = remove_close_coordinates(self.coordinates.copy(), threshold)
+            coords, _ = remove_close_coordinates(self.coordinates.copy(), threshold)
             # find the coords near the boundary
             mask_boundary = (
                 (coords[:, 0] < threshold)
@@ -467,7 +467,7 @@ class ImageModelFitting:
             coords_final = np.vstack([coords[~mask_boundary], coords_boundary_pbc])
             self.coordinates = coords_final
         else:
-            self.coordinates = remove_close_coordinates(self.coordinates, threshold)
+            self.coordinates, _ = remove_close_coordinates(self.coordinates, threshold)
         return self.coordinates
 
     def add_or_remove_peaks(self, min_distance: int = 2, image=None):

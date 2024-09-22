@@ -245,7 +245,7 @@ def remove_close_coordinates(coordinates, threshold):
         keep_mask[too_close_mask] = False
 
     # Filter coordinates based on the keep mask
-    return coordinates[keep_mask]
+    return coordinates[keep_mask], keep_mask
 
 def export_params(params, filename):
     """
