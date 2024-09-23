@@ -145,6 +145,39 @@ class ImageModelFitting:
     def num_coordinates(self):
         return self.coordinates.shape[0]
 
+    @property
+    def atom_types(self):
+        if len(self._atom_types) == 0 or self._atom_types is None:
+            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        return self._atom_types
+
+    @atom_types.setter
+    def atom_types(self, atom_types: np.ndarray):
+        self._atom_types = atom_types
+
+    @property
+    def num_atom_types(self):
+        return len(np.unique(self.atom_types))
+
+    @property
+    def coordinates(self):
+        return self._coordinates
+
+    @coordinates.setter
+    def coordinates(self, coordinates: np.ndarray):
+        self._coordinates = coordinates
+
+    @property
+    def scalebar(self):
+        scalebar = ScaleBar(
+            self.dx,
+            units=self.units,
+            location="lower right",
+            length_fraction=0.2,
+            font_properties={"size": 20},
+        )
+        return scalebar
+
     ### voronoi integration
     def voronoi_integration(self, plot=False):
         """
@@ -178,50 +211,127 @@ class ImageModelFitting:
         return integrated_intensity, intensity_record, point_record
 
     ### init peaks and parameters
-
-    def plot_coordinates(self, color="red", s=1):
+    def guess_radius(self):
         """
-        Plot the coordinates of the atomic columns.
+        Estimate the density of atomic columns in an image.
 
-        Args:
-            color (str, optional): The color of the atomic columns. Defaults to "red".
-            s (int, optional): The size of the atomic columns. Defaults to 1.
+        Parameters:
+        id (int): Identifier for a specific image or set of coordinates.
+
+        Returns:
+        tuple: density, influence_map, background_region
         """
-        plt.figure()
-        plt.imshow(self.image, cmap="gray")
-        for atom_type in np.unique(self.atom_types):
-            mask = self.atom_types == atom_type
-            elements = self.elements[atom_type]
-            plt.scatter(
-                self.coordinates[mask][:, 0],
-                self.coordinates[mask][:, 1],
-                s=s,
-                label=elements,
+        num_coordinates = self.coordinates.shape[0]
+        if num_coordinates == 0:
+            raise ValueError("No coordinates found for the given id.")
+
+        rate, rate_max, n_filled, n = 1, 1, 0, 0
+        nx, ny = self.image.shape
+
+        while rate > 0.5 * rate_max:
+            influence_map = np.zeros((nx, ny))
+            for i in range(num_coordinates):
+                i_l = np.maximum(self.coordinates[i, 0] - n, 0).astype(np.int64)
+                i_r = np.minimum(self.coordinates[i, 0] + n, self.nx).astype(np.int64)
+                i_u = np.maximum(self.coordinates[i, 1] - n, 0).astype(np.int64)
+                i_d = np.minimum(self.coordinates[i, 1] + n, self.ny).astype(np.int64)
+                influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
+            if n == 0:
+                rate = (np.sum(influence_map) - n_filled) / num_coordinates
+            else:
+                rate = (np.sum(influence_map) - n_filled) / (8 * n) / num_coordinates
+            n_filled = np.sum(influence_map)
+            rate_max = max(rate_max, rate)
+            n += 1
+
+        # Scaled factors
+        n1 = int(np.round((n - 1) * 10))
+        n2 = int(np.round((n - 1) * 1))
+
+        influence_map = np.zeros((nx, ny))
+        direct_influence_map = np.zeros((nx, ny))
+
+        for i in range(num_coordinates):
+            # Calculate the indices for the larger area (influence_map)
+            i_l = np.maximum(self.coordinates[i, 0] - n1, 0).astype(np.int64)
+            i_r = np.minimum(self.coordinates[i, 0] + n1, nx).astype(np.int64)
+            i_u = np.maximum(self.coordinates[i, 1] - n1, 0).astype(np.int64)
+            i_d = np.minimum(self.coordinates[i, 1] + n1, ny).astype(np.int64)
+            influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
+
+            # Calculate the indices for the smaller area (direct_influence_map)
+            i_l = np.maximum(self.coordinates[i, 0] - n2, 0).astype(np.int64)
+            i_r = np.minimum(self.coordinates[i, 0] + n2, nx).astype(np.int64)
+            i_u = np.maximum(self.coordinates[i, 1] - n2, 0).astype(np.int64)
+            i_d = np.minimum(self.coordinates[i, 1] + n2, ny).astype(np.int64)
+            direct_influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
+
+        radius = (np.sum(direct_influence_map) / num_coordinates) ** (1 / 2) / np.pi
+
+        background_region = influence_map - direct_influence_map
+        return radius, direct_influence_map, background_region
+
+    def init_params(self, atom_size: float = 0.7, guess_radius: bool = False):
+        if guess_radius:
+            width = self.guess_radius()[0]
+        else:
+            width = atom_size / self.dx
+        if self.pbc:
+            mask = (self.coordinates[:, 0] < self.nx - 1) & (
+                self.coordinates[:, 1] < self.ny - 1
             )
-        plt.legend()
+            self.coordinates = self.coordinates[mask]
+            if len(self.atom_types) != self.num_coordinates:
+                self.atom_types = self.atom_types[mask]
 
-    @property
-    def atom_types(self):
-        if len(self._atom_types) == 0 or self._atom_types is None:
-            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
-        return self._atom_types
+        # self.center_of_mass()
+        pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
+        pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
+        # background = np.percentile(self.image, 20)
+        if self.fit_background:
+            background = self.image.min().astype(float)
+        else:
+            background = np.array([0]).astype(float)
+        height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
+        # get the lowest 20% of the intensity as the background
+        if self.same_width:
+            width = np.tile(width, self.num_atom_types).astype(float)
+            ratio = np.tile(0.9, self.num_atom_types).astype(float)
+        else:
+            width = np.tile(width, self.num_coordinates).astype(float)
+            ratio = np.tile(0.9, self.num_coordinates).astype(float)
+        if self.model_type == "gaussian":
+            # Initialize the parameters
+            params = {
+                "pos_x": pos_x,  # x position
+                "pos_y": pos_y,  # y position
+                "height": height,  # height
+                "sigma": width,  # width
+            }
+        elif self.model_type == "voigt":
+            # Initialize the parameters
+            params = {
+                "pos_x": pos_x,  # x position
+                "pos_y": pos_y,  # y position
+                "height": height,  # height
+                "sigma": width,  # width
+                "gamma": width / np.sqrt(2 * np.log(2)),  # width
+                "ratio": ratio,  # ratio
+            }
+        elif self.model_type == "lorentzian":
+            params = {
+                "pos_x": pos_x,  # x position
+                "pos_y": pos_y,  # y position
+                "height": height,  # height
+                "gamma": width / np.sqrt(2 * np.log(2)),  # width
+            }
+        if self.fit_background:
+            params["background"] = background
 
-    @atom_types.setter
-    def atom_types(self, atom_types: np.ndarray):
-        self._atom_types = atom_types
+        self.params = params
+        return params
 
-    @property
-    def num_atom_types(self):
-        return len(np.unique(self.atom_types))
-
-    @property
-    def coordinates(self):
-        return self._coordinates
-
-    @coordinates.setter
-    def coordinates(self, coordinates: np.ndarray):
-        self._coordinates = coordinates
-
+    # find atomic columns
     def import_coordinates(self, coordinates: np.ndarray):
         self.coordinates = coordinates
 
@@ -526,158 +636,6 @@ class ImageModelFitting:
         )
         self.coordinates = coordinates[mask]
         return self.coordinates
-
-    def plot(self):
-        plt.figure(figsize=(10, 5))
-        # x = np.arange(self.nx) * self.dx
-        # y = np.arange(self.ny) * self.dx
-        plt.subplot(1, 2, 1)
-        im = plt.imshow(self.image, cmap="gray")
-        plt.axis("off")
-        scalebar = self.scalebar
-        plt.gca().add_artist(scalebar)
-        plt.colorbar(im, fraction=0.046, pad=0.04)
-        plt.tight_layout()
-        plt.gca().add_artist(scalebar)
-        plt.gca().set_aspect("equal", adjustable="box")
-        plt.title("Image")
-        plt.subplot(1, 2, 2)
-        plt.hist(self.image.ravel(), bins=256)
-        plt.xlabel("Intensity")
-        plt.ylabel("Counts")
-        plt.title("Intensity Histogram")
-        plt.tight_layout()
-
-    @property
-    def scalebar(self):
-        scalebar = ScaleBar(
-            self.dx,
-            units=self.units,
-            location="lower right",
-            length_fraction=0.2,
-            font_properties={"size": 20},
-        )
-        return scalebar
-
-    def guess_radius(self):
-        """
-        Estimate the density of atomic columns in an image.
-
-        Parameters:
-        id (int): Identifier for a specific image or set of coordinates.
-
-        Returns:
-        tuple: density, influence_map, background_region
-        """
-        num_coordinates = self.coordinates.shape[0]
-        if num_coordinates == 0:
-            raise ValueError("No coordinates found for the given id.")
-
-        rate, rate_max, n_filled, n = 1, 1, 0, 0
-        nx, ny = self.image.shape
-
-        while rate > 0.5 * rate_max:
-            influence_map = np.zeros((nx, ny))
-            for i in range(num_coordinates):
-                i_l = np.maximum(self.coordinates[i, 0] - n, 0).astype(np.int64)
-                i_r = np.minimum(self.coordinates[i, 0] + n, self.nx).astype(np.int64)
-                i_u = np.maximum(self.coordinates[i, 1] - n, 0).astype(np.int64)
-                i_d = np.minimum(self.coordinates[i, 1] + n, self.ny).astype(np.int64)
-                influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
-            if n == 0:
-                rate = (np.sum(influence_map) - n_filled) / num_coordinates
-            else:
-                rate = (np.sum(influence_map) - n_filled) / (8 * n) / num_coordinates
-            n_filled = np.sum(influence_map)
-            rate_max = max(rate_max, rate)
-            n += 1
-
-        # Scaled factors
-        n1 = int(np.round((n - 1) * 10))
-        n2 = int(np.round((n - 1) * 1))
-
-        influence_map = np.zeros((nx, ny))
-        direct_influence_map = np.zeros((nx, ny))
-
-        for i in range(num_coordinates):
-            # Calculate the indices for the larger area (influence_map)
-            i_l = np.maximum(self.coordinates[i, 0] - n1, 0).astype(np.int64)
-            i_r = np.minimum(self.coordinates[i, 0] + n1, nx).astype(np.int64)
-            i_u = np.maximum(self.coordinates[i, 1] - n1, 0).astype(np.int64)
-            i_d = np.minimum(self.coordinates[i, 1] + n1, ny).astype(np.int64)
-            influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
-
-            # Calculate the indices for the smaller area (direct_influence_map)
-            i_l = np.maximum(self.coordinates[i, 0] - n2, 0).astype(np.int64)
-            i_r = np.minimum(self.coordinates[i, 0] + n2, nx).astype(np.int64)
-            i_u = np.maximum(self.coordinates[i, 1] - n2, 0).astype(np.int64)
-            i_d = np.minimum(self.coordinates[i, 1] + n2, ny).astype(np.int64)
-            direct_influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
-
-        radius = (np.sum(direct_influence_map) / num_coordinates) ** (1 / 2) / np.pi
-
-        background_region = influence_map - direct_influence_map
-        return radius, direct_influence_map, background_region
-
-    def init_params(self, atom_size: float = 0.7, guess_radius: bool = False):
-        if guess_radius:
-            width = self.guess_radius()[0]
-        else:
-            width = atom_size / self.dx
-        if self.pbc:
-            mask = (self.coordinates[:, 0] < self.nx - 1) & (
-                self.coordinates[:, 1] < self.ny - 1
-            )
-            self.coordinates = self.coordinates[mask]
-            if len(self.atom_types) != self.num_coordinates:
-                self.atom_types = self.atom_types[mask]
-
-        # self.center_of_mass()
-        pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
-        pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
-        # background = np.percentile(self.image, 20)
-        if self.fit_background:
-            background = self.image.min().astype(float)
-        else:
-            background = np.array([0]).astype(float)
-        height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
-        # get the lowest 20% of the intensity as the background
-        if self.same_width:
-            width = np.tile(width, self.num_atom_types).astype(float)
-            ratio = np.tile(0.9, self.num_atom_types).astype(float)
-        else:
-            width = np.tile(width, self.num_coordinates).astype(float)
-            ratio = np.tile(0.9, self.num_coordinates).astype(float)
-        if self.model_type == "gaussian":
-            # Initialize the parameters
-            params = {
-                "pos_x": pos_x,  # x position
-                "pos_y": pos_y,  # y position
-                "height": height,  # height
-                "sigma": width,  # width
-            }
-        elif self.model_type == "voigt":
-            # Initialize the parameters
-            params = {
-                "pos_x": pos_x,  # x position
-                "pos_y": pos_y,  # y position
-                "height": height,  # height
-                "sigma": width,  # width
-                "gamma": width / np.sqrt(2 * np.log(2)),  # width
-                "ratio": ratio,  # ratio
-            }
-        elif self.model_type == "lorentzian":
-            params = {
-                "pos_x": pos_x,  # x position
-                "pos_y": pos_y,  # y position
-                "height": height,  # height
-                "gamma": width / np.sqrt(2 * np.log(2)),  # width
-            }
-        if self.fit_background:
-            params["background"] = background
-
-        self.params = params
-        return params
 
     ### loss function and model prediction
 
@@ -1494,6 +1452,48 @@ class ImageModelFitting:
         return params
 
     ##### plot functions
+    def plot(self):
+        plt.figure(figsize=(10, 5))
+        # x = np.arange(self.nx) * self.dx
+        # y = np.arange(self.ny) * self.dx
+        plt.subplot(1, 2, 1)
+        im = plt.imshow(self.image, cmap="gray")
+        plt.axis("off")
+        scalebar = self.scalebar
+        plt.gca().add_artist(scalebar)
+        plt.colorbar(im, fraction=0.046, pad=0.04)
+        plt.tight_layout()
+        plt.gca().add_artist(scalebar)
+        plt.gca().set_aspect("equal", adjustable="box")
+        plt.title("Image")
+        plt.subplot(1, 2, 2)
+        plt.hist(self.image.ravel(), bins=256)
+        plt.xlabel("Intensity")
+        plt.ylabel("Counts")
+        plt.title("Intensity Histogram")
+        plt.tight_layout()
+
+    def plot_coordinates(self, color="red", s=1):
+        """
+        Plot the coordinates of the atomic columns.
+
+        Args:
+            color (str, optional): The color of the atomic columns. Defaults to "red".
+            s (int, optional): The size of the atomic columns. Defaults to 1.
+        """
+        plt.figure()
+        plt.imshow(self.image, cmap="gray")
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            elements = self.elements[atom_type]
+            plt.scatter(
+                self.coordinates[mask][:, 0],
+                self.coordinates[mask][:, 1],
+                s=s,
+                label=elements,
+            )
+        plt.legend()
+
     def plot_fitting(self):
         plt.figure(figsize=(15, 5))
         vmin = self.image.min()
