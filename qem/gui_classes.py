@@ -202,13 +202,18 @@ class InteractivePlot:
                 logging.info(
                     f"Adding peak at ({x}, {y}) with atom type {self.current_atom_type}."
                 )
-            title = "Double click to add or remove peaks."
+            title = "Double click to add or remove peaks. Hit 'r' to reset the zoom."
             self.update_plot(title)
 
     def on_key_press(self, event):
         try:
-            self.current_atom_type = int(event.key)
-            logging.info(f"Current atom type set to {self.current_atom_type}.")
+            if event.key == 'r':  # Check if the 'r' key is pressed
+                self.scatter_plot = None  # Reset the scatter plot
+                tiltle = "Double click to add or remove peaks. Hit 'r' to reset the zoom."
+                self.update_plot(tiltle)
+            else:
+                self.current_atom_type = int(event.key)  # Try to set atom type if key is a number
+                logging.info(f"Current atom type set to {self.current_atom_type}.")
         except ValueError:
             logging.info(
                 f"Invalid atom type input: {event.key}. Atom type remains {self.current_atom_type}."
@@ -264,7 +269,7 @@ class InteractivePlot:
         while plt.fignum_exists(fig.number):
             plt.pause(0.1)
 
-        print("Updated peak locations.")
+        logging.info("Updated peak locations.")
 
     def onclick_select(self, event):
         if event.dblclick:
@@ -285,12 +290,13 @@ class InteractivePlot:
         title = "Double click to select a peak."
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_select)
+        fig.canvas.mpl_connect("key_press_event", self.on_key_press)
         plt.show()
 
         while plt.fignum_exists(fig.number):
             plt.pause(0.1)
 
-        print(f"Selected peak location: {self.selected_point}.")
+        logging.info(f"Selected peak location: {self.selected_point}.")
         return self.selected_point
 
     def onclick_select_vectors(self, event):
@@ -314,15 +320,15 @@ class InteractivePlot:
             if self.selection_stage == 0:
                 self.origin = point
                 self.selection_stage += 1
-                print("Origin selected:", self.origin)
+                logging.info("Origin selected:", self.origin)
             elif self.selection_stage == 1:
                 self.vector_a = point - self.origin
                 self.selection_stage += 1
-                print("Vector a selected:", self.vector_a)
+                logging.info("Vector a selected:", self.vector_a)
                 self.draw_arrow(self.origin, point, "a")
             elif self.selection_stage == 2:
                 self.vector_b = point - self.origin
-                print("Vector b selected:", self.vector_b)
+                logging.info("Vector b selected:", self.vector_b)
                 self.draw_arrow(self.origin, point, "b")
                 self.selection_stage = (
                     0  # Reset the selection stage to allow new selections
@@ -357,6 +363,7 @@ class InteractivePlot:
         title = "Double click to select origin, vector a, and vector b."
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_select_vectors)
+        fig.canvas.mpl_connect("key_press_event", self.on_key_press)
         plt.show()
 
         while plt.fignum_exists(fig.number):
@@ -368,13 +375,13 @@ class InteractivePlot:
         )
 
         if selected:
-            print(
+            logging.info(
                 f"In pixel: Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}"
             )
-            print(
+            logging.info(
                 f"In space: Origin: {self.origin*self.dx} {self.units}, Vector a: {self.vector_a*self.dx} {self.units}, Vector b: {self.vector_b*self.dx} {self.units}"
             )
             return self.origin, self.vector_a, self.vector_b
         else:
-            print("Selection incomplete.")
+            logging.info("Selection incomplete.")
             return None, None, None
