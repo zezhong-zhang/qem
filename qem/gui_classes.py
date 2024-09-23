@@ -324,15 +324,15 @@ class InteractivePlot:
             if self.selection_stage == 0:
                 self.origin = point
                 self.selection_stage += 1
-                logging.info("Origin selected:", self.origin)
+                logging.info(f"Origin selected: {self.origin}", )
             elif self.selection_stage == 1:
                 self.vector_a = point - self.origin
                 self.selection_stage += 1
-                logging.info("Vector a selected:", self.vector_a)
+                logging.info(f"Vector a selected: {self.vector_a}")
                 self.draw_arrow(self.origin, point, "a")
             elif self.selection_stage == 2:
                 self.vector_b = point - self.origin
-                logging.info("Vector b selected:", self.vector_b)
+                logging.info(f"Vector b selected: {self.vector_b}")
                 self.draw_arrow(self.origin, point, "b")
                 self.selection_stage = (
                     0  # Reset the selection stage to allow new selections

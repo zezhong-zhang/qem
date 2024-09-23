@@ -3,7 +3,9 @@ from scipy.optimize import curve_fit, minimize
 from tqdm import tqdm
 from qem.utils import safe_ln
 import matplotlib.pyplot as plt
+import logging
 
+logging.basicConfig(level=logging.INFO)
 
 class GaussianMixtureModel:
     """
@@ -83,7 +85,7 @@ class GaussianMixtureModel:
             elif np.size(self.scs, 1) == 2:
                 use_scs_channel = [0, 1]
             else:
-                print("only support up to 2D GMM, only use first channel for now\n")
+                logging.info("only support up to 2D GMM, only use first channel for now\n")
                 use_scs_channel = [0]
         elif isinstance(use_scs_channel, int):
             use_scs_channel = [use_scs_channel]
@@ -371,7 +373,7 @@ class GaussianMixtureModel:
             llh = llh_new
             cnt += 1
         if cnt == self.lim_ite:
-            print("fitting did not converge\n")
+            logging.info("fitting did not converge\n")
         weight, mean, width = [g.weight, g.mean, g.var]
         sort_idx = np.argsort(mean[:, 0])
         mean = np.take_along_axis(mean, np.expand_dims(sort_idx, -1), axis=0)
@@ -438,7 +440,7 @@ class GaussianMixtureModel:
             bin = np.size(self.val, axis=0) // 10
 
         if use_dim != 2 and use_dim != 1:
-            print("only support up to 2 dimensions")
+            logging.info("only support up to 2 dimensions")
             return
         elif use_dim == 2:
             plt.figure()
@@ -449,10 +451,8 @@ class GaussianMixtureModel:
 
         if n_component is None:
             min_icl_comp = np.argmin(self.result.score["icl"])
-            print(
-                "Number of components is chosen to be ",
-                min_icl_comp + 1,
-                "based on ICL.\n",
+            logging.info(
+                f"Number of components is chosen to be {min_icl_comp+ 1} based on ICL.\n"
             )
             component_case = n_component - 1
         else:
@@ -501,7 +501,7 @@ class GaussianMixtureModel:
         cri = 1e-3
         diff = mean[1:] - mean[:-1]
         if ((diff**2).sum(1) ** 0.5 < cri).any():
-            # print('mean coincide')
+            # logging.info('mean coincide')
             return True
         else:
             return False
@@ -849,7 +849,7 @@ class GaussianComponents:
         n_dim = mean.shape[-1]
         dis = (val - mean) ** 2
         if (var == 0).any():
-            print("h")
+            logging.info("h")
         ca = (
             (2 * np.pi) ** (-n_dim / 2)
             * np.prod(var, -1) ** (-1 / 2)
@@ -961,7 +961,7 @@ class GaussianComponents:
                     var_indi = self.rectifier(result.x)
                     new_var = var_dose.sum(1) + np.expand_dims(var_indi, 0)
                 else:
-                    # print('cannot find solution')
+                    # logging.info('cannot find solution')
                     new_var = self.var
             else:
                 new_var = np.expand_dims(

@@ -5,6 +5,9 @@ from skimage import segmentation
 from .dm import dm_load
 from skimage.feature import canny
 from scipy import ndimage as ndi
+import logging
+
+logging.basicConfig(level=logging.INFO)
 
 # from numba import jit, njit, prange
 
@@ -96,7 +99,7 @@ class Detector:
 
         # Display basic information about hot pixels
         num_hot_pixels = len(hot_pixels[0])
-        print(
+        logging.info(
             f"Number of hot pixels: {num_hot_pixels}, orginal-gaussian smooth difference threshold: {threshold}"
         )
 
@@ -193,11 +196,8 @@ class Detector:
         # background = np.mean(img[~binary_mask])
         self.detector_normalised = (img - background) / (detector_value - background)
         self.detector_normalised[self.detector_normalised < 0] = 0
-        print(
-            "Detector normalised to [0,1] saved in self.detector_normalised for the Dector object,\n the orginal detector average value is: ",
-            detector_value,
-            " and the background average value is: ",
-            background,
+        logging.info(
+            f"Detector normalised to [0,1] saved in self.detector_normalised for the Dector object,\n the orginal detector average value is: {detector_value} and the background average value is: {background}"
         )
         return detector_value, background
 
@@ -288,11 +288,11 @@ class Calibrate_Dose(object):
 
     def dose_scale(self):
         self.remove_artifacts()
-        print("Normalizing beam used for detector scan...")
+        logging.info("Normalizing beam used for detector scan...")
         background_detector, detector_scan_value = (
             self.aperature_detector_beam.normalize()
         )
-        print("Normalizing beam used for experiment scan...")
+        logging.info("Normalizing beam used for experiment scan...")
         background, experiment_scan_value = self.aperature_experiment_beam.normalize()
         self.background = background
         self.experiment_scan_value = experiment_scan_value
@@ -303,7 +303,7 @@ class Calibrate_Dose(object):
             / self.shutter
         )
         self.scale = scale
-        print(f"Dose scale between experiment scan and detector scale: {scale}")
+        logging.info(f"Dose scale between experiment scan and detector scale: {scale}")
         return scale
 
     def plot(self):
@@ -347,7 +347,7 @@ class Calibrate_Detector(object):
         self.gain = gain
         self.background = background
         self.detector_max = detector_max
-        print(
+        logging.info(
             f"Detector gain: {gain}, background: {background}, detector max: {detector_max}"
         )
         return gain, background, detector_max

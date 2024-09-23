@@ -11,7 +11,8 @@ from skimage.feature import peak_local_max
 
 from qem.color import get_unique_colors
 from qem.gui_classes import InteractivePlot
-
+import logging
+logging.basicConfig(level=logging.INFO)
 
 class CrystalAnalyzer:
     def __init__(
@@ -109,7 +110,8 @@ class CrystalAnalyzer:
             vec_b = matrix_real[:, 1]
             vec_a_pixel = vec_a / self.dx
             vec_b_pixel = vec_b / self.dx
-            print(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
+            logging.info(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
+            logging.info(f"FFT real a: {vec_a} {self.units}, Real b: {vec_b} {self.units}")
             self.a = vec_a_pixel
             self.b = vec_b_pixel
             self.origin = real_origin
