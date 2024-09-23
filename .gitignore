@@ -18,3 +18,4 @@ examples/yolov8n.pt
 examples/yolo/dataset/
 examples/high_entropy_adf.hspy
 QEM.egg-info/
+
