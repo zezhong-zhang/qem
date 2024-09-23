@@ -226,6 +226,10 @@ class InteractivePlot:
         return scalebar
 
     def update_plot(self, title):
+        if self.scatter_plot is not None:
+        # Get current limits (view) of the plot
+            xlim = self.scatter_plot.get_xlim()
+            ylim = self.scatter_plot.get_ylim()
         plt.clf()
         plt.imshow(self.image, cmap="gray")
         scalebar = self.scalebar
@@ -242,6 +246,10 @@ class InteractivePlot:
                 label=str(atom_type),
             )
         plt.legend(bbox_to_anchor=(1.04, 1), loc="upper left")
+        if self.scatter_plot is not None:
+            plt.gca().set_xlim(xlim)
+            plt.gca().set_ylim(ylim)
+        self.scatter_plot = plt.gca()
         plt.draw()
 
     def add_or_remove(self, tolerance: float = 10):
@@ -251,7 +259,7 @@ class InteractivePlot:
         self.update_plot(title)
         fig.canvas.mpl_connect("button_press_event", self.onclick_add_or_remove)
         fig.canvas.mpl_connect("key_press_event", self.on_key_press)
-        plt.show()
+        # plt.show()
 
         while plt.fignum_exists(fig.number):
             plt.pause(0.1)
