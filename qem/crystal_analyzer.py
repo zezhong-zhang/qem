@@ -508,7 +508,7 @@ class CrystalAnalyzer:
                                     displacement_list.append(displacement)
                             # update the shift_orgin with the average displacement
                             if len(displacement_list) > 0:
-                                shift_orgin['adaptive'][(a_shift, b_shift)] += np.mean(displacement_list, axis=0)
+                                shift_orgin['adaptive'][(a_shift, b_shift)][:2] += np.mean(displacement_list, axis=0)
             self._shift_origin = shift_orgin
             return self._shift_origin[mode]
 
@@ -528,8 +528,8 @@ class CrystalAnalyzer:
         coordinates = self.coordinates
         coordinates[:, :2] = coordinates[:, :2] * self.dx
         total_atoms = len(self.coordinates)
-        total_types = len(np.unique(self.coordinates[:, 3]))
-        atom_types = self.coordinates[:, 3].astype(int)
+        total_types = len(np.unique(self.atom_types))
+        atom_types = self.atom_types.astype(int)
         xlo = np.min(coordinates[:, 0])
         xhi = np.max(coordinates[:, 0])
         ylo = np.min(coordinates[:, 1])
