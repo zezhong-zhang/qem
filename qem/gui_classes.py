@@ -116,7 +116,7 @@ class GetAtomSelection:
         handle_props = dict(color="blue")
         props = dict(color="blue")
         self.poly = PolygonSelector(
-            self.ax, self.onselect, handle_props=handle_props, props=props
+            self.ax, self.onselect, handle_props=handle_props, props=props  # type: ignore
         )
         self.fig.tight_layout()
 
@@ -138,12 +138,12 @@ class GetAtomSelection:
 
         if self.invert_selection:
             self.mask = not_selected
-            self.line_selected.set_data(
+            self.line_selected.set_data(  # type: ignore
                 atom_positions_not_selected[:, 0], atom_positions_not_selected[:, 1]
             )
         else:
             self.mask = selected
-            self.line_selected.set_data(
+            self.line_selected.set_data(  # type: ignore
                 atom_positions_selected[:, 0], atom_positions_selected[:, 1]
             )
         self.atom_positions_selected = atom_positions_selected
@@ -156,7 +156,7 @@ class InteractivePlot:
         self,
         image: np.ndarray,
         peaks_locations: np.ndarray,
-        atom_types: np.ndarray = None,
+        atom_types: np.ndarray = None,  # type: ignore
         tolerance: float = 10,
         dx: float = 1,
         units: str = "A",
@@ -174,9 +174,9 @@ class InteractivePlot:
         self.tolerance = tolerance
         self.scatter_plot = None
         # Added attributes for vector selection
-        self.origin = None
-        self.vector_a = None
-        self.vector_b = None
+        self.origin = np.array([])
+        self.vector_a = np.array([])
+        self.vector_b = np.array([])
         self.current_atom_type = 0  # Default atom type is 0
         self.selection_stage = (
             0  # 0: Select origin, 1: Select vector a, 2: Select vector b
@@ -207,12 +207,16 @@ class InteractivePlot:
 
     def on_key_press(self, event):
         try:
-            if event.key == 'r':  # Check if the 'r' key is pressed
+            if event.key == "r":  # Check if the 'r' key is pressed
                 self.scatter_plot = None  # Reset the scatter plot
-                tiltle = "Double click to add or remove peaks. Hit 'r' to reset the zoom."
+                tiltle = (
+                    "Double click to add or remove peaks. Hit 'r' to reset the zoom."
+                )
                 self.update_plot(tiltle)
             else:
-                self.current_atom_type = int(event.key)  # Try to set atom type if key is a number
+                self.current_atom_type = int(
+                    event.key
+                )  # Try to set atom type if key is a number
                 logging.info(f"Current atom type set to {self.current_atom_type}.")
         except ValueError:
             logging.info(
@@ -232,7 +236,7 @@ class InteractivePlot:
 
     def update_plot(self, title):
         if self.scatter_plot is not None:
-        # Get current limits (view) of the plot
+            # Get current limits (view) of the plot
             xlim = self.scatter_plot.get_xlim()
             ylim = self.scatter_plot.get_ylim()
         plt.clf()
@@ -266,7 +270,7 @@ class InteractivePlot:
         fig.canvas.mpl_connect("key_press_event", self.on_key_press)
         # plt.show()
 
-        while plt.fignum_exists(fig.number):
+        while plt.fignum_exists(fig.number):  # type: ignore
             plt.pause(0.1)
 
         logging.info("Updated peak locations.")
@@ -293,7 +297,7 @@ class InteractivePlot:
         fig.canvas.mpl_connect("key_press_event", self.on_key_press)
         plt.show()
 
-        while plt.fignum_exists(fig.number):
+        while plt.fignum_exists(fig.number):  # type: ignore
             plt.pause(0.1)
 
         logging.info(f"Selected peak location: {self.selected_point}.")
@@ -366,12 +370,10 @@ class InteractivePlot:
         fig.canvas.mpl_connect("key_press_event", self.on_key_press)
         plt.show()
 
-        while plt.fignum_exists(fig.number):
+        while plt.fignum_exists(fig.number):  # type: ignore
             plt.pause(0.1)
         selected = (
-            isinstance(self.origin, np.ndarray)
-            and isinstance(self.vector_a, np.ndarray)
-            and isinstance(self.vector_b, np.ndarray)
+            self.origin.size > 0 and self.vector_a.size > 0 and self.vector_b.size > 0
         )
 
         if selected:
@@ -382,6 +384,3 @@ class InteractivePlot:
                 f"In space: Origin: {self.origin*self.dx} {self.units}, Vector a: {self.vector_a*self.dx} {self.units}, Vector b: {self.vector_b*self.dx} {self.units}"
             )
             return self.origin, self.vector_a, self.vector_b
-        else:
-            logging.info("Selection incomplete.")
-            return None, None, None

@@ -36,7 +36,7 @@ class CrystalAnalyzer:
         self.a = np.array([1, 0])
         self.b = np.array([0, 1])
         self._min_distances = None
-        self._shift_origin= {'rigid':{}, 'adaptive':{}}
+        self._shift_origin = {"rigid": {}, "adaptive": {}}
         self.neighbor_site_dict = {}
         self.add_missing_elements = add_missing_elements
 
@@ -74,7 +74,7 @@ class CrystalAnalyzer:
             dx=self.dx,
             units=self.units,
         )
-        real_origin, real_a, real_b = real_plot.select_vectors()
+        real_origin, real_a, real_b = real_plot.select_vectors()  # type: ignore
         if reciprocal:
             fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
             fft_dx = 1 / (self.dx * self.image.shape[1])
@@ -98,7 +98,7 @@ class CrystalAnalyzer:
                 dimension="si-length-reciprocal",
                 tolerance=fft_tolerance,
             )
-            fft_origin, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors()
+            fft_origin, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors()  # type: ignore
             # normalize the fft vectors
             fft_a = fft_a_pixel * fft_pixel_size
             fft_b = fft_b_pixel * fft_pixel_size
@@ -123,7 +123,7 @@ class CrystalAnalyzer:
     def read_cif(self, cif_file_path):
         structure = read(cif_file_path)
         assert isinstance(structure, Atoms), "structure should be a ase Atoms object"
-        mask = [atom.symbol in self.elements for atom in structure]
+        mask = [atom.symbol in self.elements for atom in structure]  # type: ignore
         structure = structure[mask]
         self.unitcell = structure
         return structure
@@ -144,7 +144,7 @@ class CrystalAnalyzer:
         origin = np.array(origin)
         if origin.size == 2:
             origin = np.append(origin, 0)
-        c = self.unitcell.cell[2]
+        c = self.unitcell.cell[2]  # type: ignore
         transform_matrix = np.array([a, b, c]).T
         # Convert the old coordinates to a numpy array (if not already)
         frac_coords = np.array(frac_coords)
@@ -250,10 +250,10 @@ class CrystalAnalyzer:
             a = self.a
             b = self.b
 
-        frac_positions = self.unitcell.cell.scaled_positions(self.unitcell.positions)
+        frac_positions = self.unitcell.cell.scaled_positions(self.unitcell.positions)  # type: ignore
         unitcell_transformed = self.transform(frac_positions, a, b, origin)
         atom_types = []
-        for site in self.unitcell:
+        for site in self.unitcell:  # type: ignore
             element_symbol = site.symbol
             if element_symbol in self.elements:
                 atom_type = self.elements.index(element_symbol)
@@ -411,9 +411,9 @@ class CrystalAnalyzer:
         if distance.min() < min_distance:
             closest_peak = candidate_peaks[np.argmin(distance)]
             return closest_peak
-        
+
     def shift_origin(self, a_limit, b_limit, adaptive=True):
-        mode = 'adaptive' if adaptive else 'rigid'
+        mode = "adaptive" if adaptive else "rigid"
         if self._shift_origin[mode]:
             return self._shift_origin[mode]
         else:
@@ -434,7 +434,7 @@ class CrystalAnalyzer:
             ]
             order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
             # Find the closest peak to the origin to correct for drift
-            shift_orgin = {'rigid':{}, 'adaptive':{}}
+            shift_orgin = {"rigid": {}, "adaptive": {}}
             for a_shift, b_shift in order_mesh[1:]:
                 shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
                 # check if shifted_origin_rigid is within the image
@@ -444,41 +444,46 @@ class CrystalAnalyzer:
                     shifted_origin_rigid[[1, 0]] > self.image.shape + boudaries
                 ).any():
                     continue
-                shift_orgin['rigid'][(a_shift, b_shift)] = shifted_origin_rigid
+                shift_orgin["rigid"][(a_shift, b_shift)] = shifted_origin_rigid
                 if not adaptive:
                     continue
                 else:
-                    if (0,0) not in shift_orgin['adaptive'].keys():
+                    if (0, 0) not in shift_orgin["adaptive"].keys():
                         shift_orgin["adaptive"][(0, 0)] = self.origin
                     if a_shift == 0 and b_shift == 0:
-                        shift_orgin['adaptive'][(a_shift, b_shift)] = shifted_origin_rigid
+                        shift_orgin["adaptive"][
+                            (a_shift, b_shift)
+                        ] = shifted_origin_rigid
                     else:
                         # find the closet point of the a_shift and b_shift in the current shift_orgin
                         distance = np.linalg.norm(
-                            np.array(list(shift_orgin['adaptive'].values()))
+                            np.array(list(shift_orgin["adaptive"].values()))
                             - shifted_origin_rigid,
                             axis=1,
                         )
-                        neighbor_distance_idx = np.where(distance< boudary)[0]
-                        selected_keys = [list(shift_orgin['adaptive'].keys())[idx] for idx in neighbor_distance_idx]
+                        neighbor_distance_idx = np.where(distance < boudary)[0]
+                        selected_keys = [
+                            list(shift_orgin["adaptive"].keys())[idx]
+                            for idx in neighbor_distance_idx
+                        ]
                         expect_origin_list = []
                         # find the difference of a_shift and b_shift with the selected_keys
                         for selected_key in selected_keys:
                             a_shift_diff = a_shift - selected_key[0]
                             b_shift_diff = b_shift - selected_key[1]
                             expect_origin = (
-                                shift_orgin['adaptive'][selected_key]
+                                shift_orgin["adaptive"][selected_key]
                                 + self.a * a_shift_diff
                                 + self.b * b_shift_diff
                             )
                             expect_origin_list.append(expect_origin)
                         expect_origin_avg = np.array(expect_origin_list).mean(axis=0)
-                        shift_orgin['adaptive'][(a_shift, b_shift)] = expect_origin_avg
+                        shift_orgin["adaptive"][(a_shift, b_shift)] = expect_origin_avg
 
                         # check if the unitcell is close to any exisiting peak positions
                         unitcell, atom_types = self.unitcell_mapping(
                             ref=(
-                                shift_orgin['adaptive'][(a_shift, b_shift)],
+                                shift_orgin["adaptive"][(a_shift, b_shift)],
                                 self.a,
                                 self.b,
                             ),
@@ -502,13 +507,17 @@ class CrystalAnalyzer:
                                     len(distance) > 0
                                     and distance.min() < distance_ref.min() / 2
                                 ):
-                                    peak_selected = self.peak_positions[np.argmin(distance)]
+                                    peak_selected = self.peak_positions[
+                                        np.argmin(distance)
+                                    ]
                                     # get the displacement of the site_position
                                     displacement = peak_selected - site[:2]
                                     displacement_list.append(displacement)
                             # update the shift_orgin with the average displacement
                             if len(displacement_list) > 0:
-                                shift_orgin['adaptive'][(a_shift, b_shift)][:2] += np.mean(displacement_list, axis=0)
+                                shift_orgin["adaptive"][(a_shift, b_shift)][
+                                    :2
+                                ] += np.mean(displacement_list, axis=0)
             self._shift_origin = shift_orgin
             return self._shift_origin[mode]
 
@@ -519,7 +528,7 @@ class CrystalAnalyzer:
             i, j, d = neighbor_list("ijd", self.unitcell, cutoff)
             neighbors_indices = j[i == site_idx]
             neighbors_indices = np.unique(neighbors_indices)
-            neighbor_sites = [self.unitcell[n_index] for n_index in neighbors_indices]
+            neighbor_sites = [self.unitcell[n_index] for n_index in neighbors_indices]  # type: ignore
             self.neighbor_site_dict[site_idx] = neighbor_sites
         return neighbor_sites
 
@@ -535,7 +544,7 @@ class CrystalAnalyzer:
         ylo = np.min(coordinates[:, 1])
         yhi = np.max(coordinates[:, 1])
         zlo = np.min(coordinates[:, 2])
-        zhi = max(np.max(coordinates[:, 2]), self.unitcell.cell[2, 2])
+        zhi = max(np.max(coordinates[:, 2]), self.unitcell.cell[2, 2])  # type: ignore
 
         with open(filename, "w") as f:
             f.write("# LAMMPS data file written by QEM\n\n")
@@ -621,13 +630,13 @@ class CrystalAnalyzer:
         else:
             min_distances = {}
             # unitcell_in_image = self.unitcell_mapping(plot=False)
-            cutoff = max(self.unitcell.cell.lengths()) * 2
+            cutoff = max(self.unitcell.cell.lengths()) * 2  # type: ignore
             i, j, d = neighbor_list("ijd", self.unitcell, cutoff)
-            for site in self.unitcell:
+            for site in self.unitcell:  # type: ignore
                 neighbor_sites = j[i == site.index]
                 distances = d[i == site.index]
                 element = site.symbol
-                neighbor_elements = [self.unitcell[n].symbol for n in neighbor_sites]
+                neighbor_elements = [self.unitcell[n].symbol for n in neighbor_sites]  # type: ignore
                 distances_list = []
                 for other_element in np.unique(neighbor_elements):
                     mask = np.array(neighbor_elements) == other_element

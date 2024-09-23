@@ -20,6 +20,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
+from ase import Atoms
 
 from qem.color import get_unique_colors
 from qem.crystal_analyzer import CrystalAnalyzer
@@ -45,7 +46,7 @@ class ImageModelFitting:
         image: np.ndarray,
         dx: float = 1.0,
         units: str = "A",
-        elements: list[str] = None,
+        elements: list[str] = None,  # type: ignore
     ):
         """
         Initialize the Fitting class.
@@ -75,9 +76,7 @@ class ImageModelFitting:
         self.dx = dx * scale_factor
         self.units = "A"
         self._atom_types = np.array([])
-        logging.info(
-            f"Elements: {elements}, the order is used for the atom types."
-        )
+        logging.info(f"Elements: {elements}, the order is used for the atom types.")
         self.elements = elements
         self.atoms_selected = np.array([])
         self._coordinates = np.array([])
@@ -229,8 +228,8 @@ class ImageModelFitting:
     def map_lattice(
         self,
         elements: list[str],
-        cif_file: str = None,
-        unitcell: list = None,
+        cif_file: str = None,  # type: ignore
+        unitcell: Atoms = None,  # type: ignore
         min_distance=10,
         a_limit: int = 0,
         b_limit: int = 0,
@@ -265,17 +264,17 @@ class ImageModelFitting:
             a_limit = np.ceil(
                 max(self.nx - crystal_analyzer.origin[0], crystal_analyzer.origin[0])
                 * self.dx
-                / crystal_analyzer.unitcell.get_cell()[0][0]
+                / crystal_analyzer.unitcell.get_cell()[0][0]  # type: ignore
             ).astype(int)
         if b_limit == 0:
             b_limit = np.ceil(
                 max(self.ny - crystal_analyzer.origin[1], crystal_analyzer.origin[1])
                 * self.dx
-                / crystal_analyzer.unitcell.get_cell()[1][1]
+                / crystal_analyzer.unitcell.get_cell()[1][1]  # type: ignore
             ).astype(int)
         supercell_in_image, supercell_atom_types = (
             crystal_analyzer.generate_supercell_lattice(
-                a_limit=a_limit, b_limit=b_limit, adaptive = adaptive
+                a_limit=a_limit, b_limit=b_limit, adaptive=adaptive
             )
         )
         peak_positions, atom_types = crystal_analyzer.supercell_project_2d(
@@ -315,7 +314,7 @@ class ImageModelFitting:
             atom_positions=self.coordinates,
             invert_selection=invert_selection,
         )
-        while plt.fignum_exists(atom_select.fig.number):
+        while plt.fignum_exists(atom_select.fig.number):  # type: ignore
             plt.pause(0.1)
         peak_positions_selected = np.array(atom_select.atom_positions_selected)
         selected = atom_select.mask
@@ -1022,7 +1021,7 @@ class ImageModelFitting:
 
     def minimize(
         self,
-        params: dict = None,
+        params: dict = None,  # type: ignore
         tol: float = 1e-4,
     ):
         if params is None:
@@ -1052,7 +1051,7 @@ class ImageModelFitting:
         # Perform the optimization
         res = minimize(
             fun=objective_fn,
-            x0=params_flat,
+            x0=params_flat,  # type: ignore
             args=(param_shapes, param_keys, self.image, self.X, self.Y),
             method=method,
             tol=tol,
@@ -1073,7 +1072,7 @@ class ImageModelFitting:
 
     def fit_global(
         self,
-        params: dict = None,
+        params: dict = None,  # type: ignore
         maxiter: int = 1000,
         tol: float = 1e-3,
         step_size: float = 0.01,
@@ -1092,7 +1091,7 @@ class ImageModelFitting:
 
     def fit_random_batch(
         self,
-        params: dict = None,
+        params: dict = None,  # type: ignore
         num_epoch: int = 5,
         batch_size: int = 500,
         maxiter: int = 50,
@@ -1128,7 +1127,9 @@ class ImageModelFitting:
                         global_prediction = self.predict(params, X, Y)
                         local_prediction = self.predict(select_params, X, Y)
                     else:
-                        raise XlaRuntimeError("GPU memory limit exceeded, using the fallback of local prediction.")  # Explicitly raise an exception to use the fallback
+                        raise XlaRuntimeError(
+                            "GPU memory limit exceeded, using the fallback of local prediction."
+                        )  # Explicitly raise an exception to use the fallback
                 except XlaRuntimeError as e:
                     self.gpu_memory_limit = True
                     global_prediction = self.predict_local(params)
