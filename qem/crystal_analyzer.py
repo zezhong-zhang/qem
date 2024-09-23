@@ -36,7 +36,7 @@ class CrystalAnalyzer:
         self.a = np.array([1, 0])
         self.b = np.array([0, 1])
         self._min_distances = None
-        self._origin_adaptive = None
+        self._shift_origin= {'rigid':{}, 'adaptive':{}}
         self.neighbor_site_dict = {}
         self.add_missing_elements = add_missing_elements
 
@@ -168,7 +168,7 @@ class CrystalAnalyzer:
         elements = re.findall(r"[A-Z][a-z]*", formula)
         return elements
 
-    def generate_supercell_lattice(self, a_limit=1, b_limit=1):
+    def generate_supercell_lattice(self, a_limit=1, b_limit=1, adaptive=True):
         """
         Generate a supercell lattice based on the given lattice vectors and limits.
 
@@ -181,9 +181,9 @@ class CrystalAnalyzer:
         """
         supercell = np.array([]).reshape(0, 3)
         supercell_atom_types = np.array([])
-        shift_origin_adaptive = self.shift_origin_adaptive(a_limit, b_limit)
+        shift_origin = self.shift_origin(a_limit, b_limit, adaptive)
 
-        for translation, new_origin in shift_origin_adaptive.items():
+        for translation, new_origin in shift_origin.items():
             unitcell, atom_types = self.unitcell_mapping(
                 ref=(new_origin, self.a, self.b), plot=False
             )
@@ -411,10 +411,11 @@ class CrystalAnalyzer:
         if distance.min() < min_distance:
             closest_peak = candidate_peaks[np.argmin(distance)]
             return closest_peak
-
-    def shift_origin_adaptive(self, a_limit, b_limit):
-        if self._origin_adaptive is not None:
-            return self._origin_adaptive
+        
+    def shift_origin(self, a_limit, b_limit, adaptive=True):
+        mode = 'adaptive' if adaptive else 'rigid'
+        if self._shift_origin[mode]:
+            return self._shift_origin[mode]
         else:
             # generate a meshgrid
             a_axis_mesh, b_axis_mesh = np.meshgrid(
@@ -433,8 +434,7 @@ class CrystalAnalyzer:
             ]
             order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
             # Find the closest peak to the origin to correct for drift
-            shifted_origin_adaptive = {}
-            shifted_origin_adaptive[(0, 0)] = self.origin
+            shift_orgin = {'rigid':{}, 'adaptive':{}}
             for a_shift, b_shift in order_mesh[1:]:
                 shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
                 # check if shifted_origin_rigid is within the image
@@ -444,70 +444,73 @@ class CrystalAnalyzer:
                     shifted_origin_rigid[[1, 0]] > self.image.shape + boudaries
                 ).any():
                     continue
-                if a_shift == 0 and b_shift == 0:
-                    shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
+                shift_orgin['rigid'][(a_shift, b_shift)] = shifted_origin_rigid
+                if not adaptive:
+                    continue
                 else:
-                    # find the closet point of the a_shift and b_shift in the current shifted_origin_adaptive
-                    distance = np.linalg.norm(
-                        np.array(list(shifted_origin_adaptive.values()))
-                        - shifted_origin_rigid,
-                        axis=1,
-                    )
-                    # mask = distance < np.linalg.norm(self.a) + np.linalg.norm(self.b)
-                    # if mask.sum() == 0:
-                    #     shifted_origin_adaptive[(a_shift, b_shift)] = shifted_origin_rigid
-                    # else:
-                    selected_keys = list(shifted_origin_adaptive.keys())[
-                        np.argmin(distance)
-                    ]
-                    # find the difference of a_shift and b_shift with the selected_keys
-                    a_shift_diff = a_shift - selected_keys[0]
-                    b_shift_diff = b_shift - selected_keys[1]
-                    shifted_origin_adaptive[(a_shift, b_shift)] = (
-                        shifted_origin_adaptive[selected_keys]
-                        + self.a * a_shift_diff
-                        + self.b * b_shift_diff
-                    )
-                    # check if the unitcell is close to any exisiting peak positions
-                    unitcell, atom_types = self.unitcell_mapping(
-                        ref=(
-                            shifted_origin_adaptive[(a_shift, b_shift)],
-                            self.a,
-                            self.b,
-                        ),
-                        plot=False,
-                    )
-                    mask = (unitcell[:, :2] > 0).all(axis=1) & (
-                        unitcell[:, [1, 0]] < self.image.shape
-                    ).all(axis=1)
-                    unitcell_in_image = unitcell[mask]
-                    displacement_list = []
-                    if unitcell_in_image.size > 1:
-                        for site in unitcell_in_image:
-                            distance = np.linalg.norm(
-                                self.peak_positions - site[:2], axis=1
+                    if (0,0) not in shift_orgin['adaptive'].keys():
+                        shift_orgin["adaptive"][(0, 0)] = self.origin
+                    if a_shift == 0 and b_shift == 0:
+                        shift_orgin['adaptive'][(a_shift, b_shift)] = shifted_origin_rigid
+                    else:
+                        # find the closet point of the a_shift and b_shift in the current shift_orgin
+                        distance = np.linalg.norm(
+                            np.array(list(shift_orgin['adaptive'].values()))
+                            - shifted_origin_rigid,
+                            axis=1,
+                        )
+                        neighbor_distance_idx = np.where(distance< boudary)[0]
+                        selected_keys = [list(shift_orgin['adaptive'].keys())[idx] for idx in neighbor_distance_idx]
+                        expect_origin_list = []
+                        # find the difference of a_shift and b_shift with the selected_keys
+                        for selected_key in selected_keys:
+                            a_shift_diff = a_shift - selected_key[0]
+                            b_shift_diff = b_shift - selected_key[1]
+                            expect_origin = (
+                                shift_orgin['adaptive'][selected_key]
+                                + self.a * a_shift_diff
+                                + self.b * b_shift_diff
                             )
-                            distance_ref = (
-                                np.array([d for d in self.min_distances.values()])
-                                / self.dx
-                            )
-                            if (
-                                len(distance) > 0
-                                and distance.min() < distance_ref.min() / 2
-                            ):
-                                peak_selected = self.peak_positions[np.argmin(distance)]
-                                # get the displacement of the site_position
-                                displacement = peak_selected - site[:2]
-                                displacement_list.append(displacement)
-                        # update the shifted_origin_adaptive with the average displacement
-                        if len(displacement_list) > 0:
-                            displacement = np.mean(displacement_list, axis=0)
-                            shifted_origin_adaptive[(a_shift, b_shift)] = (
-                                shifted_origin_adaptive[(a_shift, b_shift)]
-                                + displacement
-                            )
-            self._origin_adaptive = shifted_origin_adaptive
-            return shifted_origin_adaptive
+                            expect_origin_list.append(expect_origin)
+                        expect_origin_avg = np.array(expect_origin_list).mean(axis=0)
+                        shift_orgin['adaptive'][(a_shift, b_shift)] = expect_origin_avg
+
+                        # check if the unitcell is close to any exisiting peak positions
+                        unitcell, atom_types = self.unitcell_mapping(
+                            ref=(
+                                shift_orgin['adaptive'][(a_shift, b_shift)],
+                                self.a,
+                                self.b,
+                            ),
+                            plot=False,
+                        )
+                        mask = (unitcell[:, :2] > 0).all(axis=1) & (
+                            unitcell[:, [1, 0]] < self.image.shape
+                        ).all(axis=1)
+                        unitcell_in_image = unitcell[mask]
+                        displacement_list = []
+                        if unitcell_in_image.size > 1:
+                            for site in unitcell_in_image:
+                                distance = np.linalg.norm(
+                                    self.peak_positions - site[:2], axis=1
+                                )
+                                distance_ref = (
+                                    np.array([d for d in self.min_distances.values()])
+                                    / self.dx
+                                )
+                                if (
+                                    len(distance) > 0
+                                    and distance.min() < distance_ref.min() / 2
+                                ):
+                                    peak_selected = self.peak_positions[np.argmin(distance)]
+                                    # get the displacement of the site_position
+                                    displacement = peak_selected - site[:2]
+                                    displacement_list.append(displacement)
+                            # update the shift_orgin with the average displacement
+                            if len(displacement_list) > 0:
+                                shift_orgin['adaptive'][(a_shift, b_shift)] += np.mean(displacement_list, axis=0)
+            self._shift_origin = shift_orgin
+            return self._shift_origin[mode]
 
     def neighbor_site(self, site_idx, cutoff=3):
         if site_idx in self.neighbor_site_dict:

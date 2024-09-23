@@ -235,6 +235,7 @@ class ImageModelFitting:
         a_limit: int = 0,
         b_limit: int = 0,
         reciprocal: bool = False,
+        adaptive: bool = True,
     ):
         """
         Find the peaks in the image based on the CIF file.
@@ -274,7 +275,7 @@ class ImageModelFitting:
             ).astype(int)
         supercell_in_image, supercell_atom_types = (
             crystal_analyzer.generate_supercell_lattice(
-                a_limit=a_limit, b_limit=b_limit
+                a_limit=a_limit, b_limit=b_limit, adaptive = adaptive
             )
         )
         peak_positions, atom_types = crystal_analyzer.supercell_project_2d(
@@ -636,7 +637,10 @@ class ImageModelFitting:
         pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
         pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
         # background = np.percentile(self.image, 20)
-        background = self.image.min().astype(float)
+        if self.fit_background:
+            background = self.image.min().astype(float)
+        else:
+            background = np.array([0]).astype(float)
         height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
         # get the lowest 20% of the intensity as the background
         if self.same_width:
@@ -671,7 +675,7 @@ class ImageModelFitting:
                 "gamma": width / np.sqrt(2 * np.log(2)),  # width
             }
         if self.fit_background:
-            params["background"] = background.astype(float)
+            params["background"] = background
 
         self.params = params
         return params
