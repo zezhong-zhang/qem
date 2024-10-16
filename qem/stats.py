@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-def add_poisson_noise(image):
+def add_poisson_noise(image, key_id: int = 0):
     """
     Adds Poisson noise to an image.
 
@@ -16,7 +16,7 @@ def add_poisson_noise(image):
     Returns:
     - noisy_image: The image with Poisson noise applied.
     """
-    key = random.PRNGKey(0)
+    key = random.PRNGKey(key_id)
     noisy_image = random.poisson(key, image)
     return noisy_image
 
@@ -53,8 +53,10 @@ def compute_fim(model_func, params):
 
     for i in range(num_params):
         for j in range(num_params):
-            result = np.sum(grads[i, :, :] * grads[j, :, :] / model_func_vals)
-            FIM[i, j] = result
+            result = grads[i, :, :] * grads[j, :, :]/model_func_vals
+            result = np.array(result)
+            result[np.isnan(result)] = 0
+            FIM[i, j] = result.sum()
     return FIM
 
 
