@@ -76,7 +76,7 @@ class ImageModelFitting:
         self.dx = dx * scale_factor
         self.units = "A"
         self._atom_types = np.array([])
-        logging.info(f"Elements: {elements}, the order is used for the atom types.")
+        logging.info(f"Elements: {elements}, the order is used for the atom types. Please initiate the elements in agreeement with your system.")
         self.elements = elements
         self.atoms_selected = np.array([])
         self._coordinates = np.array([])
@@ -118,6 +118,7 @@ class ImageModelFitting:
                 params["gamma"] = params["gamma"][self.atom_types]
             elif self.model_type == "voigt":
                 params["ratio"] = params["ratio"][self.atom_types]
+        volume = np.zeros(self.num_coordinates)
         if self.model_type == "gaussian":
             volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
         elif self.model_type == "lorentzian":
@@ -854,7 +855,7 @@ class ImageModelFitting:
                     design_matrix_csr = design_matrix.tocsr()
                     result = lsq_linear(design_matrix_csr, b, bounds=(0, np.inf))
                     solution = result.x
-                if non_negative is False:
+                else:
                     solution = spsolve(
                         design_matrix.T @ design_matrix, design_matrix.T @ b
                     )
@@ -1473,7 +1474,7 @@ class ImageModelFitting:
         plt.title("Intensity Histogram")
         plt.tight_layout()
 
-    def plot_coordinates(self, color="red", s=1):
+    def plot_coordinates(self, s=1):
         """
         Plot the coordinates of the atomic columns.
 
@@ -1518,10 +1519,7 @@ class ImageModelFitting:
         plt.tight_layout()
 
     def plot_scs(self, layout="horizontal"):
-        if layout == "horizontal":
-            row, col = 1, 2
-        elif layout == "vertical":
-            row, col = 2, 1
+        row, col = (1, 2) if layout == "horizontal" else (2, 1)
         plt.subplots(row, col)
         plt.subplot(row, col, 1)
         plt.imshow(self.image, cmap="gray")
@@ -1549,10 +1547,7 @@ class ImageModelFitting:
 
     def plot_scs_voronoi(self, layout="horizontal"):
         assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
-        if layout == "horizontal":
-            row, col = 1, 2
-        elif layout == "vertical":
-            row, col = 2, 1
+        row, col = (1, 2) if layout == "horizontal" else (2, 1)
         plt.subplots(row, col)
         plt.subplot(row, col, 1)
         plt.imshow(self.image, cmap="gray")
