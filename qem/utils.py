@@ -368,3 +368,62 @@ def rotate_vector(vector, axis, angle):
     )
 
     return np.dot(rot_matrix, vector.T).T
+
+
+def q_space_array(pixels, gridsize, meshed=True):
+    """
+    Return the appropriately scaled 2D reciprocal space coordinates.
+
+    Parameters
+    -----------
+    pixels : (N,) array_like
+        Pixels in each dimension of a ND array
+    gridsize : (N,) array_like
+        Dimensions of the array in real space units
+    meshed : bool, optional
+        Option to output dense meshed grid (True) or output unbroadcasted
+        arrays (False)
+
+    Parameters
+    -----------
+    pixels : (N,) array_like
+        Pixels in each dimension of a 2D array
+    gridsize : (N,) array_like
+        Dimensions of the array in real space units
+    """
+    # N is the dimensionality of grid
+    N = len(pixels)
+
+    qspace = [np.fft.fftfreq(pixels[i], d=gridsize[i] / pixels[i]) for i in range(N)]
+    # At this point we can return the arrays without broadcasting
+    if meshed:
+        return broadcast_from_unmeshed(qspace)
+    else:
+        return qspace
+    
+def broadcast_from_unmeshed(coords):
+    """
+    For an unmeshed set of coordinates broadcast to a meshed ND array.
+
+    Examples
+    --------
+    >>> broadcast_from_unmeshed([np.arange(5),np.arange(6)])
+    [array([[0, 0, 0, 0, 0, 0],
+       [1, 1, 1, 1, 1, 1],
+       [2, 2, 2, 2, 2, 2],
+       [3, 3, 3, 3, 3, 3],
+       [4, 4, 4, 4, 4, 4]]), array([[0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5],
+       [0, 1, 2, 3, 4, 5]])]
+    """
+
+    N = len(coords)
+    pixels = [a.shape[0] for a in coords]
+
+    # Broadcasting patterns
+    R = np.ones((N, N), dtype=np.int16) + np.diag(pixels) - np.eye(N, dtype=np.int16)
+
+    # Broadcast unmeshed grids
+    return [np.broadcast_to(a.reshape(rr), pixels) for a, rr in zip(coords, R)]
