@@ -76,7 +76,7 @@ class ImageModelFitting:
         self.dx = dx * scale_factor
         self.units = "A"
         self._atom_types = np.array([])
-        logging.info(f"Elements: {elements}, the order is used for the atom types. Please initiate the elements in agreeement with your system.")
+        logging.info(f"Elements: {elements}, the order is used for the atom types. Please initiate the correct elements in your system.")
         self.elements = elements
         self.atoms_selected = np.array([])
         self._coordinates = np.array([])
@@ -340,12 +340,8 @@ class ImageModelFitting:
         self,
         elements: list[str],
         cif_file: str = None,  # type: ignore
-        unitcell: Atoms = None,  # type: ignore
-        min_distance=10,
-        a_limit: int = 0,
-        b_limit: int = 0,
+        unit_cell: Atoms = None,  # type: ignore
         reciprocal: bool = False,
-        adaptive: bool = True,
     ):
         """
         Find the peaks in the image based on the CIF file.
@@ -364,58 +360,14 @@ class ImageModelFitting:
             elements=elements,
             units=self.units,
         )
-        if unitcell is not None:
-            crystal_analyzer.unitcell = unitcell
+        if unit_cell is not None:
+            crystal_analyzer.unit_cell = unit_cell
         if cif_file is not None:
             crystal_analyzer.read_cif(cif_file)
-        crystal_analyzer.choose_lattice_vectors(
-            tolerance=min_distance, reciprocal=reciprocal
-        )
-        if a_limit == 0:
-            a_limit = np.ceil(
-                max(self.nx - crystal_analyzer.origin[0], crystal_analyzer.origin[0])
-                * self.dx
-                / crystal_analyzer.unitcell.get_cell()[0][0]  # type: ignore
-            ).astype(int)
-        if b_limit == 0:
-            b_limit = np.ceil(
-                max(self.ny - crystal_analyzer.origin[1], crystal_analyzer.origin[1])
-                * self.dx
-                / crystal_analyzer.unitcell.get_cell()[1][1]  # type: ignore
-            ).astype(int)
-        supercell_in_image, supercell_atom_types = (
-            crystal_analyzer.generate_supercell_lattice(
-                a_limit=a_limit, b_limit=b_limit, adaptive=adaptive
-            )
-        )
-        peak_positions, atom_types = crystal_analyzer.supercell_project_2d(
-            supercell_in_image, supercell_atom_types
-        )
-
-        # use the current coordinates to filter the peak_positions
-        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
-        mask = np.zeros(self.image.shape, dtype=bool)
-        for i in range(self.num_coordinates):
-            x, y = self.coordinates[i]
-            sigma = 1 / self.dx
-            mask[
-                int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
-                int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
-            ] = True
-        # find the peak_positions that are not in the mask
-        mask_peaks = np.ones(peak_positions.shape[0], dtype=bool)
-        for i in range(peak_positions.shape[0]):
-            x, y = peak_positions[i]
-            if not mask[int(y), int(x)]:
-                mask_peaks[i] = False
-
-        crystal_analyzer.peak_positions = peak_positions[mask_peaks]
-        crystal_analyzer.atom_types = atom_types[mask_peaks]
-        crystal_analyzer.unitcell_mapping()
-
-        self.coordinates = peak_positions[mask_peaks]
-        self.atom_types = atom_types[mask_peaks]
-        return None
+        atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal)
+        self.coordinates = np.array([atomic_column_list.get_x().T, atomic_column_list.get_y().T])
+        self.atom_types = atomic_column_list.get_atom_types()
+        return atomic_column_list
 
     def select_region(self, invert_selection=False):
         from qem.gui_classes import GetAtomSelection
@@ -1518,8 +1470,16 @@ class ImageModelFitting:
         plt.title("Residual")
         plt.tight_layout()
 
-    def plot_scs(self, layout="horizontal"):
-        row, col = (1, 2) if layout == "horizontal" else (2, 1)
+    def plot_scs(self, layout="horizontal", per_element=False):
+        assert layout in {"horizontal", "vertical"}, "Layout should be horizontal or vertical"
+        if layout == "horizontal":
+            row, col = 1, 2
+            if per_element:
+                col += len(np.unique(self.atom_types)) -1
+        else:
+            row, col = 2, 1
+            if per_element:
+                row += len(np.unique(self.atom_types)) -1
         plt.subplots(row, col)
         plt.subplot(row, col, 1)
         plt.imshow(self.image, cmap="gray")
@@ -1534,16 +1494,40 @@ class ImageModelFitting:
             )
         plt.legend()
         plt.gca().set_aspect("equal", adjustable="box")
+        plt.axis("off")
         plt.title("Image")
-        plt.subplot(row, col, 2)
+        plt.tight_layout()
+
+        # plot the scs
         pos_x = self.params["pos_x"] * self.dx
         pos_y = self.params["pos_y"] * self.dx
-        im = plt.scatter(pos_x, pos_y, c=self.volume, s=2)
-        # make aspect ratio equal
-        plt.gca().invert_yaxis()
-        plt.gca().set_aspect("equal", adjustable="box")
-        plt.colorbar(im, fraction=0.046, pad=0.04)
-        plt.title(r"QEM refined scs ($\AA^2$)")
+        if per_element:
+            plt_idx = 1
+            for atom_type in np.unique(self.atom_types):
+                plt_idx += 1
+                plt.subplot(row, col, plt_idx)
+                mask = self.atom_types == atom_type
+                element = self.elements[atom_type]
+                im = plt.scatter(
+                    pos_x[mask],
+                    pos_y[mask],
+                    c=self.volume[mask],
+                    s=1,
+                    label=element,
+                )
+                plt.colorbar(im, fraction=0.046, pad=0.04)
+                plt.gca().invert_yaxis()
+                plt.gca().set_aspect("equal", adjustable="box")
+                plt.title(rf"Refined {element} scs ($\AA^2$)")
+                plt.tight_layout()
+        else:
+            plt.subplot(row, col, 2)
+            im = plt.scatter(pos_x, pos_y, c=self.volume, s=2)
+            plt.colorbar(im, fraction=0.046, pad=0.04)
+            plt.gca().invert_yaxis()
+            plt.gca().set_aspect("equal", adjustable="box")
+            plt.title(r"QEM refined scs ($\AA^2$)")
+            plt.tight_layout()
 
     def plot_scs_voronoi(self, layout="horizontal"):
         assert self.voronoi_volume is not None, "Please run the voronoi analysis first"

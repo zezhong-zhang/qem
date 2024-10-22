@@ -57,7 +57,7 @@ def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False)
     if invert_selection:
         bool_array = np.invert(bool_array)
     atom_positions_selected = atom_positions[bool_array]
-    return atom_positions_selected, bool_array
+    return atom_positions_selected, bool_array, path
 
 
 def get_atom_type():
@@ -121,10 +121,10 @@ class GetAtomSelection:
         self.fig.tight_layout()
 
     def onselect(self, verts):
-        atom_positions_selected, selected = get_atom_selection_from_verts(
+        atom_positions_selected, selected, path = get_atom_selection_from_verts(
             self.atom_positions, verts, invert_selection=self.invert_selection
         )
-        atom_positions_not_selected, not_selected = get_atom_selection_from_verts(
+        atom_positions_not_selected, not_selected, path = get_atom_selection_from_verts(
             self.atom_positions, verts, invert_selection=not self.invert_selection
         )
         if len(atom_positions_selected) != 0:
@@ -147,6 +147,8 @@ class GetAtomSelection:
                 atom_positions_selected[:, 0], atom_positions_selected[:, 1]
             )
         self.atom_positions_selected = atom_positions_selected
+        self.path = path
+        self.verts = verts
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
 
@@ -360,8 +362,9 @@ class InteractivePlot:
             fontsize=14,
         )
 
-    def select_vectors(self, tolerance: float = 10):
-        self.tolerance = tolerance
+    def select_vectors(self, tolerance: float = None):
+        if tolerance is not None:
+            self.tolerance = tolerance
         fig = plt.figure()
         plt.imshow(self.image, cmap="gray")
         title = "Double click to select origin, vector a, and vector b."
