@@ -4,13 +4,12 @@ import numpy as np
 from ase import Atom, Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
-
-# from pymatgen.core.structure import Structure
-# from pymatgen.transformations.advanced_transformations import SupercellTransformation
 from skimage.feature import peak_local_max
 
 from qem.color import get_unique_colors
 from qem.gui_classes import InteractivePlot
+from qem.atomic_column import AtomicColumn
+
 import logging
 logging.basicConfig(level=logging.INFO)
 
@@ -34,8 +33,8 @@ class CrystalAnalyzer:
         self.elements = elements
         self.unitcell = Atoms
         self.origin = np.array([0, 0])
-        self.a = np.array([1, 0])
-        self.b = np.array([0, 1])
+        self.a_vector= np.array([1, 0])
+        self.b_vector= np.array([0, 1])
         self._min_distances = None
         self._shift_origin = {"rigid": {}, "adaptive": {}}
         self.neighbor_site_dict = {}
@@ -112,13 +111,13 @@ class CrystalAnalyzer:
             vec_b_pixel = vec_b / self.dx
             logging.info(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
             logging.info(f"FFT real a: {vec_a} {self.units}, Real b: {vec_b} {self.units}")
-            self.a = vec_a_pixel
-            self.b = vec_b_pixel
+            self.a_vector= vec_a_pixel
+            self.b_vector= vec_b_pixel
             self.origin = real_origin
             return real_origin, vec_a_pixel, vec_b_pixel
         else:
-            self.a = real_a
-            self.b = real_b
+            self.a_vector= real_a
+            self.b_vector = real_b
             self.origin = real_origin
             return real_origin, real_a, real_b
 
@@ -187,7 +186,7 @@ class CrystalAnalyzer:
 
         for translation, new_origin in shift_origin.items():
             unitcell, atom_types = self.unitcell_mapping(
-                ref=(new_origin, self.a, self.b), plot=False
+                ref=(new_origin, self.a_vector, self.b_vector), plot=False
             )
             supercell = np.vstack([supercell, unitcell])
             supercell_atom_types = np.hstack([supercell_atom_types, atom_types])
@@ -249,8 +248,8 @@ class CrystalAnalyzer:
             origin, a, b = ref
         else:
             origin = self.origin
-            a = self.a
-            b = self.b
+            a = self.a_vector
+            b = self.b_vector
 
         frac_positions = self.unitcell.cell.scaled_positions(self.unitcell.positions)  # type: ignore
         unitcell_transformed = self.transform(frac_positions, a, b, origin)
@@ -297,8 +296,8 @@ class CrystalAnalyzer:
             plt.arrow(
                 self.origin[0],
                 self.origin[1],
-                self.a[0],
-                self.a[1],
+                self.a_vector[0],
+                self.a_vector[1],
                 color="k",
                 head_width=5,
                 head_length=5,
@@ -306,22 +305,22 @@ class CrystalAnalyzer:
             plt.arrow(
                 self.origin[0],
                 self.origin[1],
-                self.b[0],
-                self.b[1],
+                self.b_vector[0],
+                self.b_vector[1],
                 color="k",
                 head_width=5,
                 head_length=5,
             )
             # label the a and b vectors
             plt.text(
-                self.origin[0] + self.a[0],
-                self.origin[1] + self.a[1],
+                self.origin[0] + self.a_vector[0],
+                self.origin[1] + self.a_vector[1],
                 "a",
                 fontsize=20,
             )
             plt.text(
-                self.origin[0] + self.b[0],
-                self.origin[1] + self.b[1],
+                self.origin[0] + self.b_vector[0],
+                self.origin[1] + self.b_vector[1],
                 "b",
                 fontsize=20,
             )
@@ -332,8 +331,8 @@ class CrystalAnalyzer:
             origin, a, b = ref
         else:
             origin = self.origin
-            a = self.a
-            b = self.b
+            a = self.a_vector
+            b = self.b_vector
 
         frac_coords = np.array([site.scaled_position for site in sites])
         elements = [site.symbol for site in sites]
@@ -347,8 +346,8 @@ class CrystalAnalyzer:
             plt.arrow(
                 self.origin[0],
                 self.origin[1],
-                self.a[0],
-                self.a[1],
+                self.a_vector[0],
+                self.a_vector[1],
                 color="k",
                 head_width=10,
                 head_length=10,
@@ -356,22 +355,22 @@ class CrystalAnalyzer:
             plt.arrow(
                 self.origin[0],
                 self.origin[1],
-                self.b[0],
-                self.b[1],
+                self.b_vector[0],
+                self.b_vector[1],
                 color="k",
                 head_width=10,
                 head_length=10,
             )
             # label the a and b vectors
             plt.text(
-                self.origin[0] + self.a[0],
-                self.origin[1] + self.a[1],
+                self.origin[0] + self.a_vector[0],
+                self.origin[1] + self.a_vector[1],
                 "a",
                 fontsize=20,
             )
             plt.text(
-                self.origin[0] + self.b[0],
-                self.origin[1] + self.b[1],
+                self.origin[0] + self.b_vector[0],
+                self.origin[1] + self.b_vector[1],
                 "b",
                 fontsize=20,
             )
@@ -423,8 +422,8 @@ class CrystalAnalyzer:
             a_axis_mesh, b_axis_mesh = np.meshgrid(
                 np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
             )
-            a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a)
-            b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b)
+            a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a_vector)
+            b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b_vector)
             # compute the distance in such meshgrid
             distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
             # apply the sort to the a_axis_mesh and b_axis_mesh
@@ -438,9 +437,9 @@ class CrystalAnalyzer:
             # Find the closest peak to the origin to correct for drift
             shift_orgin = {"rigid": {}, "adaptive": {}}
             for a_shift, b_shift in order_mesh[1:]:
-                shifted_origin_rigid = self.origin + self.a * a_shift + self.b * b_shift
+                shifted_origin_rigid = self.origin + self.a_vector* a_shift + self.b_vector* b_shift
                 # check if shifted_origin_rigid is within the image
-                boudary = np.linalg.norm(self.a) + np.linalg.norm(self.b)
+                boudary = np.linalg.norm(self.a_vector) + np.linalg.norm(self.b_vector)
                 boudaries = np.array([boudary, boudary])
                 if (shifted_origin_rigid[[1, 0]] < -boudaries).any() or (
                     shifted_origin_rigid[[1, 0]] > self.image.shape + boudaries
@@ -475,8 +474,8 @@ class CrystalAnalyzer:
                             b_shift_diff = b_shift - selected_key[1]
                             expect_origin = (
                                 shift_orgin["adaptive"][selected_key]
-                                + self.a * a_shift_diff
-                                + self.b * b_shift_diff
+                                + self.a_vector* a_shift_diff
+                                + self.b_vector* b_shift_diff
                             )
                             expect_origin_list.append(expect_origin)
                         expect_origin_avg = np.array(expect_origin_list).mean(axis=0)
@@ -486,8 +485,8 @@ class CrystalAnalyzer:
                         unitcell, atom_types = self.unitcell_mapping(
                             ref=(
                                 shift_orgin["adaptive"][(a_shift, b_shift)],
-                                self.a,
-                                self.b,
+                                self.a_vector,
+                                self.b_vector,
                             ),
                             plot=False,
                         )
