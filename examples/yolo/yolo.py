@@ -216,7 +216,7 @@ model = YOLO("yolov8n_atom.pt")  # load a pretrained model (recommended for trai
 # model = YOLO("yolov8n.yaml").load("yolov8n.pt")  # build from YAML and transfer weights
 
 # Train the model
-results = model.train(data="/home/zzhang/OneDrive/code/qem/examples/coco8.yaml", epochs=10, imgsz=640)
+results = model.train(data="/home/zzhang/OneDrive/code/qem/examples/yolo/coco8.yaml", epochs=10, imgsz=640)
 model.save("yolov8n_atom.pt")  # save the model to disk
 # %%
 from ultralytics import YOLO
