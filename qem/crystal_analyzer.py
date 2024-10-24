@@ -42,6 +42,8 @@ class CrystalAnalyzer:
         self.neighbor_site_dict = {}
         self.add_missing_elements = add_missing_elements
         self.atomic_columns = AtomicColumnList()
+        if region_mask is None:
+            region_mask = np.ones(image.shape, dtype=bool)
         self.region_mask = region_mask
 
     ######### I/O ################

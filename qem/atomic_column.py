@@ -78,7 +78,6 @@ class AtomicColumnList:
         absolute_displacements = self.get_displacements()
         # mean displacement within the cutoff radius for each column
         distances = np.array([self.get_x() - self.get_x()[:, np.newaxis], self.get_y() - self.get_y()[:, np.newaxis]])
-        mask_cutoff = np.abs(distances) < cutoff
         mask = np.linalg.norm(distances, axis=0) < cutoff
         local_displacements = absolute_displacements - np.array([np.mean(absolute_displacements[row], axis=0) for row in mask])
         return local_displacements
