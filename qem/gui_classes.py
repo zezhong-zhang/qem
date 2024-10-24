@@ -331,7 +331,7 @@ class InteractivePlot:
                 i = np.argmin(distance)
                 self.selected_point = (self.pos_x[i], self.pos_y[i])
                 plt.scatter(
-                    self.pos_x[i], self.pos_y[i], color="red", s=5, edgecolors="black"
+                    self.pos_x[i], self.pos_y[i], color="red",edgecolors="black", marker="x", s=10
                 )
                 plt.draw()
 
@@ -359,7 +359,7 @@ class InteractivePlot:
                 i = np.argmin(distance)
                 point = np.array([self.pos_x[i], self.pos_y[i]])
                 plt.scatter(
-                    self.pos_x[i], self.pos_y[i], color="red", edgecolors="black", s=10
+                    self.pos_x[i], self.pos_y[i], color="red", edgecolors="black", s=10, marker="x"
                 )
                 plt.draw()
             else:

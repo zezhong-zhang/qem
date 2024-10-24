@@ -393,7 +393,7 @@ class ImageModelFitting:
         atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal)
         # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
         coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
-        coordinates = np.vstack([coordinates, atomic_column_list.get_positions()])
+        coordinates = np.vstack([coordinates, atomic_column_list.positions])
         self.coordinates = coordinates
         atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
         atom_types = np.append(atom_types, atomic_column_list.get_atom_types())
