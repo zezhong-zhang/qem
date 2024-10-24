@@ -18,4 +18,8 @@ examples/yolov8n.pt
 examples/yolo/dataset/
 examples/high_entropy_adf.hspy
 QEM.egg-info/
+examples/yolo/
+examples/__pycache__/
 
+examples/fft_utils.py
+examples/Spectral_Unmixing.ipynb
