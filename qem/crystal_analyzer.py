@@ -5,6 +5,7 @@ from ase import Atom, Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
 from skimage.feature import peak_local_max
+from typing import Optional
 
 from qem.color import get_unique_colors
 from qem.gui_classes import InteractivePlot,GetAtomSelection
@@ -23,7 +24,7 @@ class CrystalAnalyzer:
         elements: list[str],
         add_missing_elements: bool = True,
         units: str = "A",
-        region_mask: np.ndarray = None,
+        region_mask: Optional[np.ndarray] = None,
     ):
         self.image = image
         self.dx = dx

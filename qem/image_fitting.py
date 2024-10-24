@@ -410,7 +410,7 @@ class ImageModelFitting:
             region_map = self.region_map
         )
         try:
-            atom_select.poly.verts = self.region_path_dict[region_index].vertices
+            atom_select.poly.verts = self.region_path_dict[region_index].vertices # type: ignore
             atom_select.path = self.region_path_dict[region_index]
         except KeyError:
             pass
@@ -1651,5 +1651,5 @@ class ImageModelFitting:
         plt.gca().add_artist(scalebar)
         plt.axis("off")
         cbar = plt.colorbar()
-        cbar.set_ticks(np.arange(self.num_regions))
+        cbar.set_ticks(np.arange(self.num_regions)) # type: ignore
         plt.title("Region Map")
