@@ -69,6 +69,40 @@ def get_atom_type():
     root.destroy()  # Close the main window
     return atom_type
 
+class GetRegionSelection:
+    def __init__(self, image, region_map, invert_selection=False):
+        self.image = image
+        self.region_map = region_map
+        self.invert_selection = invert_selection
+        self.fig, self.ax = plt.subplots()
+        self.ax.set_title(
+            "Use the left mouse button to make the polygon.\n"
+            "Click the first position to finish the polygon.\n"
+            "Press ESC to reset the polygon, and hold SHIFT to\n"
+            "move the polygon."
+        )
+        self.cax = self.ax.imshow(self.image)
+        self.cax = self.ax.imshow(self.region_map, alpha=0.5)
+        self.polygons = []  # Store all polygons
+        self.poly = PolygonSelector(self.ax, self.onselect)
+        self.fig.tight_layout()
+        self.region_mask = np.zeros_like(self.image).astype(bool)
+
+    def onselect(self, verts):
+        self.path = Path(verts)
+        self.verts = verts    
+        self.region_mask = self.get_region_mask()
+        self.fig.canvas.draw()
+        self.fig.canvas.flush_events()
+
+    def get_region_mask(self):
+        points = np.indices(self.image.shape)
+        points = points.reshape(2, -1).T
+        region_mask = self.path.contains_points(points).reshape(self.image.shape).T
+        if self.invert_selection:
+            region_mask = ~region_mask
+        return region_mask
+
 
 class GetAtomSelection:
     def __init__(self, image, atom_positions, invert_selection=False, size=1):
@@ -112,7 +146,8 @@ class GetAtomSelection:
             markersize=self.size,
         )[0]
         self.line_selected = None
-        self.mask = None
+        self.selection_mask = None
+        self.region_mask = None
         handle_props = dict(color="blue")
         props = dict(color="blue")
         self.poly = PolygonSelector(
@@ -137,20 +172,31 @@ class GetAtomSelection:
                 )[0]
 
         if self.invert_selection:
-            self.mask = not_selected
+            self.selection_mask = not_selected
             self.line_selected.set_data(  # type: ignore
                 atom_positions_not_selected[:, 0], atom_positions_not_selected[:, 1]
             )
         else:
-            self.mask = selected
+            self.selection_mask = selected
             self.line_selected.set_data(  # type: ignore
                 atom_positions_selected[:, 0], atom_positions_selected[:, 1]
             )
         self.atom_positions_selected = atom_positions_selected
+
         self.path = path
+        self.region_mask = self.get_mask_image(path, invert_selection=self.invert_selection)
         self.verts = verts
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
+
+    def get_mask_image(self, path, invert_selection=False):
+        points = np.indices(self.image.shape)
+        points = points.reshape(2, -1).T
+        region_mask = path.contains_points(points).reshape(self.image.shape).T
+        if invert_selection:
+            region_mask = ~region_mask
+        return region_mask
+   
 
 
 class InteractivePlot:
@@ -362,9 +408,8 @@ class InteractivePlot:
             fontsize=14,
         )
 
-    def select_vectors(self, tolerance: float = None):
-        if tolerance is not None:
-            self.tolerance = tolerance
+    def select_vectors(self, tolerance: float):
+        self.tolerance = tolerance
         fig = plt.figure()
         plt.imshow(self.image, cmap="gray")
         title = "Double click to select origin, vector a, and vector b."

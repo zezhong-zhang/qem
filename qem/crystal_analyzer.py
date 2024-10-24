@@ -7,7 +7,7 @@ from ase.neighborlist import neighbor_list
 from skimage.feature import peak_local_max
 
 from qem.color import get_unique_colors
-from qem.gui_classes import InteractivePlot
+from qem.gui_classes import InteractivePlot,GetAtomSelection
 from qem.atomic_column import AtomicColumn, AtomicColumnList
 
 import logging
@@ -23,6 +23,7 @@ class CrystalAnalyzer:
         elements: list[str],
         add_missing_elements: bool = True,
         units: str = "A",
+        region_mask: np.ndarray = None,
     ):
         self.image = image
         self.dx = dx
@@ -36,13 +37,12 @@ class CrystalAnalyzer:
         self.origin = np.array([0, 0])
         self.a_vector= np.array([1, 0])
         self.b_vector= np.array([0, 1])
-        self.c_vector = np.array([0, 0, 0])
         self._min_distances = None
         self._origin_offsets = {"rigid": {}, "adaptive": {}}
         self.neighbor_site_dict = {}
         self.add_missing_elements = add_missing_elements
-        self.atomic_columns = []
-
+        self.atomic_columns = AtomicColumnList()
+        self.region_mask = region_mask
 
     ######### I/O ################
     def read_cif(self, cif_file_path):
@@ -200,14 +200,13 @@ class CrystalAnalyzer:
         lattice_3d, lattice_3d_ref, atom_types_3d = self.get_lattice_3d(
                 a_limit=a_limit, b_limit=b_limit, adaptive=True
             )
-        self.align_unit_cell_to_image(plot=True)
 
         coords_2d, first_indices, inverse_indices = np.unique(lattice_3d[:, [0, 1]],
             axis=0, return_index=True, return_inverse=True
         )
         coords_2d_ref = lattice_3d_ref[first_indices]
-        atom_types_2d = atom_types_3d[first_indices]
-        elements = self.elements[atom_types_2d]
+        atom_types_2d = atom_types_3d[first_indices].astype(int)
+        elements = [self.elements[i] for i in atom_types_2d]
 
         atomic_column_list = AtomicColumnList()
         
@@ -219,15 +218,18 @@ class CrystalAnalyzer:
                 atom_type=atom_types_2d[i],
                 x=coords_2d[i, 0],
                 y=coords_2d[i, 1],
-                z=coords_2d[i, 2],
+                z=[],
                 x_ref=coords_2d_ref[i, 0],
                 y_ref=coords_2d_ref[i, 1],
-                z_info={element: z[i] for i, element in enumerate(self.elements[indices])},
+                z_info={element: z[i] for i, element in enumerate([self.elements[i] for i in atom_types_2d[indices]])},
                 scs=0,
                 strain={}
             )
             atomic_column_list.add(atomic_column)
+        self.peak_positions = coords_2d
+        self.atom_types = atom_types_2d
         self.atomic_columns = atomic_column_list
+        self.align_unit_cell_to_image(plot=True)
         return atomic_column_list
 
     def get_lattice_3d(self, a_limit:int=0, b_limit:int=0, adaptive=True):
@@ -262,30 +264,33 @@ class CrystalAnalyzer:
         is_within_image_bounds = (supercell[:, :2] > 0).all(axis=1) & (
             supercell[:, [1, 0]] < self.image.shape
         ).all(axis=1)
+        supercell = supercell[is_within_image_bounds]
+        supercell_ref = supercell_ref[is_within_image_bounds]
+        supercell_atom_types = supercell_atom_types[is_within_image_bounds]
 
         # use the current coordinates to filter the peak_positions
         # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
         valid_region_mask = np.zeros(self.image.shape, dtype=bool)
         for i in range(len(self.peak_positions)):
             x, y = self.peak_positions[i]
-            sigma = 1 / self.dx
+            sigma = 0.8 / self.dx
             valid_region_mask[
                 int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
                 int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
             ] = True
-        # find the peak_positions that are not in the mask
-        peak_region_filter = np.ones(supercell.shape[0], dtype=bool)
 
+        valid_region_mask = valid_region_mask & self.region_mask
+
+        peak_region_filter = np.ones(supercell.shape[0], dtype=bool)
         for i in range(supercell.shape[0]):
             x, y = supercell[i,:2]
             if not valid_region_mask[int(y), int(x)]:
                 peak_region_filter[i] = False
 
-        mask_combined = is_within_image_bounds & peak_region_filter
-        self.coordinates = supercell[mask_combined]
-        self.coordinates_ref = supercell_ref[mask_combined]
-        self.atom_types = supercell_atom_types[mask_combined]
-        return self.coordinates, self.coordinates_ref, self.atom_types
+        self.coordinates = supercell[peak_region_filter]
+        self.coordinates_ref = supercell_ref[peak_region_filter]
+        atom_types_3d = supercell_atom_types[peak_region_filter].astype(int)
+        return self.coordinates, self.coordinates_ref, atom_types_3d
 
     def align_unit_cell_to_image(self, ref=None, plot=True):
         """
@@ -385,6 +390,7 @@ class CrystalAnalyzer:
                 else:
                     if (0, 0) not in origin_offsets["adaptive"].keys():
                         origin_offsets["adaptive"][(0, 0)] = self.origin
+                        origin_offsets['rigid'][(0, 0)] = self.origin
                     if a_shift == 0 and b_shift == 0:
                         origin_offsets["adaptive"][
                             (a_shift, b_shift)
@@ -467,26 +473,9 @@ class CrystalAnalyzer:
             self.neighbor_site_dict[site_idx] = neighbor_sites
         return neighbor_sites
 
-    ####### plot #######
-    def plot(self):
-        plt.imshow(self.image, cmap="gray")
-        color_iterator = get_unique_colors()
-        for atom_type in np.unique(self.atom_types):
-            mask = self.atom_types == atom_type
-            element = self.elements[atom_type]
-            plt.scatter(
-                self.coordinates[mask][:, 0],
-                self.coordinates[mask][:, 1],
-                label=element,
-                color=next(color_iterator),
-            )
-        # plt.gca().invert_yaxis()
-        plt.legend()
-        plt.show()
+    ####### select region and lattice vectors #######
 
     def select_region(self, peak_positions, atom_types):
-        from qem.gui_classes import GetAtomSelection
-
         atom_select = GetAtomSelection(
             image=self.image, atom_positions=peak_positions, invert_selection=False
         )
@@ -494,9 +483,10 @@ class CrystalAnalyzer:
         while atom_select.atom_positions_selected.size == 0:
             plt.pause(0.1)
         peak_positions_selected = np.array(atom_select.atom_positions_selected)
-        mask = np.isin(peak_positions, peak_positions_selected).all(axis=1)
-        atom_types_selected = atom_types[mask]
-        return peak_positions_selected, atom_types_selected
+        is_peak_selected = np.isin(peak_positions, peak_positions_selected).all(axis=1)
+        atom_types_selected = atom_types[is_peak_selected]
+        region_mask = atom_select.region_mask
+        return peak_positions_selected, atom_types_selected, region_mask
 
     def select_lattice_vectors(self, tolerance=10, reciprocal=False):
         """
@@ -518,6 +508,7 @@ class CrystalAnalyzer:
         real_origin, real_a, real_b = real_plot.select_vectors(tolerance=tolerance)  # type: ignore
         if reciprocal:
             fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
+            fft_log = np.log(fft_image)
             fft_dx = 1 / (self.dx * self.image.shape[1])
             fft_dy = 1 / (self.dx * self.image.shape[0])
             fft_pixel_size = np.array([fft_dx, fft_dy])
@@ -529,10 +520,10 @@ class CrystalAnalyzer:
                 / max(fft_dx, fft_dy)
                 / 2
             )
-            fft_peaks = peak_local_max(fft_image, min_distance=fft_tolerance)
+            fft_peaks = peak_local_max(fft_log, min_distance=fft_tolerance, threshold_abs = 0.6*fft_log.max())
             fft_peaks = fft_peaks[:, [1, 0]].astype(float)
             fft_plot = InteractivePlot(
-                np.log(fft_image),
+                fft_log,
                 fft_peaks,
                 dx=fft_dx,
                 units=f"1/{self.units}",
@@ -560,6 +551,23 @@ class CrystalAnalyzer:
             self.b_vector = real_b
             self.origin = real_origin
             return real_origin, real_a, real_b
+
+    ####### plot #######
+    def plot(self):
+        plt.imshow(self.image, cmap="gray")
+        color_iterator = get_unique_colors()
+        for atom_type in np.unique(self.atom_types):
+            mask = self.atom_types == atom_type
+            element = self.elements[atom_type]
+            plt.scatter(
+                self.coordinates[mask][:, 0],
+                self.coordinates[mask][:, 1],
+                label=element,
+                color=next(color_iterator),
+            )
+        # plt.gca().invert_yaxis()
+        plt.legend()
+        plt.show()
 
     def plot_unitcell(self, unitcell_transformed):
         plt.subplots()
@@ -728,5 +736,5 @@ class CrystalAnalyzer:
     @property
     def scaled_positions(self):
         if self._scaled_positions.size == 0:
-            self._scaled_positions = self.unit_cell.cell.scaled_positions(self.unit_cell.positions)
+            self._scaled_positions = self.unit_cell.cell.scaled_positions(self.unit_cell.positions) # type: ignore
         return self._scaled_positions

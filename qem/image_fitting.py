@@ -22,7 +22,6 @@ from skimage.feature.peak import peak_local_max
 from tqdm import tqdm
 from ase import Atoms
 
-from qem.color import get_unique_colors
 from qem.crystal_analyzer import CrystalAnalyzer
 from qem.gui_classes import InteractivePlot
 from qem.model import (
@@ -36,6 +35,9 @@ from qem.model import (
 )
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import voronoi_integrate
+from qem.color import color_iter
+from qem.gui_classes import GetAtomSelection,GetRegionSelection
+from matplotlib.path import Path
 
 logging.basicConfig(level=logging.INFO)
 
@@ -67,6 +69,11 @@ class ImageModelFitting:
         self.device = "cuda"
         self.image = image.astype(np.float32)
         self.model = np.zeros(image.shape)
+        self._region_map = np.zeros(image.shape).astype(int)
+        init_region_path = Path([(0,0), (0, self.image.shape[1]-1), (self.image.shape[0]-1, self.image.shape[1]-1),(self.image.shape[0]-1, 0)])
+        self.region_path_dict = {0: init_region_path}
+        self.region_crysal_analyzer = {}
+        self.region_atomic_column = {}
         self.local_shape = image.shape
 
         units_dict = {"A": 1, "nm": 10, "pm": 0.01, "um": 1e4}
@@ -157,6 +164,16 @@ class ImageModelFitting:
         self._atom_types = atom_types
 
     @property
+    def region_column_labels(self):
+        return self.region_map[self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)]
+
+    @property
+    def region_map(self):
+        for key in self.region_path_dict.keys():
+            self._region_map[self.region_path_dict[key].contains_points(np.array([self.X.ravel(), self.Y.ravel()]).T).reshape(self.X.shape)] = key
+        return self._region_map
+
+    @property
     def num_atom_types(self):
         return len(np.unique(self.atom_types))
 
@@ -178,6 +195,10 @@ class ImageModelFitting:
             font_properties={"size": 20},
         )
         return scalebar
+
+    @property
+    def num_regions(self):
+        return len(np.unique(self.region_map))
 
     ### voronoi integration
     def voronoi_integration(self, plot=False):
@@ -342,6 +363,7 @@ class ImageModelFitting:
         cif_file: str = None,  # type: ignore
         unit_cell: Atoms = None,  # type: ignore
         reciprocal: bool = False,
+        region_index: int = 0,
     ):
         """
         Find the peaks in the image based on the CIF file.
@@ -352,25 +374,58 @@ class ImageModelFitting:
             threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
             exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
         """
+        column_mask = self.region_column_labels == region_index
+        region_mask = self.region_map == region_index
+
         crystal_analyzer = CrystalAnalyzer(
             image=self.image,
             dx=self.dx,
-            peak_positions=self.coordinates,
-            atom_types=self.atom_types,
+            peak_positions=self.coordinates[column_mask],
+            atom_types=self.atom_types[column_mask],
             elements=elements,
             units=self.units,
+            region_mask=region_mask,
         )
         if unit_cell is not None:
             crystal_analyzer.unit_cell = unit_cell
         if cif_file is not None:
             crystal_analyzer.read_cif(cif_file)
         atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal)
-        self.coordinates = np.array([atomic_column_list.get_x().T, atomic_column_list.get_y().T])
-        self.atom_types = atomic_column_list.get_atom_types()
+        # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
+        coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
+        coordinates = np.vstack([coordinates, atomic_column_list.get_positions()])
+        self.coordinates = coordinates
+        atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
+        atom_types = np.append(atom_types, atomic_column_list.get_atom_types())
+        self.atom_types = atom_types
+        self.region_crysal_analyzer[region_index] = crystal_analyzer
+        self.region_atomic_column[region_index] = atomic_column_list
         return atomic_column_list
 
-    def select_region(self, invert_selection=False):
-        from qem.gui_classes import GetAtomSelection
+    def assign_region_label(self, region_index: int = 0, invert_selection:bool=False):
+
+        atom_select = GetRegionSelection(
+            image=self.image,
+            invert_selection=invert_selection,
+            region_map = self.region_map
+        )
+        try:
+            atom_select.poly.verts = self.region_path_dict[region_index].vertices
+            atom_select.path = self.region_path_dict[region_index]
+        except KeyError:
+            pass
+        while plt.fignum_exists(atom_select.fig.number):  # type: ignore
+            plt.pause(0.1)
+
+        region_mask = atom_select.get_region_mask()
+        self.region_map[region_mask] = region_index
+        try:
+            self.region_path_dict[region_index] = atom_select.path
+        except AttributeError:
+            pass
+        logging.info(f'Assigned label {region_index} with {region_mask.sum()} pixels to the region map.')
+
+    def select_atoms(self, invert_selection:bool=False):
 
         atom_select = GetAtomSelection(
             image=self.image,
@@ -380,7 +435,8 @@ class ImageModelFitting:
         while plt.fignum_exists(atom_select.fig.number):  # type: ignore
             plt.pause(0.1)
         peak_positions_selected = np.array(atom_select.atom_positions_selected)
-        selected = atom_select.mask
+        selection_mask = atom_select.selection_mask
+
         if peak_positions_selected.shape[0] == 0:
             logging.info("No atoms selected.")
             return None
@@ -389,7 +445,7 @@ class ImageModelFitting:
                 f"Selected {peak_positions_selected.shape[0]} atoms out of {self.num_coordinates} atoms."
             )
 
-            self.atom_types = self.atom_types[selected]
+            self.atom_types = self.atom_types[selection_mask]
             self.coordinates = peak_positions_selected
 
     def find_peaks(
@@ -398,7 +454,8 @@ class ImageModelFitting:
         threshold_rel: float = 0.2,
         threshold_abs=None,
         exclude_border: bool = False,
-        image=None,
+        plot: bool = True,
+        region_index: int = 0,
     ):
         """
         Find the peaks in the image.
@@ -412,18 +469,28 @@ class ImageModelFitting:
         Returns:
             np.array: The coordinates of the peaks.
         """
-        if image is None:
-            image = self.image
+        assert region_index in self.region_map, "The region index is not in the region map."
+        region_map = self.region_map == region_index
         peaks_locations = peak_local_max(
-            image,
+            self.image*region_map,
             min_distance=min_distance,
             threshold_rel=threshold_rel,
             threshold_abs=threshold_abs,
             exclude_border=exclude_border,
         )
-        self.coordinates = peaks_locations[:, [1, 0]].astype(float)
-        self.atom_types = np.zeros(self.num_coordinates, dtype=int)
-        self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
+        if self.coordinates.size > 0:
+            column_mask = self.region_column_labels == region_index
+            coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
+            coordinates = np.vstack([coordinates, peaks_locations[:, [1, 0]].astype(float)])
+            self. coordinates = coordinates
+            atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
+            atom_types = np.append(atom_types, np.zeros(peaks_locations.shape[0], dtype=int))
+            self.atom_types = atom_types
+        else:
+            self.coordinates = peaks_locations[:, [1, 0]].astype(float)
+            self.atom_types = np.zeros(peaks_locations.shape[0], dtype=int)
+        if plot:
+            self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
         return self.coordinates
 
     def refine_center_of_mass(self, windows_size: int = 5, plot=False):
@@ -763,6 +830,11 @@ class ImageModelFitting:
         pos_y = params["pos_y"]
         sigma = params["sigma"]
         height = params["height"]
+        if (height<0).any():
+            logging.warning("The height has negative values, the linear estimator is not valid, I will make it to zero but be careful with the results.")
+            height[height<0] = 0
+            
+
         if self.same_width:
             sigma = sigma[self.atom_types]
         rows = []
@@ -830,34 +902,36 @@ class ImageModelFitting:
         height_scale = solution[:-1]
         if np.NaN in height_scale:
             logging.warning(
-                "The height has NaN, the linear estimator is not valid, parameters are not updated"
+                "The height_scale has NaN, the linear estimator is not valid, parameters are not updated"
             )
             return params
         else:
             params["background"] = solution[-1] if solution[-1] > 0 else 0.0
-            # if (height_scale>2).any():
-            #     logging.warning(
-            #         "The height has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
-            #     )
-            #     height_scale[height_scale>2] =2
-            # if (height_scale < 0.5).any():
-            #     logging.warning(
-            #         "The height has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
-            #     )
-            #     mask = (height_scale < 0.5) & (height_scale > 0)
-            #     height_scale[mask] = 0.5
 
-            if (height_scale * params["height"] < 0).any():
+            if (height_scale > 2).any():
                 logging.warning(
-                    "The height has negative values, the linear estimator is not valid. I will make it positive but be careful with the results."
+                    "The height_scale has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
                 )
-                input_negative_mask = params["height"] < 0
-                scale_neagtive_mask = height_scale < 0
-                height_scale[scale_neagtive_mask] = 1
-                params["height"][input_negative_mask] = -params["height"][
-                    input_negative_mask
-                ]
+                height_scale[height_scale>2] =2
+            if (height_scale < 0.5).any():
+                logging.warning(
+                    "The height_scale has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
+                )
+                height_scale[height_scale<0.5] = 0.5
+            
+            # if (height_scale * params["height"] < 0).any():
+
+            #     input_negative_mask = params["height"] < 0
+            #     scale_neagtive_mask = height_scale < 0
+            #     height_scale[scale_neagtive_mask] = 1
+            #     params["height"][input_negative_mask] = -params["height"][
+            #         input_negative_mask
+            #     ]
             params["height"] = height_scale * params["height"]
+            mask_negative_height = params["height"] < 0
+            if mask_negative_height.any():
+                logging.warning(f"The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results.")
+            params["height"][mask_negative_height] = 0
         self.params = params
         return params
 
@@ -1041,7 +1115,7 @@ class ImageModelFitting:
                         raise XlaRuntimeError(
                             "GPU memory limit exceeded, using the fallback of local prediction."
                         )  # Explicitly raise an exception to use the fallback
-                except XlaRuntimeError as e:
+                except XlaRuntimeError:
                     self.gpu_memory_limit = True
                     global_prediction = self.predict_local(params)
                     local_prediction = self.predict_local(select_params, use_mask=True)
@@ -1407,8 +1481,6 @@ class ImageModelFitting:
     ##### plot functions
     def plot(self):
         plt.figure(figsize=(10, 5))
-        # x = np.arange(self.nx) * self.dx
-        # y = np.arange(self.ny) * self.dx
         plt.subplot(1, 2, 1)
         im = plt.imshow(self.image, cmap="gray")
         plt.axis("off")
@@ -1419,6 +1491,7 @@ class ImageModelFitting:
         plt.gca().add_artist(scalebar)
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Image")
+
         plt.subplot(1, 2, 2)
         plt.hist(self.image.ravel(), bins=256)
         plt.xlabel("Intensity")
@@ -1567,3 +1640,16 @@ class ImageModelFitting:
         plt.xlabel(r"Refined SCS ($\AA^2$)")
         plt.ylabel("Frequency")
         plt.title("Histogram of QEM refined SCS")
+
+    def plot_region(self):
+        plt.figure()
+        # cmap = color_iter('Set3', self.num_regions)
+        # cmap = plt.get_cmap("tab10", self.num_regions)
+        plt.imshow(self.image, cmap="gray")
+        plt.imshow(self.region_map,  alpha=0.5)
+        scalebar = self.scalebar
+        plt.gca().add_artist(scalebar)
+        plt.axis("off")
+        cbar = plt.colorbar()
+        cbar.set_ticks(np.arange(self.num_regions))
+        plt.title("Region Map")
