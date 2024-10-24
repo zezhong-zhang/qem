@@ -1,84 +1,99 @@
+from calendar import c
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict
+from ase import Atoms
+
 
 @dataclass
-class AtomicColumn:
-    element: str
-    atom_type: int
-    x: float
-    y: float
-    z: list[float]
-    x_ref: float
-    y_ref: float
-    z_info: Dict[str, float]
-    scs: float
-    strain: Dict[str, float]
+class AtomicColumns:
+    lattice: Atoms
+    lattice_ref: Atoms
+    elements: List[str] = field(default_factory=list)
+    tol: float = 0
 
-    @property
-    def displacement(self) -> np.ndarray:
-        """Return the displacement of the column."""
-        return np.array([self.x - self.x_ref, self.y - self.y_ref])
-@dataclass
-class AtomicColumnList:
-    columns: List[AtomicColumn] = field(default_factory=list)
+    def get_columns(self):
+        """project the 3d atomic lattice onto the 2d plane in z direction and return the unique atomic columns
 
-    def add(self, column: AtomicColumn):
-        """Add a new AtomicColumn to the list."""
-        self.columns.append(column)
+        Args:
+            tol (float): tolerance for the projection, within which the atoms are considered to be in the same column
 
-    def remove(self, index: int):
-        """Remove an AtomicColumn by its index in the list."""
-        if 0 <= index < len(self.columns):
-            del self.columns[index]
-        else:
-            raise IndexError("Index out of range.")
-    
-    def get(self, index: int) -> AtomicColumn:
-        """Get an AtomicColumn by its index."""
-        if 0 <= index < len(self.columns):
-            return self.columns[index]
-        else:
-            raise IndexError("Index out of range.")
-    
-    def total_columns(self) -> int:
-        """Return the total number of AtomicColumns."""
-        return len(self.columns)
-    
-    def get_positions(self) -> np.ndarray:
-        """Return an array of positions."""
-        return np.array([[column.x, column.y] for column in self.columns])
+        Returns:
+            coords_2d (np.ndarray): 2d coordinates of the atomic columns
+            atomic_numbers (np.ndarray): atomic numbers of the atoms in the atomic columns
+        """
+        # project the 3d atomic lattice onto the 2d plane in z direction
+        coords_2d, mask = np.unique(self.lattice.positions[:, :2], axis=0, return_index=True)
+        atomic_numbers = self.lattice.get_atomic_numbers()[mask]
+        return coords_2d, atomic_numbers
 
-    def get_x(self) -> np.ndarray:
-        """Return an array of x coordinates."""
-        return np.array([column.x for column in self.columns])
-    
-    def get_y(self) -> np.ndarray:
-        """Return an array of y coordinates."""
-        return np.array([column.y for column in self.columns])
-    
-    def get_x_ref(self) -> np.ndarray:
-        """Return an array of x_ref coordinates."""
-        return np.array([column.x_ref for column in self.columns])
-    
-    def get_y_ref(self) -> np.ndarray:
-        """Return an array of y_ref coordinates."""
-        return np.array([column.y_ref for column in self.columns])
-    
-    def get_atom_types(self) -> np.ndarray:
-        """Return an array of atom types."""
-        return np.array([column.atom_type for column in self.columns])
-    
-    def get_displacements(self) -> np.ndarray:
-        """Return an array of displacements."""
-        return np.array([column.displacement for column in self.columns])
-    
+    def get_columns_ref(self):
+        """project the 3d atomic lattice onto the 2d plane in z direction and return the unique atomic columns
+
+        Args:
+            tol (float): tolerance for the projection, within which the atoms are considered to be in the same column
+
+        Returns:
+            coords_2d (np.ndarray): 2d coordinates of the atomic columns
+            atomic_numbers (np.ndarray): atomic numbers of the atoms in the atomic columns
+        """
+        # project the 3d atomic lattice onto the 2d plane in z direction
+        _, mask = np.unique(self.lattice.positions[:, :2], axis=0, return_index=True)
+        coords_2d = self.lattice_ref.positions[:, :2][mask]
+        atomic_numbers = self.lattice_ref.get_atomic_numbers()[mask]
+        return coords_2d, atomic_numbers
+
     def get_local_displacements(self, cutoff:float) -> np.ndarray:
         """Return an array of local displacements."""
-        absolute_displacements = self.get_displacements()
         # mean displacement within the cutoff radius for each column
-        distances = np.array([self.get_x() - self.get_x()[:, np.newaxis], self.get_y() - self.get_y()[:, np.newaxis]])
-        mask = np.linalg.norm(distances, axis=0) < cutoff
-        local_displacements = absolute_displacements - np.array([np.mean(absolute_displacements[row], axis=0) for row in mask])
+        distances = self.positions[:,np.newaxis] - self.positions
+        neighbour_mask = np.linalg.norm(distances, axis=-1) < cutoff
+        local_displacements = self.displacements - np.array([np.mean(self.displacements[row], axis=0) for row in neighbour_mask])
         return local_displacements
 
+    @property
+    def displacements(self) -> np.ndarray:
+        """Return the displacement of the column."""
+        return self.positions - self.positions_ref
+    
+    @property
+    def positions(self) -> np.ndarray:
+        """Return an array of positions."""
+        coords_2d = np.unique(self.lattice.positions[:, :2], axis=0)
+        return coords_2d
+
+    @property
+    def positions_ref(self) -> np.ndarray:
+        coords_2d = np.unique(self.lattice_ref.positions[:, :2], axis=0)
+        return coords_2d
+
+    @property
+    def x(self) -> np.ndarray:
+        """Return an array of x coordinates."""
+        return self.positions[:, 0]
+    
+    @property
+    def y(self) -> np.ndarray:
+        """Return an array of y coordinates."""
+        return self.positions[:, 1]
+    
+    @property
+    def x_ref(self) -> np.ndarray:
+        """Return an array of x_ref coordinates."""
+        return self.positions_ref[:, 0]
+    
+    @property
+    def y_ref(self) -> np.ndarray:
+        """Return an array of y_ref coordinates."""
+        return self.positions_ref[:, 1]
+    
+    @property
+    def num_columns(self) -> int:
+        """Return the total number of AtomicColumns."""
+        return self.positions.size
+    
+    @property
+    def atomic_numbers(self) -> np.ndarray:
+        """Return an array of atom types."""
+        _, atomic_numbers = self.get_columns()
+        return atomic_numbers

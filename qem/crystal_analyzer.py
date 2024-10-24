@@ -4,12 +4,14 @@ import numpy as np
 from ase import Atom, Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
+from scipy import fft
 from skimage.feature import peak_local_max
 from typing import Optional
+import copy
 
 from qem.color import get_unique_colors
 from qem.gui_classes import InteractivePlot,GetAtomSelection
-from qem.atomic_column import AtomicColumn, AtomicColumnList
+from qem.atomic_column import AtomicColumns
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -34,7 +36,6 @@ class CrystalAnalyzer:
         self.atom_types = atom_types
         self.elements = elements
         self.unit_cell = Atoms
-        self._scaled_positions = np.array([])
         self.origin = np.array([0, 0])
         self.a_vector= np.array([1, 0])
         self.b_vector= np.array([0, 1])
@@ -42,7 +43,7 @@ class CrystalAnalyzer:
         self._origin_offsets = {"rigid": {}, "adaptive": {}}
         self.neighbor_site_dict = {}
         self.add_missing_elements = add_missing_elements
-        self.atomic_columns = AtomicColumnList()
+        self.atomic_columns = AtomicColumns
         if region_mask is None:
             region_mask = np.ones(image.shape, dtype=bool)
         self.region_mask = region_mask
@@ -159,30 +160,6 @@ class CrystalAnalyzer:
         f.close()
 
     ######### lattice mapping ################
-    def map_coordinates_to_image_space(self, frac_coords, vector_a, b, origin):
-        """
-        Apply a transformation matrix to the lattice vectors from the crystal unit cell coordinate to the image 2D pixel space.
-
-        Args:
-        - transformation_matrix (np.ndarray): The transformation matrix to apply.
-        """
-        # Construct the transformation matrix with a, b, c as its columns
-        # if a and b is 1D array with shape of (2,), convert to (3,) by adding 0
-        if vector_a.ndim == 1 and vector_a.size == 2:
-            vector_a = np.append(vector_a, 0)
-        if b.ndim == 1 and b.size == 2:
-            b = np.append(b, 0)
-        c = self.unit_cell.cell[2]  # type: ignore
-        transform_matrix = np.array([vector_a, b, c]).T
-        # Convert the old coordinates to a numpy array (if not already)
-        origin = np.array(origin)
-        if origin.size == 2:
-            origin = np.append(origin, 0)
-
-        # Multiply the transpose of T by the old coordinates to get the new coordinates
-        new_coords = np.dot(transform_matrix, frac_coords.T).T + origin
-        return new_coords
-    
     def get_atomic_columns(self, tol:float=0, a_limit:int=0, b_limit:int=0, reciprocal=True):
         self.select_lattice_vectors(reciprocal=reciprocal)
         # estimate the a_limit and b_limit if not provided
@@ -200,100 +177,12 @@ class CrystalAnalyzer:
             ).astype(int)
 
         # get the supercell lattice in 3d and project to 2d
-        lattice_3d, lattice_3d_ref, atom_types_3d = self.get_lattice_3d(
+        lattice_3d, lattice_3d_ref = self.get_lattice_3d(
                 a_limit=a_limit, b_limit=b_limit, adaptive=True
             )
-
-        coords_2d, first_indices, inverse_indices = np.unique(lattice_3d[:, [0, 1]],
-            axis=0, return_index=True, return_inverse=True
-        )
-        coords_2d_ref = lattice_3d_ref[first_indices]
-        atom_types_2d = atom_types_3d[first_indices].astype(int)
-        elements = [self.elements[i] for i in atom_types_2d]
-
-        atomic_column_list = AtomicColumnList()
-        
-        for i in range(len(coords_2d)):
-            indices = np.where(inverse_indices == i)[0]
-            z = lattice_3d[indices, 2]
-            atomic_column = AtomicColumn(
-                element=elements[i],
-                atom_type=atom_types_2d[i],
-                x=coords_2d[i, 0],
-                y=coords_2d[i, 1],
-                z=[],
-                x_ref=coords_2d_ref[i, 0],
-                y_ref=coords_2d_ref[i, 1],
-                z_info={element: z[i] for i, element in enumerate([self.elements[i] for i in atom_types_2d[indices]])},
-                scs=0,
-                strain={}
-            )
-            atomic_column_list.add(atomic_column)
-        self.peak_positions = coords_2d
-        self.atom_types = atom_types_2d
-        self.atomic_columns = atomic_column_list
         self.align_unit_cell_to_image(plot=True)
-        return atomic_column_list
-
-    def get_lattice_3d(self, a_limit:int=0, b_limit:int=0, adaptive=True):
-        """
-        Generate a supercell lattice based on the given lattice vectors and limits.
-
-        Parameters:
-        - a_limit: The number of times to repeat the a lattice vector.
-        - b_limit: The number of times to repeat the b lattice vector.
-
-        Returns:
-        - supercell_lattice: The supercell lattice.
-        """
-        supercell = np.array([]).reshape(0, 3)
-        supercell_ref = np.array([]).reshape(0, 3)
-        supercell_atom_types = np.array([])
-        shift_origin = self.get_origin_offset(a_limit, b_limit, adaptive)
-
-        for translation, new_origin in shift_origin.items():
-            unitcell, atom_types = self.align_unit_cell_to_image(
-                ref=(new_origin, self.a_vector, self.b_vector), plot=False
-            )
-            new_origin_ref = self._origin_offsets["rigid"][translation]
-            unitcell_ref, _ = self.align_unit_cell_to_image(
-                ref=(new_origin_ref, self.a_vector, self.b_vector), plot=False
-            )
-
-            supercell = np.vstack([supercell, unitcell])
-            supercell_ref = np.vstack([supercell_ref, unitcell_ref])
-            supercell_atom_types = np.hstack([supercell_atom_types, atom_types])
-
-        is_within_image_bounds = (supercell[:, :2] > 0).all(axis=1) & (
-            supercell[:, [1, 0]] < self.image.shape
-        ).all(axis=1)
-        supercell = supercell[is_within_image_bounds]
-        supercell_ref = supercell_ref[is_within_image_bounds]
-        supercell_atom_types = supercell_atom_types[is_within_image_bounds]
-
-        # use the current coordinates to filter the peak_positions
-        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
-        valid_region_mask = np.zeros(self.image.shape, dtype=bool)
-        for i in range(len(self.peak_positions)):
-            x, y = self.peak_positions[i]
-            sigma = 0.8 / self.dx
-            valid_region_mask[
-                int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
-                int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
-            ] = True
-
-        valid_region_mask = valid_region_mask & self.region_mask
-
-        peak_region_filter = np.ones(supercell.shape[0], dtype=bool)
-        for i in range(supercell.shape[0]):
-            x, y = supercell[i,:2]
-            if not valid_region_mask[int(y), int(x)]:
-                peak_region_filter[i] = False
-
-        self.coordinates = supercell[peak_region_filter]
-        self.coordinates_ref = supercell_ref[peak_region_filter]
-        atom_types_3d = supercell_atom_types[peak_region_filter].astype(int)
-        return self.coordinates, self.coordinates_ref, atom_types_3d
+        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, elements = self.elements, tol=tol)
+        return self.atomic_columns
 
     def align_unit_cell_to_image(self, ref=None, plot=True):
         """
@@ -315,36 +204,73 @@ class CrystalAnalyzer:
             a = self.a_vector
             b = self.b_vector
 
-        unitcell_transformed = self.map_coordinates_to_image_space(self.scaled_positions, a, b, origin)
-        atom_types = []
-        for site in self.unit_cell:  # type: ignore
-            element_symbol = site.symbol
-            if element_symbol in self.elements:
-                atom_type = self.elements.index(element_symbol)
-                atom_types.append(atom_type)
-        atom_types = np.array(atom_types).astype(int)
+        unit_cell = copy.deepcopy(self.unit_cell)
+        new_xy = np.array([a, b]).T
+        old_xy = np.array([unit_cell.cell[0][:2], unit_cell.cell[1][:2]]).T  
+        transformation_matrix = new_xy @ np.linalg.inv(old_xy) 
+        coords_xy = unit_cell.positions[:, :2]  # type: ignore
+        new_coords_xy = np.dot(transformation_matrix,coords_xy.T).T + origin
+        positions = np.hstack([new_coords_xy, unit_cell.positions[:, 2].reshape(-1, 1)])  # type: ignore
+        unit_cell.set_positions(positions)
         if plot:
-            self.plot_unitcell(unitcell_transformed)
-        return unitcell_transformed, atom_types
+            self.plot_unitcell(unit_cell)
+        return unit_cell
 
-    def align_atom_sites_to_image(self, sites, ref=None, plot=True):
-        if ref is not None:
-            origin, a, b = ref
-        else:
-            origin = self.origin
-            a = self.a_vector
-            b = self.b_vector
+    def get_lattice_3d(self, a_limit:int=0, b_limit:int=0, adaptive=True):
+        """
+        Generate a supercell lattice based on the given lattice vectors and limits.
 
-        frac_coords = np.array([site.scaled_position for site in sites])
-        elements = [site.symbol for site in sites]
-        atom_types = [self.elements.index(element) for element in elements]
-        atom_types = np.array(atom_types)
-        sites_transformed = self.map_coordinates_to_image_space(frac_coords, a, b, origin)
+        Parameters:
+        - a_limit: The number of times to repeat the a lattice vector.
+        - b_limit: The number of times to repeat the b lattice vector.
 
-        if plot:
-            self.plot_site(sites_transformed)
+        Returns:
+        - supercell_lattice: The supercell lattice.
+        """
+        supercell = Atoms()
+        supercell_ref = Atoms()
+        shift_origin = self.get_origin_offset(a_limit, b_limit, adaptive)
 
-        return sites_transformed, atom_types
+        for translation, new_origin in shift_origin.items():
+            unitcell = self.align_unit_cell_to_image(
+                ref=(new_origin, self.a_vector, self.b_vector), plot=False
+            )
+            new_origin_ref = self._origin_offsets["rigid"][translation]
+            unitcell_ref = self.align_unit_cell_to_image(
+                ref=(new_origin_ref, self.a_vector, self.b_vector), plot=False
+            )
+
+            supercell.extend(unitcell)
+            supercell_ref.extend(unitcell_ref)
+
+        is_within_image_bounds = (supercell.positions[:, :2] > 0).all(axis=1) & (
+            supercell.positions[:, [1, 0]] < self.image.shape
+        ).all(axis=1)
+        supercell = supercell[is_within_image_bounds]
+        supercell_ref = supercell_ref[is_within_image_bounds]
+
+        # use the current coordinates to filter the peak_positions
+        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
+        valid_region_mask = np.zeros(self.image.shape, dtype=bool)
+        for i in range(len(self.peak_positions)):
+            x, y = self.peak_positions[i]
+            sigma = 0.8 / self.dx
+            valid_region_mask[
+                int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
+                int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
+            ] = True
+
+        valid_region_mask = valid_region_mask & self.region_mask
+
+        peak_region_filter = np.ones(len(supercell), dtype=bool)
+        for i in range(len(supercell)):
+            x, y = supercell[i].position[:2]
+            if not valid_region_mask[int(y), int(x)]:
+                peak_region_filter[i] = False
+
+        self.coordinates = supercell[peak_region_filter]
+        self.coordinates_ref = supercell_ref[peak_region_filter]
+        return self.coordinates, self.coordinates_ref
 
     def get_closest_peak(self, candidate_peaks, target_peak, min_distance=1.5):
         """
@@ -425,7 +351,7 @@ class CrystalAnalyzer:
                         origin_offsets["adaptive"][(a_shift, b_shift)] = expect_origin_avg
 
                         # check if the unitcell is close to any exisiting peak positions
-                        unitcell, atom_types = self.align_unit_cell_to_image(
+                        unitcell = self.align_unit_cell_to_image(
                             ref=(
                                 origin_offsets["adaptive"][(a_shift, b_shift)],
                                 self.a_vector,
@@ -433,15 +359,15 @@ class CrystalAnalyzer:
                             ),
                             plot=False,
                         )
-                        mask = (unitcell[:, :2] > 0).all(axis=1) & (
-                            unitcell[:, [1, 0]] < self.image.shape
+                        mask = (unitcell.positions[:, :2] > 0).all(axis=1) & (
+                            unitcell.positions[:, [1, 0]] < self.image.shape
                         ).all(axis=1)
                         unitcell_in_image = unitcell[mask]
                         displacement_list = []
-                        if unitcell_in_image.size > 1:
+                        if len(unitcell_in_image) > 1:
                             for site in unitcell_in_image:
                                 distance = np.linalg.norm(
-                                    self.peak_positions - site[:2], axis=1
+                                    self.peak_positions - site.position[:2], axis=1
                                 )
                                 distance_ref = (
                                     np.array([d for d in self.min_distances.values()])
@@ -455,7 +381,7 @@ class CrystalAnalyzer:
                                         np.argmin(distance)
                                     ]
                                     # get the displacement of the site_position
-                                    displacement = peak_selected - site[:2]
+                                    displacement = peak_selected - site.position[:2]
                                     displacement_list.append(displacement)
                             # update the shift_orgin with the average displacement
                             if len(displacement_list) > 0:
@@ -521,9 +447,9 @@ class CrystalAnalyzer:
                     np.linalg.norm(real_a * self.dx), np.linalg.norm(real_b * self.dx)
                 )
                 / max(fft_dx, fft_dy)
-                / 2
+                / 4
             )
-            fft_peaks = peak_local_max(fft_log, min_distance=fft_tolerance, threshold_abs = 0.6*fft_log.max())
+            fft_peaks = peak_local_max(fft_log, min_distance=fft_tolerance, num_peaks=50)
             fft_peaks = fft_peaks[:, [1, 0]].astype(float)
             fft_plot = InteractivePlot(
                 fft_log,
@@ -536,11 +462,9 @@ class CrystalAnalyzer:
             # normalize the fft vectors
             fft_a = fft_a_pixel * fft_pixel_size
             fft_b = fft_b_pixel * fft_pixel_size
-            matrix_fft = np.vstack([fft_a, fft_b])
-            matrix_real = np.linalg.inv(matrix_fft)
             # get the matrix in real space
-            vec_a = matrix_real[:, 0]
-            vec_b = matrix_real[:, 1]
+            vec_a = 1/fft_a[::-1] 
+            vec_b = 1/fft_b[::-1]
             vec_a_pixel = vec_a / self.dx
             vec_b_pixel = vec_b / self.dx
             logging.info(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
@@ -592,8 +516,8 @@ class CrystalAnalyzer:
                 self.unit_cell, element
             )
             plt.scatter(
-                unitcell_transformed[:, 0][mask_unitcell_element],
-                unitcell_transformed[:, 1][mask_unitcell_element],
+                unitcell_transformed.positions[:, 0][mask_unitcell_element],
+                unitcell_transformed.positions[:, 1][mask_unitcell_element],
                 edgecolors="k",
                 c=current_color,
                 alpha=0.8,
@@ -637,69 +561,6 @@ class CrystalAnalyzer:
             fontsize=20,
         )
 
-    def plot_site(self, sites_transformed):
-        plt.subplots(figsize=(10, 10))
-        # plot the a and b vectors
-        plt.arrow(
-            self.origin[0],
-            self.origin[1],
-            self.a_vector[0],
-            self.a_vector[1],
-            color="k",
-            head_width=10,
-            head_length=10,
-        )
-        plt.arrow(
-            self.origin[0],
-            self.origin[1],
-            self.b_vector[0],
-            self.b_vector[1],
-            color="k",
-            head_width=10,
-            head_length=10,
-        )
-        # label the a and b vectors
-        plt.text(
-            self.origin[0] + self.a_vector[0],
-            self.origin[1] + self.a_vector[1],
-            "a",
-            fontsize=20,
-        )
-        plt.text(
-            self.origin[0] + self.b_vector[0],
-            self.origin[1] + self.b_vector[1],
-            "b",
-            fontsize=20,
-        )
-        color_iterator = get_unique_colors()
-        for atom_type in np.unique(self.atom_types):
-            mask_element = self.atom_types == atom_type
-            element = self.elements[atom_type]
-            current_color = np.array(next(color_iterator)).reshape(1, -1)
-            plt.scatter(
-                self.peak_positions[:, 0][mask_element],
-                self.peak_positions[:, 1][mask_element],
-                label=element,
-                c=current_color,
-            )
-        for element in self.get_unitcell_elements():
-            current_color = np.array(next(color_iterator)).reshape(1, -1)
-            mask_unitcell_element = self.is_element_in_unit_cell(
-                self.unit_cell, element
-            )
-            plt.scatter(
-                sites_transformed[:, 0][mask_unitcell_element],
-                sites_transformed[:, 1][mask_unitcell_element],
-                edgecolors="k",
-                c=current_color,
-                alpha=0.5,
-                label=element + " unitcell",
-            )
-        plt.tight_layout()
-        plt.legend()
-        plt.setp(plt.gca(), aspect="equal", adjustable="box")
-        plt.gca().invert_yaxis()
-
     ####### properties #######
     @property
     def nx(self):
@@ -735,9 +596,3 @@ class CrystalAnalyzer:
                 min_distances[element] = np.array(distances_list).min()
             self._min_distances = min_distances
             return min_distances
-
-    @property
-    def scaled_positions(self):
-        if self._scaled_positions.size == 0:
-            self._scaled_positions = self.unit_cell.cell.scaled_positions(self.unit_cell.positions) # type: ignore
-        return self._scaled_positions
