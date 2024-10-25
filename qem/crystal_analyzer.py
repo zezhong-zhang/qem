@@ -463,8 +463,8 @@ class CrystalAnalyzer:
             fft_a = fft_a_pixel * fft_pixel_size
             fft_b = fft_b_pixel * fft_pixel_size
             # get the matrix in real space
-            vec_a = 1/fft_a[::-1] 
-            vec_b = 1/fft_b[::-1]
+            vec_a = fft_a / np.linalg.norm(fft_a)**2
+            vec_b = fft_b / np.linalg.norm(fft_b)**2
             vec_a_pixel = vec_a / self.dx
             vec_b_pixel = vec_b / self.dx
             logging.info(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
