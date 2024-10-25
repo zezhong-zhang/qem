@@ -60,12 +60,12 @@ class AtomicColumns:
     @property
     def positions(self) -> np.ndarray:
         """Return an array of positions."""
-        coords_2d = np.unique(self.lattice.positions[:, :2], axis=0)
+        coords_2d, _ = self.get_columns()
         return coords_2d
 
     @property
     def positions_ref(self) -> np.ndarray:
-        coords_2d = np.unique(self.lattice_ref.positions[:, :2], axis=0)
+        coords_2d, _ = self.get_columns_ref()
         return coords_2d
 
     @property
