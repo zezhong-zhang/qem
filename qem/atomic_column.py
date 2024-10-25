@@ -107,4 +107,4 @@ class AtomicColumns:
     @property
     def atom_types(self) -> np.ndarray:
         """Return a numpy array of atom types."""
-        return [self.elements.index(element) for element in self.column_elements]
+        return np.array([self.elements.index(element) for element in self.column_elements]).astype(int)

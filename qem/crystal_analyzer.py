@@ -32,7 +32,6 @@ class CrystalAnalyzer:
         self.dx = dx
         self.units = units
         self.peak_positions = peak_positions
-        self.coordinates = np.array([])
         self.atom_types = atom_types
         self.elements = elements
         self.unit_cell = Atoms
@@ -50,12 +49,11 @@ class CrystalAnalyzer:
 
     ######### I/O ################
     def read_cif(self, cif_file_path):
-        structure = read(cif_file_path)
-        assert isinstance(structure, Atoms), "structure should be a ase Atoms object"
-        mask = [atom.symbol in self.elements for atom in structure]  # type: ignore
-        structure = structure[mask]
-        self.unit_cell = structure
-        return structure
+        atoms = read(cif_file_path)
+        assert isinstance(atoms, Atoms), "atoms should be a ase Atoms object"
+        mask = [atom.symbol in self.elements for atom in atoms]  # type: ignore
+        self.unit_cell = atoms[mask]
+        return atoms
 
     def get_unitcell_elements(self):
         """
@@ -89,76 +87,6 @@ class CrystalAnalyzer:
             mask.append(site.symbol == element_symbol)
         return mask
 
-    def write_lammps(self, filename="ABO3.lammps"):
-        coordinates = self.coordinates
-        coordinates[:, :2] = coordinates[:, :2] * self.dx
-        total_atoms = len(self.coordinates)
-        total_types = len(np.unique(self.atom_types))
-        atom_types = self.atom_types.astype(int)
-        xlo = np.min(coordinates[:, 0])
-        xhi = np.max(coordinates[:, 0])
-        ylo = np.min(coordinates[:, 1])
-        yhi = np.max(coordinates[:, 1])
-        zlo = np.min(coordinates[:, 2])
-        zhi = max(np.max(coordinates[:, 2]), self.unit_cell.cell[2, 2])  # type: ignore
-
-        with open(filename, "w") as f:
-            f.write("# LAMMPS data file written by QEM\n\n")
-            f.write(str(total_atoms) + " atoms\n")
-            f.write(str(total_types) + " atom types\n\n")
-
-            f.write(f"{xlo} {xhi} xlo xhi\n")
-            f.write(f"{ylo} {yhi} ylo yhi\n")
-            f.write(f"{zlo} {zhi} zlo zhi\n\n")
-            f.write("Masses\n\n")
-            for atom_type in range(total_types):
-                element = self.elements[atom_type]
-                weight = Atom(element).mass
-                f.write(f"{atom_type+1} {weight} # {element}\n")
-            f.write("\n")
-            f.write("Atoms  # atomic\n\n")
-            idx = 0
-            for atom_type in np.unique(atom_types):
-                mask = atom_types == atom_type
-                positions = coordinates[mask]
-                for position in positions:
-                    idx += 1
-                    f.write(
-                        str(idx)
-                        + " "
-                        + str(atom_type + 1)
-                        + " "
-                        + str(position[0])
-                        + " "
-                        + str(position[1])
-                        + " "
-                        + str(position[2])
-                        + "\n"
-                    )
-        f.close()
-
-    def write_xyz(self, filename="ABO3.xyz"):
-        coordinates = self.coordinates
-        coordinates[:, :2] = coordinates[:, :2] * self.dx
-        total_atoms = len(coordinates)
-        with open(filename, "w") as f:
-            f.write(str(total_atoms) + "\n")
-            f.write("comment line\n")
-            for position in coordinates:
-                atom_type = int(position[3])
-                element = self.elements[atom_type]
-                f.write(
-                    element
-                    + " "
-                    + str(position[0])
-                    + " "
-                    + str(position[1])
-                    + " "
-                    + str(position[2])
-                    + "\n"
-                )
-        f.close()
-
     ######### lattice mapping ################
     def get_atomic_columns(self, tol:float=0, a_limit:int=0, b_limit:int=0, reciprocal=True):
         self.select_lattice_vectors(reciprocal=reciprocal)
@@ -181,7 +109,11 @@ class CrystalAnalyzer:
                 a_limit=a_limit, b_limit=b_limit, adaptive=True
             )
         self.align_unit_cell_to_image(plot=True)
+        assert isinstance(lattice_3d, Atoms), "lattice_3d should be an Atoms object"
+        assert isinstance(lattice_3d_ref, Atoms), "lattice_3d_ref should be an Atoms object"
         self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, self.elements, tol)
+        self.atom_types = self.atomic_columns.atom_types
+        self.peak_positions = self.atomic_columns.positions
         return self.atomic_columns
 
     def align_unit_cell_to_image(self, ref=None, plot=True):
@@ -204,6 +136,7 @@ class CrystalAnalyzer:
             a = self.a_vector
             b = self.b_vector
 
+        assert isinstance(self.unit_cell, Atoms), "self.unit_cell should be a ase Atoms object"
         unit_cell = copy.deepcopy(self.unit_cell)
         new_xy = np.array([a, b]).T
         old_xy = np.array([unit_cell.cell[0][:2], unit_cell.cell[1][:2]]).T  
@@ -262,15 +195,15 @@ class CrystalAnalyzer:
 
         valid_region_mask = valid_region_mask & self.region_mask
 
-        peak_region_filter = np.ones(len(supercell), dtype=bool)
-        for i in range(len(supercell)):
+        peak_region_filter = np.ones(supercell.get_number_of_atoms(), dtype=bool)
+        for i in range(supercell.get_number_of_atoms()):
             x, y = supercell[i].position[:2]
             if not valid_region_mask[int(y), int(x)]:
                 peak_region_filter[i] = False
 
-        self.coordinates = supercell[peak_region_filter]
-        self.coordinates_ref = supercell_ref[peak_region_filter]
-        return self.coordinates, self.coordinates_ref
+        self.lattice = supercell[peak_region_filter]
+        self.lattice_ref = supercell_ref[peak_region_filter]
+        return self.lattice, self.lattice_ref
 
     def get_closest_peak(self, candidate_peaks, target_peak, min_distance=1.5):
         """
@@ -487,8 +420,8 @@ class CrystalAnalyzer:
             mask = self.atom_types == atom_type
             element = self.elements[atom_type]
             plt.scatter(
-                self.coordinates[mask][:, 0],
-                self.coordinates[mask][:, 1],
+                self.lattice.positions[mask, 0],
+                self.lattice.positions[mask, 1],
                 label=element,
                 color=next(color_iterator),
             )
