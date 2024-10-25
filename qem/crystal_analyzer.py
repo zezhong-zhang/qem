@@ -181,7 +181,7 @@ class CrystalAnalyzer:
                 a_limit=a_limit, b_limit=b_limit, adaptive=True
             )
         self.align_unit_cell_to_image(plot=True)
-        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, elements = self.elements, tol=tol)
+        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, self.elements, tol)
         return self.atomic_columns
 
     def align_unit_cell_to_image(self, ref=None, plot=True):

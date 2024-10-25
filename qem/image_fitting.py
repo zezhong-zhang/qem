@@ -396,7 +396,7 @@ class ImageModelFitting:
         coordinates = np.vstack([coordinates, atomic_column_list.positions])
         self.coordinates = coordinates
         atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
-        atom_types = np.append(atom_types, atomic_column_list.get_atom_types())
+        atom_types = np.append(atom_types, atomic_column_list.atom_types)
         self.atom_types = atom_types
         self.region_crysal_analyzer[region_index] = crystal_analyzer
         self.region_atomic_column[region_index] = atomic_column_list

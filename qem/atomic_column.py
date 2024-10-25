@@ -3,6 +3,7 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict
 from ase import Atoms
+from qem.periodic_table import chemical_symbols
 
 
 @dataclass
@@ -97,3 +98,13 @@ class AtomicColumns:
         """Return an array of atom types."""
         _, atomic_numbers = self.get_columns()
         return atomic_numbers
+    
+    @property
+    def column_elements(self) -> List[str]:
+        """Return a list of column elements."""
+        return [chemical_symbols[atomic_number] for atomic_number in self.atomic_numbers]
+    
+    @property
+    def atom_types(self) -> np.ndarray:
+        """Return a numpy array of atom types."""
+        return [self.elements.index(element) for element in self.column_elements]
