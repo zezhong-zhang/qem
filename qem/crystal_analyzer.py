@@ -107,15 +107,12 @@ class CrystalAnalyzer:
             ).astype(int)
 
         # get the supercell lattice in 3d and project to 2d
-        lattice_3d, lattice_3d_ref = self.get_lattice_3d(
-                a_limit=a_limit, b_limit=b_limit, adaptive=True
-            )
-        self.align_unit_cell_to_image(plot=True)
+        lattice_3d, lattice_3d_ref = self.get_lattice_3d(a_limit=a_limit, b_limit=b_limit)
         assert isinstance(lattice_3d, Atoms), "lattice_3d should be an Atoms object"
         assert isinstance(lattice_3d_ref, Atoms), "lattice_3d_ref should be an Atoms object"
-        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, self.elements, tol)
+        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, self.elements, tol, self.dx)
         self.atom_types = self.atomic_columns.atom_types
-        self.peak_positions = self.atomic_columns.positions
+        self.peak_positions = self.atomic_columns.positions_pixel
         return self.atomic_columns
 
     def align_unit_cell_to_image(self, ref=None, plot=True, mode='affine'):
@@ -174,6 +171,7 @@ class CrystalAnalyzer:
         if plot:
             self.plot_unitcell(mode=mode)
         return shifted_unit_cell
+    
     def region_of_interest(self, sigma):
         # use the current coordinates to filter the peak_positions
         # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
@@ -185,6 +183,8 @@ class CrystalAnalyzer:
                 int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
             ] = True
         return region_of_interest
+
+    def get_lattice_3d(self, a_limit:int=0, b_limit:int=0):
         """
         Generate a supercell lattice based on the given lattice vectors and limits.
 
@@ -197,45 +197,37 @@ class CrystalAnalyzer:
         """
         supercell = Atoms()
         supercell_ref = Atoms()
-        shift_origin = self.get_origin_offset(a_limit, b_limit, adaptive)
+        shift_origin_adaptive = self.get_origin_offset(a_limit, b_limit, 'adaptive')
+        # shift_origin_affine = self.get_origin_offset(a_limit, b_limit, 'affine')
+        shift_origin_perfect = self.get_origin_offset(a_limit, b_limit, 'perfect')
 
-        for translation, new_origin in shift_origin.items():
+        for translation, new_origin in shift_origin_adaptive.items():
             unitcell = self.align_unit_cell_to_image(
-                ref=(new_origin, self.a_vector, self.b_vector), plot=False
+                ref=(new_origin, self.a_vector_affine, self.b_vector_affine), plot=False
             )
-            new_origin_ref = self._origin_offsets["rigid"][translation]
+            new_origin_ref = shift_origin_perfect[translation]
             unitcell_ref = self.align_unit_cell_to_image(
-                ref=(new_origin_ref, self.a_vector, self.b_vector), plot=False
+                ref=(new_origin_ref, self.a_vector_perfect, self.b_vector_perfect), plot=False, mode='perfect'
             )
-
             supercell.extend(unitcell)
             supercell_ref.extend(unitcell_ref)
 
-        is_within_image_bounds = (supercell.positions[:, :2] > 0).all(axis=1) & (
-            supercell.positions[:, [1, 0]] < self.image.shape
+        is_within_image_bounds = (supercell.positions[:, :2] /self.dx > 0).all(axis=1) & (
+            supercell.positions[:, [1, 0]] /self.dx < self.image.shape
         ).all(axis=1)
         supercell = supercell[is_within_image_bounds]
         supercell_ref = supercell_ref[is_within_image_bounds]
 
-        # use the current coordinates to filter the peak_positions
-        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
-        valid_region_mask = np.zeros(self.image.shape, dtype=bool)
-        for i in range(len(self.peak_positions)):
-            x, y = self.peak_positions[i]
-            sigma = 0.8 / self.dx
-            valid_region_mask[
-                int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
-                int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
-            ] = True
+        valid_region_mask = self.region_of_interest(0.8/self.dx) & self.region_mask
 
-        valid_region_mask = valid_region_mask & self.region_mask
-
-        peak_region_filter = np.ones(supercell.get_number_of_atoms(), dtype=bool)
-        for i in range(supercell.get_number_of_atoms()):
-            x, y = supercell[i].position[:2]
+        peak_region_filter = np.ones(supercell.get_global_number_of_atoms(), dtype=bool)
+        for i in range(supercell.get_global_number_of_atoms()):
+            x, y = supercell.positions[i,:2] /self.dx
             if not valid_region_mask[int(y), int(x)]:
                 peak_region_filter[i] = False
 
+        # supercell = supercell[peak_region_filter]
+        # supercell_ref = supercell_ref[peak_region_filter]
         self.lattice = supercell[peak_region_filter]
         self.lattice_ref = supercell_ref[peak_region_filter]
         return self.lattice, self.lattice_ref
