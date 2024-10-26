@@ -5,13 +5,13 @@ from typing import List, Dict
 from ase import Atoms
 from qem.periodic_table import chemical_symbols
 
-
 @dataclass
 class AtomicColumns:
     lattice: Atoms
     lattice_ref: Atoms
     elements: List[str] = field(default_factory=list)
     tol: float = 0
+    pixel_size: float = 0.1
 
     def get_columns(self):
         """project the 3d atomic lattice onto the 2d plane in z direction and return the unique atomic columns
@@ -25,6 +25,7 @@ class AtomicColumns:
         """
         # project the 3d atomic lattice onto the 2d plane in z direction
         coords_2d, mask = np.unique(self.lattice.positions[:, :2], axis=0, return_index=True)
+        coords_2d = coords_2d/self.pixel_size
         atomic_numbers = self.lattice.get_atomic_numbers()[mask]
         return coords_2d, atomic_numbers
 
@@ -40,14 +41,14 @@ class AtomicColumns:
         """
         # project the 3d atomic lattice onto the 2d plane in z direction
         _, mask = np.unique(self.lattice.positions[:, :2], axis=0, return_index=True)
-        coords_2d = self.lattice_ref.positions[:, :2][mask]
+        coords_2d = self.lattice_ref.positions[:, :2][mask]/self.pixel_size
         atomic_numbers = self.lattice_ref.get_atomic_numbers()[mask]
         return coords_2d, atomic_numbers
 
     def get_local_displacements(self, cutoff:float) -> np.ndarray:
         """Return an array of local displacements."""
         # mean displacement within the cutoff radius for each column
-        distances = self.positions[:,np.newaxis] - self.positions
+        distances = self.positions_pixel[:,np.newaxis] - self.positions_pixel
         neighbour_mask = np.linalg.norm(distances, axis=-1) < cutoff
         local_displacements = self.displacements - np.array([np.mean(self.displacements[row], axis=0) for row in neighbour_mask])
         return local_displacements
@@ -55,43 +56,43 @@ class AtomicColumns:
     @property
     def displacements(self) -> np.ndarray:
         """Return the displacement of the column."""
-        return self.positions - self.positions_ref
+        return self.positions_pixel - self.positions_pixel_ref
     
     @property
-    def positions(self) -> np.ndarray:
+    def positions_pixel(self) -> np.ndarray:
         """Return an array of positions."""
         coords_2d, _ = self.get_columns()
         return coords_2d
 
     @property
-    def positions_ref(self) -> np.ndarray:
+    def positions_pixel_ref(self) -> np.ndarray:
         coords_2d, _ = self.get_columns_ref()
         return coords_2d
 
     @property
     def x(self) -> np.ndarray:
         """Return an array of x coordinates."""
-        return self.positions[:, 0]
+        return self.positions_pixel[:, 0]
     
     @property
     def y(self) -> np.ndarray:
         """Return an array of y coordinates."""
-        return self.positions[:, 1]
+        return self.positions_pixel[:, 1]
     
     @property
     def x_ref(self) -> np.ndarray:
         """Return an array of x_ref coordinates."""
-        return self.positions_ref[:, 0]
+        return self.positions_pixel_ref[:, 0]
     
     @property
     def y_ref(self) -> np.ndarray:
         """Return an array of y_ref coordinates."""
-        return self.positions_ref[:, 1]
+        return self.positions_pixel_ref[:, 1]
     
     @property
     def num_columns(self) -> int:
         """Return the total number of AtomicColumns."""
-        return self.positions.size
+        return self.positions_pixel.size
     
     @property
     def atomic_numbers(self) -> np.ndarray:
