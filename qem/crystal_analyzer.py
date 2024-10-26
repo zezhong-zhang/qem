@@ -36,10 +36,12 @@ class CrystalAnalyzer:
         self.elements = elements
         self.unit_cell = Atoms
         self.origin = np.array([0, 0])
-        self.a_vector= np.array([1, 0])
-        self.b_vector= np.array([0, 1])
+        self.a_vector_affine= np.array([1, 0])
+        self.b_vector_affine= np.array([0, 1])
+        self.a_vector_perfect = np.array([1, 0])
+        self.b_vector_perfect = np.array([0, 1])
         self._min_distances = None
-        self._origin_offsets = {"rigid": {}, "adaptive": {}}
+        self._origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
         self.neighbor_site_dict = {}
         self.add_missing_elements = add_missing_elements
         self.atomic_columns = AtomicColumns
@@ -116,15 +118,17 @@ class CrystalAnalyzer:
         self.peak_positions = self.atomic_columns.positions
         return self.atomic_columns
 
-    def align_unit_cell_to_image(self, ref=None, plot=True):
+    def align_unit_cell_to_image(self, ref=None, plot=True, mode='affine'):
         """
-        Transforms unit cell fractional coordinates to the image coordinate system,
+        Transforms unit cell coordinates to the image coordinate system,
         aligning them with detected atomic peak positions. Optionally visualizes the
         transformation, including the origin, lattice vectors, and positions of atoms
         within the unit cell.
 
         Parameters:
         - plot: A boolean indicating whether to plot the mapping and unit cell visualization.
+        - ref: A tuple containing the origin and lattice vectors of the reference unit cell.
+        - mode: A string indicating the transformation mode. Either 'affine' or 'perfect'. Affine means affine transformation is applied to the unit cell based on the lattice vectors selected on the image. In practice, 'affine' is more robust to match with atomic column on the image, because the unit cell and image can have different angle and its a and b lattice vectors may scale differently due to scanning distortion or simply a wrong pixel size. In contrast, 'perfect' means the transformation is based on the rotation of the angle between the lattice a-vector and the x-axis on the image and the pixel size from the image. You should use 'perfect' if you want the absolute mapping of the unit cell to the image if you have an 'ideal' microscope image with no distortion and correct pixel size.
 
         Returns:
         - unitcell_transformed: The transformed coordinates of the unit cell.
@@ -133,21 +137,43 @@ class CrystalAnalyzer:
             origin, a, b = ref
         else:
             origin = self.origin
-            a = self.a_vector
-            b = self.b_vector
+            a = self.a_vector_affine
+            b = self.b_vector_affine
 
         assert isinstance(self.unit_cell, Atoms), "self.unit_cell should be a ase Atoms object"
-        unit_cell = copy.deepcopy(self.unit_cell)
-        new_xy = np.array([a, b]).T
-        old_xy = np.array([unit_cell.cell[0][:2], unit_cell.cell[1][:2]]).T  
-        transformation_matrix = new_xy @ np.linalg.inv(old_xy) 
-        coords_xy = unit_cell.positions[:, :2]  # type: ignore
-        new_coords_xy = np.dot(transformation_matrix,coords_xy.T).T + origin
-        positions = np.hstack([new_coords_xy, unit_cell.positions[:, 2].reshape(-1, 1)])  # type: ignore
-        unit_cell.set_positions(positions)
+        assert mode in ['affine', 'perfect'], "mode should be either 'affine' or 'perfect'"
+
+        if self.unit_cell_transformed[mode] is None:
+            unit_cell = copy.deepcopy(self.unit_cell)
+            new_xy = np.array([a, b]).T
+            old_xy = np.array([unit_cell.cell[0][:2], unit_cell.cell[1][:2]]).T
+            coords_xy = unit_cell.positions[:, :2]  # type: ignore
+            if mode == 'perfect':
+                if self.rotation_matrix is None:
+                # get the angle between a and x-axis
+                    angle_a = np.arctan2(a[1], a[0]) - np.arctan2(unit_cell.cell[0][1], unit_cell.cell[0][0])
+                    angle_b = np.arctan2(b[1], b[0]) - np.arctan2(unit_cell.cell[1][1], unit_cell.cell[1][0])
+
+                    if abs(angle_a - angle_b) > np.pi / 2: # consider the case when b vector is flipped
+                        self.rotation_matrix = np.array([[np.cos(angle_a), np.sin(angle_a)], [np.sin(angle_a), -np.cos(angle_a)]])
+                    else: # normal case when a and b are in the same order as in the unit cell
+                        self.rotation_matrix = np.array([[np.cos(angle_a), -np.sin(angle_a)], [np.sin(angle_a), np.cos(angle_a)]])
+                new_coords_xy = (coords_xy @ self.rotation_matrix)/self.dx 
+                self.a_vector_perfect = unit_cell.cell[0][:2] @ self.rotation_matrix / self.dx
+                self.b_vector_perfect = unit_cell.cell[1][:2] @ self.rotation_matrix / self.dx
+                logging.info(f"Perfect a: {self.a_vector_perfect} pixel, Perfect b: {self.b_vector_perfect} pixel by rotation of unit cell and scaling with pixel size.")
+            else:  # affine transformation
+                if self.affine_matrix is None:
+                    self.affine_matrix = new_xy @ np.linalg.inv(old_xy)
+                new_coords_xy = (coords_xy @ self.affine_matrix) 
+            positions = np.hstack([new_coords_xy *self.dx, unit_cell.positions[:, 2].reshape(-1, 1)])  # type: ignore
+            unit_cell.set_positions(positions)
+            self.unit_cell_transformed[mode] = unit_cell
+        shifted_unit_cell = self.unit_cell_transformed[mode].copy()
+        shifted_unit_cell.positions[:, :2] += origin * self.dx
         if plot:
-            self.plot_unitcell(unit_cell)
-        return unit_cell
+            self.plot_unitcell(mode=mode)
+        return shifted_unit_cell
 
     def get_lattice_3d(self, a_limit:int=0, b_limit:int=0, adaptive=True):
         """
