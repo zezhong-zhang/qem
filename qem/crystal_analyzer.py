@@ -174,8 +174,17 @@ class CrystalAnalyzer:
         if plot:
             self.plot_unitcell(mode=mode)
         return shifted_unit_cell
-
-    def get_lattice_3d(self, a_limit:int=0, b_limit:int=0, adaptive=True):
+    def region_of_interest(self, sigma):
+        # use the current coordinates to filter the peak_positions
+        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
+        region_of_interest = np.zeros(self.image.shape, dtype=bool)
+        for i in range(len(self.peak_positions)):
+            x, y = self.peak_positions[i]
+            region_of_interest[
+                int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
+                int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
+            ] = True
+        return region_of_interest
         """
         Generate a supercell lattice based on the given lattice vectors and limits.
 
