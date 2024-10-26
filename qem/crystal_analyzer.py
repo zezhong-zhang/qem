@@ -276,11 +276,22 @@ class CrystalAnalyzer:
         ]
         order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
         neighborhood_radius = np.linalg.norm(self.a_vector_affine + self.b_vector_affine).astype(int)
+
+        # Calculate the convex hull of the points
+        hull = ConvexHull(self.peak_positions)
+        # Get the vertices of the convex hull to form the boundary polygon
+        hull_points = self.peak_positions[hull.vertices]
+        # Create a Shapely Polygon from the convex hull points
+        polygon = Polygon(hull_points)
+        # Expand the polygon outward by the threshold distance (neighborhood_radius pixels)
+        expanded_polygon = polygon.buffer(neighborhood_radius)
+
         # Find the closest peak to the origin to correct for drift
         origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
         origin_offsets["adaptive"][(0, 0)] = self.origin
         origin_offsets['affine'][(0, 0)] = self.origin
         origin_offsets['perfect'][(0, 0)] = self.origin
+        
         for a_shift, b_shift in order_mesh[1:]:
             shifted_origin_perfect = self.origin + self.a_vector_perfect* a_shift + self.b_vector_perfect* b_shift
             shifted_origin_affine = self.origin + self.a_vector_affine* a_shift + self.b_vector_affine* b_shift
@@ -303,14 +314,6 @@ class CrystalAnalyzer:
             # if not expanded_array[int(shifted_origin_affine[1]+neighborhood_radius), int(shifted_origin_affine[0]+neighborhood_radius)]:
             #     continue      
 
-            # Calculate the convex hull of the points
-            hull = ConvexHull(self.peak_positions)
-            # Get the vertices of the convex hull to form the boundary polygon
-            hull_points = self.peak_positions[hull.vertices]
-            # Create a Shapely Polygon from the convex hull points
-            polygon = Polygon(hull_points)
-            # Expand the polygon outward by the threshold distance (neighborhood_radius pixels)
-            expanded_polygon = polygon.buffer(neighborhood_radius)
 
             # Check if the shifted origin is within the expanded area
             is_within_expanded_area = expanded_polygon.contains(Point(shifted_origin_affine))
