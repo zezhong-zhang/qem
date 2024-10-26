@@ -462,13 +462,13 @@ class CrystalAnalyzer:
             vec_b_pixel = vec_b / self.dx
             logging.info(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
             logging.info(f"FFT real a: {vec_a} {self.units}, Real b: {vec_b} {self.units}")
-            self.a_vector= vec_a_pixel
-            self.b_vector= vec_b_pixel
+            self.a_vector_affine= vec_a_pixel
+            self.b_vector_affine= vec_b_pixel
             self.origin = real_origin
             return real_origin, vec_a_pixel, vec_b_pixel
         else:
-            self.a_vector= real_a
-            self.b_vector = real_b
+            self.a_vector_affine= real_a
+            self.b_vector_affine = real_b
             self.origin = real_origin
             return real_origin, real_a, real_b
 
@@ -480,8 +480,8 @@ class CrystalAnalyzer:
             mask = self.atom_types == atom_type
             element = self.elements[atom_type]
             plt.scatter(
-                self.lattice.positions[mask, 0],
-                self.lattice.positions[mask, 1],
+                self.lattice.positions[mask, 0]/self.dx,
+                self.lattice.positions[mask, 1]/self.dx,
                 label=element,
                 color=next(color_iterator),
             )
@@ -489,7 +489,17 @@ class CrystalAnalyzer:
         plt.legend()
         plt.show()
 
-    def plot_unitcell(self, unitcell_transformed):
+    def plot_unitcell(self, mode='affine'):
+        if mode == 'perfect':
+            unitcell_transformed = self.unit_cell_transformed['perfect'].copy()
+            origin, a, b = self.origin, self.a_vector_perfect, self.b_vector_perfect
+            unitcell_transformed.positions[:, :2] += origin * self.dx
+        else:
+            unitcell_transformed = self.unit_cell_transformed['affine'].copy()
+            origin, a, b = self.origin, self.a_vector_affine, self.b_vector_affine
+            unitcell_transformed.positions[:, :2] += origin * self.dx
+        
+
         plt.subplots()
         plt.imshow(self.image, cmap="gray")
         color_iterator = get_unique_colors()
@@ -509,8 +519,8 @@ class CrystalAnalyzer:
                 self.unit_cell, element
             )
             plt.scatter(
-                unitcell_transformed.positions[:, 0][mask_unitcell_element],
-                unitcell_transformed.positions[:, 1][mask_unitcell_element],
+                unitcell_transformed.positions[:, 0][mask_unitcell_element] / self.dx,
+                unitcell_transformed.positions[:, 1][mask_unitcell_element] / self.dx,
                 edgecolors="k",
                 c=current_color,
                 alpha=0.8,
@@ -523,33 +533,33 @@ class CrystalAnalyzer:
 
         # plot the a and b vectors
         plt.arrow(
-            self.origin[0],
-            self.origin[1],
-            self.a_vector[0],
-            self.a_vector[1],
+            origin[0],
+            origin[1],
+            a[0],
+            a[1],
             color="k",
             head_width=5,
             head_length=5,
         )
         plt.arrow(
-            self.origin[0],
-            self.origin[1],
-            self.b_vector[0],
-            self.b_vector[1],
+            origin[0],
+            origin[1],
+            b[0],
+            b[1],
             color="k",
             head_width=5,
             head_length=5,
         )
         # label the a and b vectors
         plt.text(
-            self.origin[0] + self.a_vector[0],
-            self.origin[1] + self.a_vector[1],
+            origin[0] + a[0],
+            origin[1] + a[1],
             "a",
             fontsize=20,
         )
         plt.text(
-            self.origin[0] + self.b_vector[0],
-            self.origin[1] + self.b_vector[1],
+            origin[0] + b[0],
+            origin[1] + b[1],
             "b",
             fontsize=20,
         )
