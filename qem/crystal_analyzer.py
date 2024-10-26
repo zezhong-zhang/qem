@@ -1,19 +1,23 @@
-import re
-import matplotlib.pyplot as plt
-import numpy as np
-from ase import Atom, Atoms
-from ase.io import read
-from ase.neighborlist import neighbor_list
-from scipy import fft
-from skimage.feature import peak_local_max
-from typing import Optional
 import copy
 
-from qem.color import get_unique_colors
-from qem.gui_classes import InteractivePlot,GetAtomSelection
-from qem.atomic_column import AtomicColumns
-
+# from shapely.affinity import scale
 import logging
+import re
+from typing import Optional
+
+import matplotlib.pyplot as plt
+import numpy as np
+from ase import Atoms
+from ase.io import read
+from ase.neighborlist import neighbor_list
+from scipy.spatial import ConvexHull
+from shapely.geometry import Point, Polygon
+from skimage.feature import peak_local_max
+
+from qem.atomic_column import AtomicColumns
+from qem.color import get_unique_colors
+from qem.gui_classes import GetAtomSelection, InteractivePlot
+
 logging.basicConfig(level=logging.INFO)
 
 class CrystalAnalyzer:
@@ -44,10 +48,13 @@ class CrystalAnalyzer:
         self._origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
         self.neighbor_site_dict = {}
         self.add_missing_elements = add_missing_elements
-        self.atomic_columns = AtomicColumns
+        self.atomic_columns = None
         if region_mask is None:
             region_mask = np.ones(image.shape, dtype=bool)
         self.region_mask = region_mask
+        self.rotation_matrix = None
+        self.affine_matrix = None
+        self.unit_cell_transformed = {'perfect': None, 'affine': None}
 
     ######### I/O ################
     def read_cif(self, cif_file_path):
