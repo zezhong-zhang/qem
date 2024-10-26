@@ -240,115 +240,149 @@ class CrystalAnalyzer:
             closest_peak = candidate_peaks[np.argmin(distance)]
             return closest_peak
 
-    def get_origin_offset(self, a_limit:int = 0, b_limit:int=0, adaptive=True):
-        mode = "adaptive" if adaptive else "rigid"
-        if self._origin_offsets[mode]:
-            return self._origin_offsets[mode]
-        else:
-            # generate a meshgrid
-            a_axis_mesh, b_axis_mesh = np.meshgrid(
-                np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
-            )
-            a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a_vector)
-            b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b_vector)
-            # compute the distance in such meshgrid
-            distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
-            # apply the sort to the a_axis_mesh and b_axis_mesh
-            a_axis_mesh_sorted = a_axis_mesh.flatten()[
-                np.argsort(distance_mesh, axis=None)
-            ]
-            b_axis_mesh_sorted = b_axis_mesh.flatten()[
-                np.argsort(distance_mesh, axis=None)
-            ]
-            order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
-            # Find the closest peak to the origin to correct for drift
-            origin_offsets = {"rigid": {}, "adaptive": {}}
-            for a_shift, b_shift in order_mesh[1:]:
-                shifted_origin_rigid = self.origin + self.a_vector* a_shift + self.b_vector* b_shift
-                # check if shifted_origin_rigid is within the image
-                boudary = np.linalg.norm(self.a_vector) + np.linalg.norm(self.b_vector)
-                boudaries = np.array([boudary, boudary])
-                if (shifted_origin_rigid[[1, 0]] < -boudaries).any() or (
-                    shifted_origin_rigid[[1, 0]] > self.image.shape + boudaries
-                ).any():
-                    continue
-                origin_offsets["rigid"][(a_shift, b_shift)] = shifted_origin_rigid
-                if not adaptive:
-                    continue
-                else:
-                    if (0, 0) not in origin_offsets["adaptive"].keys():
-                        origin_offsets["adaptive"][(0, 0)] = self.origin
-                        origin_offsets['rigid'][(0, 0)] = self.origin
-                    if a_shift == 0 and b_shift == 0:
-                        origin_offsets["adaptive"][
-                            (a_shift, b_shift)
-                        ] = shifted_origin_rigid
-                    else:
-                        # find the closet point of the a_shift and b_shift in the current shift_orgin
-                        distance = np.linalg.norm(
-                            np.array(list(origin_offsets["adaptive"].values()))
-                            - shifted_origin_rigid,
-                            axis=1,
-                        )
-                        neighbor_distance_idx = np.where(distance < boudary)[0]
-                        selected_keys = [
-                            list(origin_offsets["adaptive"].keys())[idx]
-                            for idx in neighbor_distance_idx
-                        ]
-                        expect_origin_list = []
-                        # find the difference of a_shift and b_shift with the selected_keys
-                        for selected_key in selected_keys:
-                            a_shift_diff = a_shift - selected_key[0]
-                            b_shift_diff = b_shift - selected_key[1]
-                            expect_origin = (
-                                origin_offsets["adaptive"][selected_key]
-                                + self.a_vector* a_shift_diff
-                                + self.b_vector* b_shift_diff
-                            )
-                            expect_origin_list.append(expect_origin)
-                        expect_origin_avg = np.array(expect_origin_list).mean(axis=0)
-                        origin_offsets["adaptive"][(a_shift, b_shift)] = expect_origin_avg
+    def get_origin_offset(self, a_limit:int = 0, b_limit:int=0, mode='adaptive'):
+        assert mode in ['perfect','affine', 'adaptive'], "mode should be either 'perfect', 'affine' or 'adaptive'"
+        if not self._origin_offsets[mode]:
+            self._calc_origin_offsets(a_limit, b_limit)        
+        return self._origin_offsets[mode]
+            
+        
+    def _calc_origin_offsets(self, a_limit:int, b_limit:int):
+        # get the perfect mapping of the unit cell to the image
+        self.align_unit_cell_to_image(plot=False,mode='perfect')
 
-                        # check if the unitcell is close to any exisiting peak positions
-                        unitcell = self.align_unit_cell_to_image(
-                            ref=(
-                                origin_offsets["adaptive"][(a_shift, b_shift)],
-                                self.a_vector,
-                                self.b_vector,
-                            ),
-                            plot=False,
-                        )
-                        mask = (unitcell.positions[:, :2] > 0).all(axis=1) & (
-                            unitcell.positions[:, [1, 0]] < self.image.shape
-                        ).all(axis=1)
-                        unitcell_in_image = unitcell[mask]
-                        displacement_list = []
-                        if len(unitcell_in_image) > 1:
-                            for site in unitcell_in_image:
-                                distance = np.linalg.norm(
-                                    self.peak_positions - site.position[:2], axis=1
-                                )
-                                distance_ref = (
-                                    np.array([d for d in self.min_distances.values()])
-                                    / self.dx
-                                )
-                                if (
-                                    len(distance) > 0
-                                    and distance.min() < distance_ref.min() / 2
-                                ):
-                                    peak_selected = self.peak_positions[
-                                        np.argmin(distance)
-                                    ]
-                                    # get the displacement of the site_position
-                                    displacement = peak_selected - site.position[:2]
-                                    displacement_list.append(displacement)
-                            # update the shift_orgin with the average displacement
-                            if len(displacement_list) > 0:
-                                origin_offsets["adaptive"][(a_shift, b_shift)][
-                                    :2
-                                ] += np.mean(displacement_list, axis=0)
-            self._origin_offsets = origin_offsets
-            return self._origin_offsets[mode]
+        # generate a meshgrid
+        a_axis_mesh, b_axis_mesh = np.meshgrid(
+            np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
+        )
+        a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a_vector_perfect)
+        b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b_vector_perfect)
+        # compute the distance in such meshgrid
+        distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
+        # apply the sort to the a_axis_mesh and b_axis_mesh
+        a_axis_mesh_sorted = a_axis_mesh.flatten()[
+            np.argsort(distance_mesh, axis=None)
+        ]
+        b_axis_mesh_sorted = b_axis_mesh.flatten()[
+            np.argsort(distance_mesh, axis=None)
+        ]
+        order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
+        neighborhood_radius = np.linalg.norm(self.a_vector_affine + self.b_vector_affine).astype(int)
+        # Find the closest peak to the origin to correct for drift
+        origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
+        origin_offsets["adaptive"][(0, 0)] = self.origin
+        origin_offsets['affine'][(0, 0)] = self.origin
+        origin_offsets['perfect'][(0, 0)] = self.origin
+        for a_shift, b_shift in order_mesh[1:]:
+            shifted_origin_perfect = self.origin + self.a_vector_perfect* a_shift + self.b_vector_perfect* b_shift
+            shifted_origin_affine = self.origin + self.a_vector_affine* a_shift + self.b_vector_affine* b_shift
+
+            # # check if shifted_origin_rigid is within the image
+            # boudaries = np.array([neighborhood_radius, neighborhood_radius])
+            # if (shifted_origin_affine < -boudaries ).any() or (
+            #     shifted_origin_affine > self.image.shape + boudaries
+            # ).any():
+            #     continue
+
+            # check if shifted_origin_rigid is within the region of interest
+            # if (shifted_origin_affine >= 0).all() and (
+            #     shifted_origin_affine < self.image.shape).all():
+            #     if not self.region_of_interest(sigma = 2/self.dx)[int(shifted_origin_affine[1]), int(shifted_origin_affine[0])]:
+            #         continue
+            # region_of_interest = self.region_of_interest(1/self.dx)
+            # padded_array = np.pad(region_of_interest, neighborhood_radius, mode='constant', constant_values=False)
+            # expanded_array = binary_dilation(padded_array, iterations=int(neighborhood_radius))
+            # if not expanded_array[int(shifted_origin_affine[1]+neighborhood_radius), int(shifted_origin_affine[0]+neighborhood_radius)]:
+            #     continue      
+
+            # Calculate the convex hull of the points
+            hull = ConvexHull(self.peak_positions)
+            # Get the vertices of the convex hull to form the boundary polygon
+            hull_points = self.peak_positions[hull.vertices]
+            # Create a Shapely Polygon from the convex hull points
+            polygon = Polygon(hull_points)
+            # Expand the polygon outward by the threshold distance (neighborhood_radius pixels)
+            expanded_polygon = polygon.buffer(neighborhood_radius)
+
+            # Check if the shifted origin is within the expanded area
+            is_within_expanded_area = expanded_polygon.contains(Point(shifted_origin_affine))
+            if not is_within_expanded_area:
+                continue
+            
+            # if the shifted origin is within the region of interest, add it to the dictionary
+            origin_offsets["perfect"][(a_shift, b_shift)] = shifted_origin_perfect
+            origin_offsets["affine"][(a_shift, b_shift)] = shifted_origin_affine
+            origin_offsets["adaptive"][(a_shift, b_shift)] = shifted_origin_affine
+                
+            # find the closet point of the a_shift and b_shift in the current shift_orgin
+            distance = np.linalg.norm(
+                np.array(list(origin_offsets["adaptive"].values()))
+                - shifted_origin_affine,
+                axis=1,
+            )
+            neighbor_distance_idx = np.where(distance < neighborhood_radius)[0]
+            selected_keys = [
+                list(origin_offsets["adaptive"].keys())[idx]
+                for idx in neighbor_distance_idx
+            ]
+            expect_origin_list = []
+            # find the difference of a_shift and b_shift with the selected_keys
+            for selected_key in selected_keys:
+                a_shift_diff = a_shift - selected_key[0]
+                b_shift_diff = b_shift - selected_key[1]
+                expect_origin = (
+                    origin_offsets["adaptive"][selected_key]
+                    + self.a_vector_affine* a_shift_diff
+                    + self.b_vector_affine* b_shift_diff
+                )
+                expect_origin_list.append(expect_origin)
+
+            expect_origin_avg = np.array(expect_origin_list).mean(axis=0)
+            origin_offsets["adaptive"][(a_shift, b_shift)] = expect_origin_avg
+
+            # check if the unitcell is close to any exisiting peak positions
+            unitcell = self.align_unit_cell_to_image(
+                ref=(
+                    origin_offsets["adaptive"][(a_shift, b_shift)],
+                    self.a_vector_affine,
+                    self.b_vector_affine,
+                ),
+                plot=False,
+                mode = 'affine'
+            )
+            mask = (unitcell.positions[:, :2] /self.dx > 0).all(axis=1) & (
+                unitcell.positions[:, [1, 0]] /self.dx < self.image.shape
+            ).all(axis=1)
+            unitcell_in_image = unitcell[mask]
+            displacement_list = []
+            if len(unitcell_in_image) > 1:
+                for site in unitcell_in_image:
+                    distance = np.linalg.norm(
+                        self.peak_positions - site.position[:2]/self.dx, axis=1
+                    )
+                    distance_ref = (
+                        np.array([d for d in self.min_distances.values()])
+                        / self.dx
+                    )
+                    if (
+                        len(distance) > 0
+                        and distance.min() < distance_ref.min() / 2
+                    ):
+                        peak_selected = self.peak_positions[
+                            np.argmin(distance)
+                        ]
+                        # get the displacement of the site_position
+                        displacement = peak_selected - site.position[:2]/self.dx
+                        displacement_list.append(displacement)
+                # update the shift_orgin with the average displacement
+                if len(displacement_list) > 0:
+                    origin_offsets["adaptive"][(a_shift, b_shift)][
+                        :2
+                    ] += np.mean(displacement_list, axis=0)
+                    if  np.linalg.norm(np.mean(displacement_list, axis=0)) > 1/self.dx:
+                        logging.warning(f"Large local displacmenet detected, adaptive is not aligned properly at {origin_offsets['adaptive'][(a_shift, b_shift)]} with translation of {(a_shift, b_shift)}")
+        self._origin_offsets = origin_offsets
+        return origin_offsets
 
     def get_neighbor_sites(self, site_idx, cutoff=3):
         if site_idx in self.neighbor_site_dict:
