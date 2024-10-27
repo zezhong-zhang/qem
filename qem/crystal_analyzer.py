@@ -119,7 +119,8 @@ class CrystalAnalyzer:
         lattice_3d, lattice_3d_ref = self.get_lattice_3d(a_limit=a_limit, b_limit=b_limit)
         assert isinstance(lattice_3d, Atoms), "lattice_3d should be an Atoms object"
         assert isinstance(lattice_3d_ref, Atoms), "lattice_3d_ref should be an Atoms object"
-        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, self.elements, tol, self.dx)
+        ref ={'origin': self.origin, 'vector_a': self.a_vector_perfect, 'vector_b': self.b_vector_perfect}
+        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, self.elements, tol, self.dx, ref)
         self.atom_types = self.atomic_columns.atom_types
         self.peak_positions = self.atomic_columns.positions_pixel
         return self.atomic_columns
@@ -227,7 +228,7 @@ class CrystalAnalyzer:
         supercell = supercell[is_within_image_bounds]
         supercell_ref = supercell_ref[is_within_image_bounds]
         supercell.set_cell(np.array([[self.nx*self.dx,0,0],[0,self.ny*self.dx,0], self.unit_cell.cell[2]]))
-        supercell_ref.set_cell(np.array([[supercell_ref.positions[:, 0].min()*0.9, supercell_ref.positions[:, 0].max()*1.1,0], [supercell_ref.positions[:, 1].min()*0.9, supercell_ref.positions[:, 1].max()*1.1,0], self.unit_cell.cell[2]]))
+        supercell_ref.set_cell(np.array([[self.nx*self.dx,0,0],[0,self.ny*self.dx,0], self.unit_cell.cell[2]]))
 
         valid_region_mask = self.region_of_interest(0.8/self.dx) & self.region_mask
 
@@ -399,7 +400,7 @@ class CrystalAnalyzer:
         self._origin_offsets = origin_offsets
         return origin_offsets
 
-    def get_neighbor_sites(self, site_idx, cutoff=3):
+    def get_neighbor_sites(self, site_idx, cutoff=5):
         if site_idx in self.neighbor_site_dict:
             return self.neighbor_site_dict[site_idx]
         else:
@@ -411,7 +412,7 @@ class CrystalAnalyzer:
         return neighbor_sites
 
     ####### strain mapping #######
-    def get_strain(self, cut_off=3.0):
+    def get_strain(self, cut_off:float=5.0):
         """
         Get the strain of the atomic columns based on the given cut-off radius.
 
@@ -421,7 +422,7 @@ class CrystalAnalyzer:
         Returns:
         - The strain of the atomic columns.
         """
-        return self.atomic_columns.get_strain(self.a_vector_perfect, self.b_vector_perfect,cut_off)
+        return self.atomic_columns.get_strain(float(cut_off))
         # return self.atomic_columns.get_strain(cut_off)
 
     ####### select region and lattice vectors #######
@@ -594,11 +595,11 @@ class CrystalAnalyzer:
             fontsize=20,
         )
 
-    def plot_displacement(self, mode='local',cut_off=3):
+    def plot_displacement(self, mode='local',cut_off=5.0, units='A'):
         if mode == 'local':
-            displacement = self.atomic_columns.get_local_displacements(cut_off)
+            displacement = self.atomic_columns.get_local_displacements(cut_off, units)
         else:
-            displacement = self.atomic_columns.displacements
+            displacement = self.atomic_columns.column_displacement(units)
         plt.imshow(self.image, cmap="gray")
         plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=np.linalg.norm(displacement, axis=1), cmap='coolwarm')
         plt.colorbar()
@@ -606,7 +607,7 @@ class CrystalAnalyzer:
         plt.gca().add_artist(self.scalebar)
         plt.axis('off')
 
-    def plot_strain(self, cut_off=3.0):
+    def plot_strain(self, cut_off:float=5.0):
         epsilon_xx, epsilon_yy, epsilon_xy, omega_xy = self.get_strain(cut_off)
         plt.subplots(2,2,constrained_layout=True)
         plt.subplot(2, 2, 1)
@@ -615,12 +616,19 @@ class CrystalAnalyzer:
         plt.axis('off')
         plt.gca().add_artist(self.scalebar)
         plt.colorbar()
+        # bounds = np.abs(epsilon_xx).max()
+        # get the 95 percentile of the strain
+        bounds = np.percentile(np.abs(epsilon_xx), 95)
+        plt.clim(-bounds, bounds)
         plt.title(r'$\epsilon_{xx}$')
         # plt.tight_layout()
         plt.subplot(2, 2, 2)
         plt.imshow(self.image, cmap="gray")
         plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_yy, cmap='coolwarm')
         plt.colorbar()
+        # bounds = np.abs(epsilon_yy).max()
+        bounds = np.percentile(np.abs(epsilon_yy), 95)
+        plt.clim(-bounds, bounds)
         plt.axis('off')
         plt.title(r'$\epsilon_{yy}$')
         # plt.tight_layout()
@@ -628,6 +636,9 @@ class CrystalAnalyzer:
         plt.imshow(self.image, cmap="gray")
         plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xy, cmap='coolwarm')
         plt.colorbar()
+        # bounds = np.abs(epsilon_xy).max()
+        bounds = np.percentile(np.abs(epsilon_xy), 95)
+        plt.clim(-bounds, bounds)
         plt.axis('off')
         plt.title(r'$\epsilon_{xy}$')
         # plt.tight_layout()
@@ -635,6 +646,9 @@ class CrystalAnalyzer:
         plt.imshow(self.image, cmap="gray")
         plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=omega_xy, cmap='coolwarm')
         plt.colorbar()
+        # bounds = np.abs(omega_xy).max()
+        bounds = np.percentile(np.abs(omega_xy), 95)
+        plt.clim(-bounds, bounds)
         plt.axis('off')
         plt.title(r'$\omega_{xy}$')
         # plt.tight_layout()

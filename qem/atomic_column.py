@@ -5,14 +5,31 @@ from typing import List, Dict, Tuple
 from ase import Atoms
 from qem.periodic_table import chemical_symbols
 from matscipy.atomic_strain import atomic_strain
+from matscipy.neighbours import neighbour_list
 
 @dataclass
 class AtomicColumns:
+    """
+    A class to represent atomic columns projected from a 3D atomic lattice onto a 2D plane.
+    
+    Attributes:
+        lattice (Atoms): The 3D atomic lattice.
+        lattice_ref (Atoms): The reference 3D atomic lattice.
+        elements (List[str]): List of element symbols.
+        tol (float): Tolerance for the projection.
+        pixel_size (float): Size of each pixel.
+        projection_params (Dict[str, np.ndarray]): Dictionary containing origin, vector_a, and vector_b for projection.
+    """
     lattice: Atoms
     lattice_ref: Atoms
     elements: List[str] = field(default_factory=list)
     tol: float = 0
     pixel_size: float = 0.1
+    reference: Dict[str, np.ndarray] = field(default_factory=lambda: {
+        'origin': np.array([0, 0]),
+        'vector_a': np.array([1, 0]),
+        'vector_b': np.array([0, 1])
+    })
 
     def get_columns(self):
         """project the 3d atomic lattice onto the 2d plane in z direction and return the unique atomic columns
@@ -46,18 +63,25 @@ class AtomicColumns:
         atomic_numbers = self.lattice_ref.get_atomic_numbers()[mask]
         return coords_2d, atomic_numbers
 
-    def get_local_displacements(self, cutoff:float) -> np.ndarray:
+    def get_local_displacements(self, cutoff:float, units='pixel') -> np.ndarray:
         """Return an array of local displacements."""
         # mean displacement within the cutoff radius for each column
-        distances = self.positions_pixel[:,np.newaxis] - self.positions_pixel
-        neighbour_mask = np.linalg.norm(distances, axis=-1) < cutoff/self.pixel_size
-        local_displacements = self.displacements - np.array([np.mean(self.displacements[row], axis=0) for row in neighbour_mask])
+        # distances = self.positions_pixel[:,np.newaxis] - self.positions_pixel
+        # neighbour_mask = np.linalg.norm(distances, axis=-1) < cutoff/self.pixel_size
+        # local_displacements = self.displacements - np.array([np.mean(self.displacements[row], axis=0) for row in neighbour_mask])
+        lattice_2d = self.lattice.copy()
+        unique_pos, mask = np.unique(lattice_2d.positions[:, :2], axis=0, return_index=True)
+        lattice_2d = lattice_2d[mask]
+        i,j = neighbour_list('ij', lattice_2d, cutoff)
+        local_displacements = self.column_displacement(units) - np.array([np.mean(self.column_displacement(units)[j[i==idx]], axis=0) for idx in range(len(lattice_2d))])
         return local_displacements
 
-    @property
-    def displacements(self) -> np.ndarray:
+    def column_displacement(self, units='pixel') -> np.ndarray:
         """Return the displacement of the column."""
-        return self.positions_pixel - self.positions_pixel_ref
+        if units == 'pixel':
+            return self.positions_pixel - self.positions_pixel_ref
+        else:
+            return (self.positions_pixel - self.positions_pixel_ref)*self.pixel_size
     
     @property
     def positions_pixel(self) -> np.ndarray:
@@ -111,21 +135,28 @@ class AtomicColumns:
         """Return a numpy array of atom types."""
         return np.array([self.elements.index(element) for element in self.column_elements]).astype(int)
 
-    def get_strain_matrix(self, vector_a, vector_b, cutoff:float=0) -> np.ndarray:
+    def get_strain_matrix(self,cutoff:float=0) -> np.ndarray:
         """Return the strain matrix."""
         if cutoff == 0:
-            displacement = self.displacements
+            displacement = self.column_displacement()
         else:
             displacement = self.get_local_displacements(cutoff)
+
+        origin = self.reference['origin']
+        vector_a = self.reference['vector_a']
+        vector_b = self.reference['vector_b']
+        
+        # sign_a = np.sign((self.positions_pixel - origin) @ vector_a)
+        # sign_b = np.sign((self.positions_pixel - origin) @ vector_b)
         # project th local displacements onto the lattice vectors
-        displacement_matrix = np.array([(np.dot(displacement, vector_a)/np.linalg.norm(vector_a)**2 * vector_a[:,None]), (np.dot(displacement, vector_b)/np.linalg.norm(vector_b)**2 * vector_b[:,None])])
-        lattice_matrix = np.array([vector_a, vector_b])
-        strain_matrix = np.linalg.inv(lattice_matrix) @ displacement_matrix
-        return strain_matrix
+        deformation_gradient_tensor = np.array([[np.dot(displacement, vector_a)/np.linalg.norm(vector_a)**2,np.dot(displacement, vector_a)/np.linalg.norm(vector_a)/np.linalg.norm(vector_b)], [np.dot(displacement, vector_b)/np.linalg.norm(vector_b)/np.linalg.norm(vector_a), np.dot(displacement, vector_b)/np.linalg.norm(vector_b)**2]])
+        # lattice_matrix = np.array([vector_a, vector_b])
+        # strain_matrix = np.linalg.inv(lattice_matrix) @ deformation_gradient_tensor
+        return deformation_gradient_tensor
     
-    def get_strain(self, vector_a, vector_b, cutoff: float = 0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def get_strain(self,cutoff:float=0) -> np.ndarray:
         """Return the strain tensor."""
-        strain_matrix = self.get_strain_matrix(vector_a, vector_b,cutoff=cutoff)
+        strain_matrix = self.get_strain_matrix(cutoff=cutoff)
         epsilon_xx = strain_matrix[0, 0]
         epsilon_yy = strain_matrix[1, 1]
         epsilon_xy = 0.5*(strain_matrix[0, 1] + strain_matrix[1, 0])
