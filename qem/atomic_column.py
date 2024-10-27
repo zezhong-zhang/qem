@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import List, Dict
 from ase import Atoms
 from qem.periodic_table import chemical_symbols
+from matscipy.atomic_strain import atomic_strain
 
 @dataclass
 class AtomicColumns:
@@ -49,7 +50,7 @@ class AtomicColumns:
         """Return an array of local displacements."""
         # mean displacement within the cutoff radius for each column
         distances = self.positions_pixel[:,np.newaxis] - self.positions_pixel
-        neighbour_mask = np.linalg.norm(distances, axis=-1) < cutoff
+        neighbour_mask = np.linalg.norm(distances, axis=-1) < cutoff/self.pixel_size
         local_displacements = self.displacements - np.array([np.mean(self.displacements[row], axis=0) for row in neighbour_mask])
         return local_displacements
 
@@ -109,3 +110,36 @@ class AtomicColumns:
     def atom_types(self) -> np.ndarray:
         """Return a numpy array of atom types."""
         return np.array([self.elements.index(element) for element in self.column_elements]).astype(int)
+
+    def get_strain_matrix(self, vector_a, vector_b, cutoff:float=0) -> np.ndarray:
+        """Return the strain matrix."""
+        if cutoff == 0:
+            displacement = self.displacements
+        else:
+            displacement = self.get_local_displacements(cutoff)
+        # project th local displacements onto the lattice vectors
+        displacement_matrix = np.array([(np.dot(displacement, vector_a)/np.linalg.norm(vector_a)**2 * vector_a[:,None]), (np.dot(displacement, vector_b)/np.linalg.norm(vector_b)**2 * vector_b[:,None])])
+        lattice_matrix = np.array([vector_a, vector_b])
+        strain_matrix = np.linalg.inv(lattice_matrix) @ displacement_matrix
+        return strain_matrix
+    
+    def get_strain(self, vector_a, vector_b,cutoff:float=0) -> np.ndarray:
+        """Return the strain tensor."""
+        strain_matrix = self.get_strain_matrix(vector_a, vector_b,cutoff=cutoff)
+        epsilon_xx = strain_matrix[0, 0]
+        epsilon_yy = strain_matrix[1, 1]
+        epsilon_xy = 0.5*(strain_matrix[0, 1] + strain_matrix[1, 0])
+        omega_xy = 0.5*(strain_matrix[0, 1] - strain_matrix[1, 0])
+        return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy
+
+    # def get_strain(self, cutoff:float=3.0) -> np.ndarray:
+    #     """Return the strain tensor."""
+    #     cutoff = float(cutoff)
+    #     atomic_strain_3d, residual = atomic_strain(self.lattice, self.lattice_ref, cutoff=cutoff)
+    #     atomic_strain_2d = atomic_strain_3d[:, :2, :2] # only the in-plane strain
+
+    #     epsilon_xx = atomic_strain_2d[:, 0, 0] - 1
+    #     epsilon_yy = atomic_strain_2d[:, 1, 1] - 1
+    #     epsilon_xy = 0.5*(atomic_strain_2d[:, 0, 1] + atomic_strain_2d[:, 1, 0])
+    #     omega_xy = 0.5*(atomic_strain_2d[:, 0, 1] - atomic_strain_2d[:, 1, 0])
+    #     return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy

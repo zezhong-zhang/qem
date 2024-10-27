@@ -13,6 +13,8 @@ from ase.neighborlist import neighbor_list
 from scipy.spatial import ConvexHull
 from shapely.geometry import Point, Polygon
 from skimage.feature import peak_local_max
+from matplotlib_scalebar.scalebar import ScaleBar
+
 
 from qem.atomic_column import AtomicColumns
 from qem.color import get_unique_colors
@@ -224,6 +226,8 @@ class CrystalAnalyzer:
         ).all(axis=1)
         supercell = supercell[is_within_image_bounds]
         supercell_ref = supercell_ref[is_within_image_bounds]
+        supercell.set_cell(np.array([[self.nx*self.dx,0,0],[0,self.ny*self.dx,0], self.unit_cell.cell[2]]))
+        supercell_ref.set_cell(np.array([[supercell_ref.positions[:, 0].min()*0.9, supercell_ref.positions[:, 0].max()*1.1,0], [supercell_ref.positions[:, 1].min()*0.9, supercell_ref.positions[:, 1].max()*1.1,0], self.unit_cell.cell[2]]))
 
         valid_region_mask = self.region_of_interest(0.8/self.dx) & self.region_mask
 
@@ -406,6 +410,20 @@ class CrystalAnalyzer:
             self.neighbor_site_dict[site_idx] = neighbor_sites
         return neighbor_sites
 
+    ####### strain mapping #######
+    def get_strain(self, cut_off=3.0):
+        """
+        Get the strain of the atomic columns based on the given cut-off radius.
+
+        Args:
+        - cut_off (int): The cut-off radius.
+
+        Returns:
+        - The strain of the atomic columns.
+        """
+        return self.atomic_columns.get_strain(self.a_vector_perfect, self.b_vector_perfect,cut_off)
+        # return self.atomic_columns.get_strain(cut_off)
+
     ####### select region and lattice vectors #######
 
     def select_region(self, peak_positions, atom_types):
@@ -540,6 +558,7 @@ class CrystalAnalyzer:
         plt.tight_layout()
         plt.legend()
         plt.setp(plt.gca(), aspect="equal", adjustable="box")
+        plt.gca().add_artist(self.scalebar)
         # plt.gca().invert_yaxis()
 
         # plot the a and b vectors
@@ -574,6 +593,52 @@ class CrystalAnalyzer:
             "b",
             fontsize=20,
         )
+
+    def plot_displacement(self, mode='local',cut_off=3):
+        if mode == 'local':
+            displacement = self.atomic_columns.get_local_displacements(cut_off)
+        else:
+            displacement = self.atomic_columns.displacements
+        plt.imshow(self.image, cmap="gray")
+        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=np.linalg.norm(displacement, axis=1), cmap='coolwarm')
+        plt.colorbar()
+        plt.quiver(self.atomic_columns.x, self.atomic_columns.y, displacement[:, 0], displacement[:, 1], scale=1, scale_units='xy')
+        plt.gca().add_artist(self.scalebar)
+        plt.axis('off')
+
+    def plot_strain(self, cut_off=3.0):
+        epsilon_xx, epsilon_yy, epsilon_xy, omega_xy = self.get_strain(cut_off)
+        plt.subplots(2,2,constrained_layout=True)
+        plt.subplot(2, 2, 1)
+        plt.imshow(self.image, cmap="gray")
+        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xx, cmap='coolwarm')
+        plt.axis('off')
+        plt.gca().add_artist(self.scalebar)
+        plt.colorbar()
+        plt.title(r'$\epsilon_{xx}$')
+        # plt.tight_layout()
+        plt.subplot(2, 2, 2)
+        plt.imshow(self.image, cmap="gray")
+        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_yy, cmap='coolwarm')
+        plt.colorbar()
+        plt.axis('off')
+        plt.title(r'$\epsilon_{yy}$')
+        # plt.tight_layout()
+        plt.subplot(2, 2, 3)
+        plt.imshow(self.image, cmap="gray")
+        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xy, cmap='coolwarm')
+        plt.colorbar()
+        plt.axis('off')
+        plt.title(r'$\epsilon_{xy}$')
+        # plt.tight_layout()
+        plt.subplot(2, 2, 4)
+        plt.imshow(self.image, cmap="gray")
+        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=omega_xy, cmap='coolwarm')
+        plt.colorbar()
+        plt.axis('off')
+        plt.title(r'$\omega_{xy}$')
+        # plt.tight_layout()
+        
 
     ####### properties #######
     @property
@@ -610,3 +675,14 @@ class CrystalAnalyzer:
                 min_distances[element] = np.array(distances_list).min()
             self._min_distances = min_distances
             return min_distances
+
+    @property
+    def scalebar(self):
+        scalebar = ScaleBar(
+            self.dx,
+            units=self.units,
+            location="lower right",
+            length_fraction=0.2,
+            font_properties={"size": 20},
+        )
+        return scalebar
