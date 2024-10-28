@@ -1,7 +1,7 @@
 from calendar import c
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from ase import Atoms
 from qem.periodic_table import chemical_symbols
 from matscipy.atomic_strain import atomic_strain
@@ -123,7 +123,7 @@ class AtomicColumns:
         strain_matrix = np.linalg.inv(lattice_matrix) @ displacement_matrix
         return strain_matrix
     
-    def get_strain(self, vector_a, vector_b,cutoff:float=0) -> np.ndarray:
+    def get_strain(self, vector_a, vector_b, cutoff: float = 0) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Return the strain tensor."""
         strain_matrix = self.get_strain_matrix(vector_a, vector_b,cutoff=cutoff)
         epsilon_xx = strain_matrix[0, 0]
