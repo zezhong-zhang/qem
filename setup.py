@@ -19,6 +19,9 @@ setup(
         "scikit-image>=0.14.2",
         "optax",
         "numba",
+        "shapely",
+        "matscipy",
+        "ase",
     ],
     python_requires=">=3.6",
     extras_require={
