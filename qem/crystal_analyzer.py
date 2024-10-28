@@ -30,7 +30,6 @@ class CrystalAnalyzer:
         peak_positions: np.ndarray,
         atom_types: np.ndarray,
         elements: list[str],
-        add_missing_elements: bool = True,
         units: str = "A",
         region_mask: Optional[np.ndarray] = None,
     ):
@@ -47,16 +46,20 @@ class CrystalAnalyzer:
         self.a_vector_perfect = np.array([1, 0])
         self.b_vector_perfect = np.array([0, 1])
         self._min_distances = None
-        self._origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
-        self.neighbor_site_dict = {}
-        self.add_missing_elements = add_missing_elements
         self.atomic_columns = None
         if region_mask is None:
             region_mask = np.ones(image.shape, dtype=bool)
         self.region_mask = region_mask
         self.rotation_matrix = None
         self.affine_matrix = None
+        # self.add_missing_elements = add_missing_elements
+        # self.neighbor_site_dict = {}
         self.unit_cell_transformed = {'perfect': None, 'affine': None}
+        self._origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
+        self.lattice = Atoms
+        self.lattice_ref = Atoms
+
+
 
     ######### I/O ################
     def read_cif(self, cif_file_path):
@@ -400,16 +403,16 @@ class CrystalAnalyzer:
         self._origin_offsets = origin_offsets
         return origin_offsets
 
-    def get_neighbor_sites(self, site_idx, cutoff=5):
-        if site_idx in self.neighbor_site_dict:
-            return self.neighbor_site_dict[site_idx]
-        else:
-            i, j, d = neighbor_list("ijd", self.unit_cell, cutoff)
-            neighbors_indices = j[i == site_idx]
-            neighbors_indices = np.unique(neighbors_indices)
-            neighbor_sites = [self.unit_cell[n_index] for n_index in neighbors_indices]  # type: ignore
-            self.neighbor_site_dict[site_idx] = neighbor_sites
-        return neighbor_sites
+    # def get_neighbor_sites(self, site_idx, cutoff=5):
+    #     if site_idx in self.neighbor_site_dict:
+    #         return self.neighbor_site_dict[site_idx]
+    #     else:
+    #         i, j, d = neighbor_list("ijd", self.unit_cell, cutoff)
+    #         neighbors_indices = j[i == site_idx]
+    #         neighbors_indices = np.unique(neighbors_indices)
+    #         neighbor_sites = [self.unit_cell[n_index] for n_index in neighbors_indices]  # type: ignore
+    #         self.neighbor_site_dict[site_idx] = neighbor_sites
+    #     return neighbor_sites
 
     ####### strain mapping #######
     def get_strain(self, cut_off:float=5.0):
@@ -597,12 +600,13 @@ class CrystalAnalyzer:
 
     def plot_displacement(self, mode='local',cut_off=5.0, units='A'):
         if mode == 'local':
-            displacement = self.atomic_columns.get_local_displacements(cut_off, units)
+            displacement = self.atomic_columns.get_local_displacement(cut_off, units)
         else:
-            displacement = self.atomic_columns.column_displacement(units)
+            displacement = self.atomic_columns.get_column_displacement(units)
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=np.linalg.norm(displacement, axis=1), cmap='coolwarm')
-        plt.colorbar()
+        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=np.linalg.norm(displacement, axis=1), cmap='plasma')
+        cbar = plt.colorbar()
+        cbar.set_label(f'Displacement ({units})')
         plt.quiver(self.atomic_columns.x, self.atomic_columns.y, displacement[:, 0], displacement[:, 1], scale=1, scale_units='xy')
         plt.gca().add_artist(self.scalebar)
         plt.axis('off')

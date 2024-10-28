@@ -1,4 +1,3 @@
-from calendar import c
 import numpy as np
 from dataclasses import dataclass, field
 from typing import List, Dict, Tuple
@@ -63,20 +62,20 @@ class AtomicColumns:
         atomic_numbers = self.lattice_ref.get_atomic_numbers()[mask]
         return coords_2d, atomic_numbers
 
-    def get_local_displacements(self, cutoff:float, units='pixel') -> np.ndarray:
+    def get_local_displacement(self, cutoff:float, units='pixel') -> np.ndarray:
         """Return an array of local displacements."""
         # mean displacement within the cutoff radius for each column
         # distances = self.positions_pixel[:,np.newaxis] - self.positions_pixel
         # neighbour_mask = np.linalg.norm(distances, axis=-1) < cutoff/self.pixel_size
         # local_displacements = self.displacements - np.array([np.mean(self.displacements[row], axis=0) for row in neighbour_mask])
         lattice_2d = self.lattice.copy()
-        unique_pos, mask = np.unique(lattice_2d.positions[:, :2], axis=0, return_index=True)
+        _, mask = np.unique(lattice_2d.positions[:, :2], axis=0, return_index=True)
         lattice_2d = lattice_2d[mask]
         i,j = neighbour_list('ij', lattice_2d, cutoff)
-        local_displacements = self.column_displacement(units) - np.array([np.mean(self.column_displacement(units)[j[i==idx]], axis=0) for idx in range(len(lattice_2d))])
+        local_displacements = self.get_column_displacement(units) - np.array([np.mean(self.get_column_displacement(units)[j[i==idx]], axis=0) for idx in range(len(lattice_2d))])
         return local_displacements
 
-    def column_displacement(self, units='pixel') -> np.ndarray:
+    def get_column_displacement(self, units='pixel') -> np.ndarray:
         """Return the displacement of the column."""
         if units == 'pixel':
             return self.positions_pixel - self.positions_pixel_ref
@@ -138,11 +137,11 @@ class AtomicColumns:
     def get_strain_matrix(self,cutoff:float=0) -> np.ndarray:
         """Return the strain matrix."""
         if cutoff == 0:
-            displacement = self.column_displacement()
+            displacement = self.get_column_displacement()
         else:
-            displacement = self.get_local_displacements(cutoff)
+            displacement = self.get_local_displacement(cutoff)
 
-        origin = self.reference['origin']
+        # origin = self.reference['origin']
         vector_a = self.reference['vector_a']
         vector_b = self.reference['vector_b']
         
@@ -154,23 +153,31 @@ class AtomicColumns:
         # strain_matrix = np.linalg.inv(lattice_matrix) @ deformation_gradient_tensor
         return deformation_gradient_tensor
     
-    def get_strain(self,cutoff:float=0) -> np.ndarray:
-        """Return the strain tensor."""
-        strain_matrix = self.get_strain_matrix(cutoff=cutoff)
-        epsilon_xx = strain_matrix[0, 0]
-        epsilon_yy = strain_matrix[1, 1]
-        epsilon_xy = 0.5*(strain_matrix[0, 1] + strain_matrix[1, 0])
-        omega_xy = 0.5*(strain_matrix[0, 1] - strain_matrix[1, 0])
-        return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy
-
-    # def get_strain(self, cutoff:float=3.0) -> np.ndarray:
+    # def get_strain(self,cutoff:float=0) -> np.ndarray:
     #     """Return the strain tensor."""
-    #     cutoff = float(cutoff)
-    #     atomic_strain_3d, residual = atomic_strain(self.lattice, self.lattice_ref, cutoff=cutoff)
-    #     atomic_strain_2d = atomic_strain_3d[:, :2, :2] # only the in-plane strain
-
-    #     epsilon_xx = atomic_strain_2d[:, 0, 0] - 1
-    #     epsilon_yy = atomic_strain_2d[:, 1, 1] - 1
-    #     epsilon_xy = 0.5*(atomic_strain_2d[:, 0, 1] + atomic_strain_2d[:, 1, 0])
-    #     omega_xy = 0.5*(atomic_strain_2d[:, 0, 1] - atomic_strain_2d[:, 1, 0])
+    #     strain_matrix = self.get_strain_matrix(cutoff=cutoff)
+    #     epsilon_xx = strain_matrix[0, 0]
+    #     epsilon_yy = strain_matrix[1, 1]
+    #     epsilon_xy = 0.5*(strain_matrix[0, 1] + strain_matrix[1, 0])
+    #     omega_xy = 0.5*(strain_matrix[0, 1] - strain_matrix[1, 0])
     #     return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy
+
+    def get_strain(self, cutoff:float=3.0) -> np.ndarray:
+        """Return the strain tensor."""
+        cutoff = float(cutoff)
+
+        lattice_2d = self.lattice.copy()
+        _, mask = np.unique(lattice_2d.positions[:, :2], axis=0, return_index=True)
+        lattice_2d = lattice_2d[mask]
+        lattice_2d_ref = self.lattice_ref[mask]
+        lattice_2d.positions[:, 2] = 0
+        lattice_2d_ref.positions[:, 2] = 0
+
+        atomic_strain_3d, residual = atomic_strain(lattice_2d,lattice_2d_ref, cutoff=cutoff)
+        atomic_strain_2d = atomic_strain_3d[:, :2, :2] # only the in-plane strain
+
+        epsilon_xx = atomic_strain_2d[:, 0, 0] - 1
+        epsilon_yy = atomic_strain_2d[:, 1, 1] - 1
+        epsilon_xy = 0.5*(atomic_strain_2d[:, 0, 1] + atomic_strain_2d[:, 1, 0])
+        omega_xy = 0.5*(atomic_strain_2d[:, 0, 1] - atomic_strain_2d[:, 1, 0])
+        return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy
