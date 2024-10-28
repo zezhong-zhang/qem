@@ -134,7 +134,7 @@ class AtomicColumns:
         """Return a numpy array of atom types."""
         return np.array([self.elements.index(element) for element in self.column_elements]).astype(int)
 
-    def get_strain_matrix(self,cutoff:float=0) -> np.ndarray:
+    def get_strain_xy(self,cutoff:float=0) -> np.ndarray:
         """Return the strain matrix."""
         if cutoff == 0:
             displacement = self.get_column_displacement()
@@ -148,19 +148,14 @@ class AtomicColumns:
         # sign_a = np.sign((self.positions_pixel - origin) @ vector_a)
         # sign_b = np.sign((self.positions_pixel - origin) @ vector_b)
         # project th local displacements onto the lattice vectors
-        deformation_gradient_tensor = np.array([[np.dot(displacement, vector_a)/np.linalg.norm(vector_a)**2,np.dot(displacement, vector_a)/np.linalg.norm(vector_a)/np.linalg.norm(vector_b)], [np.dot(displacement, vector_b)/np.linalg.norm(vector_b)/np.linalg.norm(vector_a), np.dot(displacement, vector_b)/np.linalg.norm(vector_b)**2]])
-        # lattice_matrix = np.array([vector_a, vector_b])
-        # strain_matrix = np.linalg.inv(lattice_matrix) @ deformation_gradient_tensor
-        return deformation_gradient_tensor
-    
-    # def get_strain(self,cutoff:float=0) -> np.ndarray:
-    #     """Return the strain tensor."""
-    #     strain_matrix = self.get_strain_matrix(cutoff=cutoff)
-    #     epsilon_xx = strain_matrix[0, 0]
-    #     epsilon_yy = strain_matrix[1, 1]
-    #     epsilon_xy = 0.5*(strain_matrix[0, 1] + strain_matrix[1, 0])
-    #     omega_xy = 0.5*(strain_matrix[0, 1] - strain_matrix[1, 0])
-    #     return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy
+        deformation_gradient_tensor = np.array([np.dot(displacement, vector_a)/np.linalg.norm(vector_a)**2*vector_a[:,None], np.dot(displacement, vector_b)/np.linalg.norm(vector_b)**2 * vector_b[:,None]])
+        lattice_matrix = np.array([vector_a, vector_b])
+        strain_matrix = np.linalg.inv(lattice_matrix) @ deformation_gradient_tensor
+        epsilon_xx = strain_matrix[0, 0]
+        epsilon_yy = strain_matrix[1, 1]
+        epsilon_xy = 0.5*(strain_matrix[0, 1] + strain_matrix[1, 0])
+        omega_xy = 0.5*(strain_matrix[0, 1] - strain_matrix[1, 0])
+        return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy
 
     def get_strain(self, cutoff:float=3.0) -> np.ndarray:
         """Return the strain tensor."""
