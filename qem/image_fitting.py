@@ -1480,10 +1480,14 @@ class ImageModelFitting:
         return params
 
     ##### plot functions
-    def plot(self):
+    def plot(self, vmin=None, vmax=None):
+        if vmin is None:
+            # get the bottom 5% of the image
+            vmin = np.percentile(self.image, 5)
+
         plt.figure(figsize=(10, 5))
         plt.subplot(1, 2, 1)
-        im = plt.imshow(self.image, cmap="gray")
+        im = plt.imshow(self.image, cmap="gray", vmin=vmin, vmax=vmax)
         plt.axis("off")
         scalebar = self.scalebar
         plt.gca().add_artist(scalebar)
