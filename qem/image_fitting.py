@@ -19,6 +19,7 @@ from scipy.optimize import lsq_linear
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 from skimage.feature.peak import peak_local_max
+from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 from ase import Atoms
 
@@ -88,6 +89,7 @@ class ImageModelFitting:
         self.atoms_selected = np.array([])
         self._coordinates = np.array([])
         self.fit_background = True
+        self.init_background = 0.0
         self.same_width = True
         self.model_type = "gaussian"
         self.params = dict()
@@ -213,7 +215,7 @@ class ImageModelFitting:
         if self.fit_background:
             s = Signal2D(self.image - self.params["background"])
         else:
-            s = Signal2D(self.image)
+            s = Signal2D(self.image - self.init_background)
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
         try:
@@ -293,7 +295,7 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, atom_size: float = 0.7, guess_radius: bool = False):
+    def init_params(self, atom_size: float = 0.7, guess_radius: bool = False, init_background: float = 0.0):
         if guess_radius:
             width = self.guess_radius()[0]
         else:
@@ -311,10 +313,10 @@ class ImageModelFitting:
         pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
         # background = np.percentile(self.image, 20)
         if self.fit_background:
-            background = self.image.min().astype(float)
+            init_background = self.image.min()
         else:
-            background = np.array([0]).astype(float)
-        height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - background
+            self.init_background = init_background
+        height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
         # get the lowest 20% of the intensity as the background
         if self.same_width:
             width = np.tile(width, self.num_atom_types).astype(float)
@@ -348,7 +350,7 @@ class ImageModelFitting:
                 "gamma": width / np.sqrt(2 * np.log(2)),  # width
             }
         if self.fit_background:
-            params["background"] = background
+            params["background"] = init_background
 
         self.params = params
         return params
@@ -448,6 +450,7 @@ class ImageModelFitting:
 
             self.atom_types = self.atom_types[selection_mask]
             self.coordinates = peak_positions_selected
+        return selection_mask
 
     def find_peaks(
         self,
@@ -472,8 +475,9 @@ class ImageModelFitting:
         """
         assert region_index in self.region_map, "The region index is not in the region map."
         region_map = self.region_map == region_index
+        image_filtered = gaussian_filter(self.image, 2)
         peaks_locations = peak_local_max(
-            self.image*region_map,
+            image_filtered*region_map,
             min_distance=min_distance,
             threshold_rel=threshold_rel,
             threshold_abs=threshold_abs,
@@ -540,8 +544,8 @@ class ImageModelFitting:
     ):
         windows_size = min_distance * 2
         peak_total = np.array([], dtype=int).reshape(0, 2)
-        for i in range(self.num_coordinates):
-            x, y = self.coordinates[i]
+        for coordinate_index in range(self.num_coordinates):
+            x, y = self.coordinates[coordinate_index]
             top = max(int(x) - windows_size, 0)
             bottom = min(int(x) + windows_size + 1, self.nx)
             left = max(int(y) - windows_size, 0)
@@ -725,11 +729,13 @@ class ImageModelFitting:
             )
         return prediction
 
-    def predict_local(self, params: dict, use_mask=False):
+    def predict_local(self, params: dict = None, use_mask=False):
+        if params is None:
+            params = self.params
         if self.fit_background:
             background = params["background"]
         else:
-            background = 0
+            background = self.init_background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         height = params["height"]
@@ -747,12 +753,10 @@ class ImageModelFitting:
             local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
         )
         gauss_local = np.array(gauss_local)
-        prediction = (
-            add_gaussian_at_positions(
+        prediction = add_gaussian_at_positions(
                 np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
-            )
-            + background
-        )
+            ) + background
+        
         if self.pbc:
             for i, j in [
                 (1, 0),
@@ -773,8 +777,13 @@ class ImageModelFitting:
                 )
         return prediction
 
-    def predict(self, params: dict, X: np.ndarray, Y: np.ndarray):
-        background = params.get("background", 0)
+    def predict(self, params: dict=None, X: np.ndarray = None, Y: np.ndarray = None):
+        if params is None:
+            params = self.params
+        if X is None or Y is None:
+            X = self.X
+            Y = self.Y
+        background = params.get("background", self.init_background)
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         height = params["height"]
@@ -825,11 +834,17 @@ class ImageModelFitting:
 
     ### fitting
 
-    def linear_estimator(self, params: dict, non_negative=False):
+    def linear_estimator(self, params: dict = None, non_negative=False):
+        if params is None:
+            if self.params is None:
+                self.init_params()
+            params = self.params
         # create the design matrix as array of gaussian peaks + background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         sigma = params["sigma"]
+        if self.model_type in {"voigt", "lorentzian"}:
+            gamma = params["gamma"]
         height = params["height"]
         if (height<0).any():
             logging.warning("The height has negative values, the linear estimator is not valid, I will make it to zero but be careful with the results.")
@@ -838,6 +853,8 @@ class ImageModelFitting:
 
         if self.same_width:
             sigma = sigma[self.atom_types]
+            if self.model_type in {"voigt", "lorentzian"}:
+                gamma = gamma[self.atom_types]
         rows = []
         cols = []
         data = []
@@ -849,10 +866,9 @@ class ImageModelFitting:
             local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
         )
 
-        for i in range(self.num_coordinates):
-            global_X, global_Y = local_X + pos_x[i].astype(int), local_Y + pos_y[
-                i
-            ].astype(int)
+        for atomic_column_index in range(self.num_coordinates):
+            global_X = local_X + pos_x[atomic_column_index].astype(int)
+            global_Y = local_Y + pos_y[atomic_column_index].astype(int)
             mask = (
                 (global_X >= 0)
                 & (global_X < self.nx)
@@ -861,16 +877,23 @@ class ImageModelFitting:
             )
             flat_index = global_Y[mask].flatten() * self.nx + global_X[mask].flatten()
             rows.extend(flat_index)
-            cols.extend(np.tile(i, flat_index.shape[0]))
-            data.extend(gauss_local[:, :, i][mask].ravel())
-        rows.extend(self.Y.flatten() * self.nx + self.X.flatten())
-        cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
-        data.extend(np.ones(self.nx * self.ny))
-        design_matrix = coo_matrix(
-            (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates + 1)
-        )
+            cols.extend(np.tile(atomic_column_index, flat_index.shape[0]))
+            data.extend(gauss_local[:, :, atomic_column_index][mask].ravel())
+        if self.fit_background:
+            rows.extend(self.Y.flatten() * self.nx + self.X.flatten())
+            cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
+            data.extend(np.ones(self.nx * self.ny))
+            design_matrix = coo_matrix(
+                (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates + 1)
+            )
+        else:
+            design_matrix = coo_matrix(
+                (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates)
+            )
         # create the target as the image
         b = self.image.ravel()
+        if not self.fit_background:
+            b = b - self.init_background
         # solve the linear equation
         try:
             # Attempt to solve the linear system
@@ -892,6 +915,7 @@ class ImageModelFitting:
                             "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
                         )
                         return params
+
         except np.linalg.LinAlgError as e:
             if "Singular matrix" in str(e):
                 logging.warning("Error: Singular matrix encountered.")
@@ -900,39 +924,33 @@ class ImageModelFitting:
 
         # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
         # update the background and height
-        height_scale = solution[:-1]
+        
+
+        if self.fit_background:
+            params["background"] = solution[-1] if solution[-1] > 0 else self.init_background
+            height_scale = solution[:-1]
+        else:
+            height_scale = solution
         if np.NaN in height_scale:
             logging.warning(
                 "The height_scale has NaN, the linear estimator is not valid, parameters are not updated"
             )
             return params
-        else:
-            params["background"] = solution[-1] if solution[-1] > 0 else 0.0
-
-            if (height_scale > 2).any():
-                logging.warning(
-                    "The height_scale has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
-                )
-                height_scale[height_scale>2] =2
-            if (height_scale < 0.5).any():
-                logging.warning(
-                    "The height_scale has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
-                )
-                height_scale[height_scale<0.5] = 0.5
-            
-            # if (height_scale * params["height"] < 0).any():
-
-            #     input_negative_mask = params["height"] < 0
-            #     scale_neagtive_mask = height_scale < 0
-            #     height_scale[scale_neagtive_mask] = 1
-            #     params["height"][input_negative_mask] = -params["height"][
-            #         input_negative_mask
-            #     ]
-            params["height"] = height_scale * params["height"]
-            mask_negative_height = params["height"] < 0
-            if mask_negative_height.any():
-                logging.warning(f"The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results.")
-            params["height"][mask_negative_height] = 0
+        if (height_scale > 2).any():
+            logging.warning(
+                "The height_scale has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
+            )
+            height_scale[height_scale>2] =2
+        if (height_scale < 0.5).any():
+            logging.warning(
+                "The height_scale has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
+            )
+            height_scale[height_scale<0.5] = 0.5
+        params["height"] = height_scale * params["height"]
+        mask_negative_height = params["height"] < 0
+        if mask_negative_height.any():
+            logging.warning(f"The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results.")
+        params["height"][mask_negative_height] = 0
         self.params = params
         return params
 
@@ -1607,7 +1625,7 @@ class ImageModelFitting:
             plt.title(r"QEM refined scs ($\AA^2$)")
             plt.tight_layout()
 
-    def plot_scs_voronoi(self, layout="horizontal"):
+    def plot_scs_voronoi(self, layout="horizontal", s=1):
         assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
         row, col = (1, 2) if layout == "horizontal" else (2, 1)
         plt.subplots(row, col)
@@ -1628,7 +1646,7 @@ class ImageModelFitting:
         plt.subplot(row, col, 2)
         pos_x = self.params["pos_x"] * self.dx
         pos_y = self.params["pos_y"] * self.dx
-        im = plt.scatter(pos_x, pos_y, c=self.voronoi_volume, s=2)
+        im = plt.scatter(pos_x, pos_y, c=self.voronoi_volume, s=s)
         # make aspect ratio equal
         plt.gca().invert_yaxis()
         plt.gca().set_aspect("equal", adjustable="box")
