@@ -257,6 +257,8 @@ class CrystalAnalyzer:
         if distance.min() < min_distance:
             closest_peak = candidate_peaks[np.argmin(distance)]
             return closest_peak
+        else:
+            return None
 
     def get_origin_offset(self, a_limit:int = 0, b_limit:int=0, mode='adaptive'):
         assert mode in ['perfect','affine', 'adaptive'], "mode should be either 'perfect', 'affine' or 'adaptive'"
@@ -306,25 +308,6 @@ class CrystalAnalyzer:
             shifted_origin_perfect = self.origin + self.a_vector_perfect* a_shift + self.b_vector_perfect* b_shift
             shifted_origin_affine = self.origin + self.a_vector_affine* a_shift + self.b_vector_affine* b_shift
 
-            # # check if shifted_origin_rigid is within the image
-            # boudaries = np.array([neighborhood_radius, neighborhood_radius])
-            # if (shifted_origin_affine < -boudaries ).any() or (
-            #     shifted_origin_affine > self.image.shape + boudaries
-            # ).any():
-            #     continue
-
-            # check if shifted_origin_rigid is within the region of interest
-            # if (shifted_origin_affine >= 0).all() and (
-            #     shifted_origin_affine < self.image.shape).all():
-            #     if not self.region_of_interest(sigma = 2/self.dx)[int(shifted_origin_affine[1]), int(shifted_origin_affine[0])]:
-            #         continue
-            # region_of_interest = self.region_of_interest(1/self.dx)
-            # padded_array = np.pad(region_of_interest, neighborhood_radius, mode='constant', constant_values=False)
-            # expanded_array = binary_dilation(padded_array, iterations=int(neighborhood_radius))
-            # if not expanded_array[int(shifted_origin_affine[1]+neighborhood_radius), int(shifted_origin_affine[0]+neighborhood_radius)]:
-            #     continue      
-
-
             # Check if the shifted origin is within the expanded area
             is_within_expanded_area = expanded_polygon.contains(Point(shifted_origin_affine))
             if not is_within_expanded_area:
@@ -333,7 +316,6 @@ class CrystalAnalyzer:
             # if the shifted origin is within the region of interest, add it to the dictionary
             origin_offsets["perfect"][(a_shift, b_shift)] = shifted_origin_perfect
             origin_offsets["affine"][(a_shift, b_shift)] = shifted_origin_affine
-            origin_offsets["adaptive"][(a_shift, b_shift)] = shifted_origin_affine
                 
             # find the closet point of the a_shift and b_shift in the current shift_orgin
             distance = np.linalg.norm(
@@ -341,7 +323,7 @@ class CrystalAnalyzer:
                 - shifted_origin_affine,
                 axis=1,
             )
-            neighbor_distance_idx = np.where(distance < neighborhood_radius)[0]
+            neighbor_distance_idx = np.where(distance < 2*neighborhood_radius)[0]
             selected_keys = [
                 list(origin_offsets["adaptive"].keys())[idx]
                 for idx in neighbor_distance_idx
@@ -359,49 +341,18 @@ class CrystalAnalyzer:
                 expect_origin_list.append(expect_origin)
 
             expect_origin_avg = np.array(expect_origin_list).mean(axis=0)
-            origin_offsets["adaptive"][(a_shift, b_shift)] = expect_origin_avg
 
-            # check if the unitcell is close to any exisiting peak positions
-            unitcell = self.align_unit_cell_to_image(
-                ref=(
-                    origin_offsets["adaptive"][(a_shift, b_shift)],
-                    self.a_vector_affine,
-                    self.b_vector_affine,
-                ),
-                plot=False,
-                mode = 'affine'
-            )
-            mask = (unitcell.positions[:, :2] /self.dx > 0).all(axis=1) & (
-                unitcell.positions[:, [1, 0]] /self.dx < self.image.shape
-            ).all(axis=1)
-            unitcell_in_image = unitcell[mask]
-            displacement_list = []
-            if len(unitcell_in_image) > 1:
-                for site in unitcell_in_image:
-                    distance = np.linalg.norm(
-                        self.peak_positions - site.position[:2]/self.dx, axis=1
-                    )
-                    distance_ref = (
-                        np.array([d for d in self.min_distances.values()])
-                        / self.dx
-                    )
-                    if (
-                        len(distance) > 0
-                        and distance.min() < distance_ref.min() / 2
-                    ):
-                        peak_selected = self.peak_positions[
-                            np.argmin(distance)
-                        ]
-                        # get the displacement of the site_position
-                        displacement = peak_selected - site.position[:2]/self.dx
-                        displacement_list.append(displacement)
-                # update the shift_orgin with the average displacement
-                if len(displacement_list) > 0:
-                    origin_offsets["adaptive"][(a_shift, b_shift)][
-                        :2
-                    ] += np.mean(displacement_list, axis=0)
-                    if  np.linalg.norm(np.mean(displacement_list, axis=0)) > 1/self.dx:
-                        logging.warning(f"Large local displacmenet detected, adaptive is not aligned properly at {origin_offsets['adaptive'][(a_shift, b_shift)]} with translation of {(a_shift, b_shift)}")
+            # check if the expect_origin_avg is close to any of the peak_positions within a threshold
+            distance_ref = min(
+                np.array([d for d in self.min_distances.values()])
+                / self.dx
+            )/2
+            
+            closest_peak = self.get_closest_peak(self.peak_positions, expect_origin_avg, distance_ref)
+            if closest_peak is not None:
+                origin_offsets["adaptive"][(a_shift, b_shift)] = closest_peak
+            else:
+                origin_offsets["adaptive"][(a_shift, b_shift)] = expect_origin_avg
         self._origin_offsets = origin_offsets
         return origin_offsets
 
