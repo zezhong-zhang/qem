@@ -22,3 +22,8 @@ examples/yolo/
 examples/__pycache__/
 examples/others/
 archieve/
+
+examples/fft_utils.py
+examples/Spectral_Unmixing.ipynb
+examples/1859 HAADF 33.7 nm.emd.hspy
+examples/ETO_KTO.ipynb
