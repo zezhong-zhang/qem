@@ -11,6 +11,7 @@ logging.basicConfig(level=logging.INFO)
 from matplotlib_scalebar.scalebar import ScaleBar
 import tkinter as tk
 from tkinter import simpledialog
+from qem.zoom import zoom_nd
 
 
 def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False):
@@ -209,6 +210,7 @@ class InteractivePlot:
         dx: float = 1,
         units: str = "A",
         dimension: str = "si-length",
+        zoom: float = 1,
     ):
         self.pos_x = peaks_locations[:, 0]
         self.pos_y = peaks_locations[:, 1]
@@ -229,6 +231,12 @@ class InteractivePlot:
         self.selection_stage = (
             0  # 0: Select origin, 1: Select vector a, 2: Select vector b
         )
+        self.zoom = zoom
+        if zoom != 1:
+            self.image = zoom_nd(image, upsample_factor=zoom)
+            self.pos_x = self.pos_x * zoom - self.image.shape[1] // 2 * (zoom - 1)
+            self.pos_y = self.pos_y * zoom - self.image.shape[0] // 2 * (zoom - 1)
+            self.dx /= zoom
 
     def onclick_add_or_remove(self, event):
         if event.dblclick:
