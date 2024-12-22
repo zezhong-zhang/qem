@@ -462,21 +462,27 @@ class CrystalAnalyzer:
         )
         real_origin, real_a, real_b = real_plot.select_vectors(tolerance=tolerance)  # type: ignore
         if reciprocal:
-            fft_image = np.abs(np.fft.fftshift(np.fft.fft2(self.image)))
+            image_filtered = gaussian_filter(self.image, 1)
+            fft_image = np.abs(np.fft.fftshift(np.fft.fft2(image_filtered)))
             fft_log = np.log(fft_image)
             fft_dx = 1 / (self.dx * self.image.shape[1])
             fft_dy = 1 / (self.dx * self.image.shape[0])
             fft_pixel_size = np.array([fft_dx, fft_dy])
-            fft_tolerance = int(
-                1
-                / min(
-                    np.linalg.norm(real_a * self.dx), np.linalg.norm(real_b * self.dx)
-                )
-                / max(fft_dx, fft_dy)
-                / 4
-            )
-            fft_peaks = peak_local_max(fft_log, min_distance=fft_tolerance, num_peaks=50)
+            fft_tolerance_x = int(1/ np.linalg.norm(real_a * self.dx)/ fft_dx/ 4)
+            fft_tolerance_y = int(1/ np.linalg.norm(real_b * self.dx)/ fft_dy/ 4)
+
+            scale_y = fft_tolerance_x / fft_tolerance_y
+            if scale_y <1:
+                fft_log_rescaled = rescale(fft_log, (1, 1/scale_y), anti_aliasing=False)
+                fft_peaks = peak_local_max(fft_log_rescaled, min_distance=fft_tolerance_y, num_peaks=30)
+                fft_peaks[:, 1] = fft_peaks[:, 1] * scale_y
+            else:
+                fft_log_rescaled = rescale(fft_log, (scale_y, 1), anti_aliasing=False)
+                fft_peaks = peak_local_max(fft_log_rescaled, min_distance=fft_tolerance_x, num_peaks=30)
+                fft_peaks[:, 0] = fft_peaks[:, 0] / scale_y
+
             fft_peaks = fft_peaks[:, [1, 0]].astype(float)
+            zoom =3
             fft_plot = InteractivePlot(
                 fft_log,
                 fft_peaks,
