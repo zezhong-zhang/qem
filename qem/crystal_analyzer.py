@@ -14,11 +14,13 @@ from scipy.spatial import ConvexHull
 from shapely.geometry import Point, Polygon
 from skimage.feature import peak_local_max
 from matplotlib_scalebar.scalebar import ScaleBar
+from skimage.transform import rescale
 
 
 from qem.atomic_column import AtomicColumns
 from qem.color import get_unique_colors
 from qem.gui_classes import GetAtomSelection, InteractivePlot
+from qem.image_fitting import gaussian_filter
 
 logging.basicConfig(level=logging.INFO)
 
@@ -489,11 +491,13 @@ class CrystalAnalyzer:
                 dx=fft_dx,
                 units=f"1/{self.units}",
                 dimension="si-length-reciprocal",
+                zoom=zoom,
             )
-            _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=fft_tolerance)  # type: ignore
+            _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=min(fft_tolerance_x,fft_tolerance_y)*zoom)  # type: ignore
             # normalize the fft vectors
-            fft_a = fft_a_pixel * fft_pixel_size
-            fft_b = fft_b_pixel * fft_pixel_size
+
+            fft_a = fft_a_pixel * fft_pixel_size / zoom
+            fft_b = fft_b_pixel * fft_pixel_size / zoom
             # get the matrix in real space
             vec_a = fft_a / np.linalg.norm(fft_a)**2
             vec_b = fft_b / np.linalg.norm(fft_b)**2
