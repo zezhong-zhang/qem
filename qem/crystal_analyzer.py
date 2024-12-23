@@ -24,6 +24,7 @@ from qem.image_fitting import gaussian_filter
 
 logging.basicConfig(level=logging.INFO)
 
+
 class CrystalAnalyzer:
     def __init__(
         self,
@@ -43,8 +44,8 @@ class CrystalAnalyzer:
         self.elements = elements
         self.unit_cell = Atoms
         self.origin = np.array([0, 0])
-        self.a_vector_affine= np.array([1, 0])
-        self.b_vector_affine= np.array([0, 1])
+        self.a_vector_affine = np.array([1, 0])
+        self.b_vector_affine = np.array([0, 1])
         self.a_vector_perfect = np.array([1, 0])
         self.b_vector_perfect = np.array([0, 1])
         self._min_distances = None
@@ -56,12 +57,10 @@ class CrystalAnalyzer:
         self.affine_matrix = None
         # self.add_missing_elements = add_missing_elements
         # self.neighbor_site_dict = {}
-        self.unit_cell_transformed = {'perfect': None, 'affine': None}
-        self._origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
+        self.unit_cell_transformed = {"perfect": None, "affine": None}
+        self._origin_offsets = {"perfect": {}, "affine": {}, "adaptive": {}}
         self.lattice = Atoms
         self.lattice_ref = Atoms
-
-
 
     ######### I/O ################
     def read_cif(self, cif_file_path):
@@ -78,13 +77,15 @@ class CrystalAnalyzer:
         Returns:
         - element_symbols: The symbols of the elements present in the unit cell.
         """
-        assert isinstance(self.unit_cell, Atoms), "unitcell should be a ase Atoms object"
+        assert isinstance(
+            self.unit_cell, Atoms
+        ), "unitcell should be a ase Atoms object"
         formula = self.unit_cell.symbols.__str__()
         assert isinstance(formula, str), "composition should be a string"
         # seperate the element symbols from the composition, split by numbers
         elements = re.findall(r"[A-Z][a-z]*", formula)
         return elements
-    
+
     @staticmethod
     def is_element_in_unit_cell(unitcell, element_symbol: str) -> list:
         """
@@ -104,7 +105,9 @@ class CrystalAnalyzer:
         return mask
 
     ######### lattice mapping ################
-    def get_atomic_columns(self, tol:float=0, a_limit:int=0, b_limit:int=0, reciprocal=True):
+    def get_atomic_columns(
+        self, tol: float = 0, a_limit: int = 0, b_limit: int = 0, reciprocal=True
+    ):
         self.select_lattice_vectors(reciprocal=reciprocal)
         # estimate the a_limit and b_limit if not provided
         if a_limit == 0:
@@ -121,16 +124,26 @@ class CrystalAnalyzer:
             ).astype(int)
 
         # get the supercell lattice in 3d and project to 2d
-        lattice_3d, lattice_3d_ref = self.get_lattice_3d(a_limit=a_limit, b_limit=b_limit)
+        lattice_3d, lattice_3d_ref = self.get_lattice_3d(
+            a_limit=a_limit, b_limit=b_limit
+        )
         assert isinstance(lattice_3d, Atoms), "lattice_3d should be an Atoms object"
-        assert isinstance(lattice_3d_ref, Atoms), "lattice_3d_ref should be an Atoms object"
-        ref ={'origin': self.origin, 'vector_a': self.a_vector_perfect, 'vector_b': self.b_vector_perfect}
-        self.atomic_columns = AtomicColumns(lattice_3d, lattice_3d_ref, self.elements, tol, self.dx, ref)
+        assert isinstance(
+            lattice_3d_ref, Atoms
+        ), "lattice_3d_ref should be an Atoms object"
+        ref = {
+            "origin": self.origin,
+            "vector_a": self.a_vector_perfect,
+            "vector_b": self.b_vector_perfect,
+        }
+        self.atomic_columns = AtomicColumns(
+            lattice_3d, lattice_3d_ref, self.elements, tol, self.dx, ref
+        )
         self.atom_types = self.atomic_columns.atom_types
         self.peak_positions = self.atomic_columns.positions_pixel
         return self.atomic_columns
 
-    def align_unit_cell_to_image(self, ref=None, plot=True, mode='affine'):
+    def align_unit_cell_to_image(self, ref=None, plot=True, mode="affine"):
         """
         Transforms unit cell coordinates to the image coordinate system,
         aligning them with detected atomic peak positions. Optionally visualizes the
@@ -152,33 +165,62 @@ class CrystalAnalyzer:
             a = self.a_vector_affine
             b = self.b_vector_affine
 
-        assert isinstance(self.unit_cell, Atoms), "self.unit_cell should be a ase Atoms object"
-        assert mode in ['affine', 'perfect'], "mode should be either 'affine' or 'perfect'"
+        assert isinstance(
+            self.unit_cell, Atoms
+        ), "self.unit_cell should be a ase Atoms object"
+        assert mode in [
+            "affine",
+            "perfect",
+        ], "mode should be either 'affine' or 'perfect'"
 
         if self.unit_cell_transformed[mode] is None:
             unit_cell = copy.deepcopy(self.unit_cell)
             new_xy = np.array([a, b]).T
             old_xy = np.array([unit_cell.cell[0][:2], unit_cell.cell[1][:2]]).T
             coords_xy = unit_cell.positions[:, :2]  # type: ignore
-            if mode == 'perfect':
+            if mode == "perfect":
                 if self.rotation_matrix is None:
-                # get the angle between a and x-axis
-                    angle_a = np.arctan2(a[1], a[0]) - np.arctan2(unit_cell.cell[0][1], unit_cell.cell[0][0])
-                    angle_b = np.arctan2(b[1], b[0]) - np.arctan2(unit_cell.cell[1][1], unit_cell.cell[1][0])
+                    # get the angle between a and x-axis
+                    angle_a = np.arctan2(a[1], a[0]) - np.arctan2(
+                        unit_cell.cell[0][1], unit_cell.cell[0][0]
+                    )
+                    angle_b = np.arctan2(b[1], b[0]) - np.arctan2(
+                        unit_cell.cell[1][1], unit_cell.cell[1][0]
+                    )
 
-                    if abs(angle_a - angle_b) > np.pi / 2: # consider the case when b vector is flipped
-                        self.rotation_matrix = np.array([[np.cos(angle_a), np.sin(angle_a)], [np.sin(angle_a), -np.cos(angle_a)]])
-                    else: # normal case when a and b are in the same order as in the unit cell
-                        self.rotation_matrix = np.array([[np.cos(angle_a), -np.sin(angle_a)], [np.sin(angle_a), np.cos(angle_a)]])
-                new_coords_xy = (coords_xy @ self.rotation_matrix)/self.dx 
-                self.a_vector_perfect = unit_cell.cell[0][:2] @ self.rotation_matrix / self.dx
-                self.b_vector_perfect = unit_cell.cell[1][:2] @ self.rotation_matrix / self.dx
-                logging.info(f"Perfect a: {self.a_vector_perfect} pixel, Perfect b: {self.b_vector_perfect} pixel by rotation of unit cell and scaling with pixel size.")
+                    if (
+                        abs(angle_a - angle_b) > np.pi / 2
+                    ):  # consider the case when b vector is flipped
+                        self.rotation_matrix = np.array(
+                            [
+                                [np.cos(angle_a), np.sin(angle_a)],
+                                [np.sin(angle_a), -np.cos(angle_a)],
+                            ]
+                        )
+                    else:  # normal case when a and b are in the same order as in the unit cell
+                        self.rotation_matrix = np.array(
+                            [
+                                [np.cos(angle_a), -np.sin(angle_a)],
+                                [np.sin(angle_a), np.cos(angle_a)],
+                            ]
+                        )
+                new_coords_xy = (coords_xy @ self.rotation_matrix) / self.dx
+                self.a_vector_perfect = (
+                    unit_cell.cell[0][:2] @ self.rotation_matrix / self.dx
+                )
+                self.b_vector_perfect = (
+                    unit_cell.cell[1][:2] @ self.rotation_matrix / self.dx
+                )
+                logging.info(
+                    f"Perfect a: {self.a_vector_perfect} pixel, Perfect b: {self.b_vector_perfect} pixel by rotation of unit cell and scaling with pixel size."
+                )
             else:  # affine transformation
                 if self.affine_matrix is None:
                     self.affine_matrix = new_xy @ np.linalg.inv(old_xy)
-                new_coords_xy = (coords_xy @ self.affine_matrix) 
-            positions = np.hstack([new_coords_xy *self.dx, unit_cell.positions[:, 2].reshape(-1, 1)])  # type: ignore
+                new_coords_xy = coords_xy @ self.affine_matrix
+            positions = np.hstack(
+                [new_coords_xy * self.dx, unit_cell.positions[:, 2].reshape(-1, 1)]
+            )  # type: ignore
             unit_cell.set_positions(positions)
             self.unit_cell_transformed[mode] = unit_cell
         shifted_unit_cell = self.unit_cell_transformed[mode].copy()
@@ -186,7 +228,7 @@ class CrystalAnalyzer:
         if plot:
             self.plot_unitcell(mode=mode)
         return shifted_unit_cell
-    
+
     def region_of_interest(self, sigma):
         # use the current coordinates to filter the peak_positions
         # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
@@ -199,7 +241,7 @@ class CrystalAnalyzer:
             ] = True
         return region_of_interest
 
-    def get_lattice_3d(self, a_limit:int=0, b_limit:int=0):
+    def get_lattice_3d(self, a_limit: int = 0, b_limit: int = 0):
         """
         Generate a supercell lattice based on the given lattice vectors and limits.
 
@@ -212,9 +254,9 @@ class CrystalAnalyzer:
         """
         supercell = Atoms()
         supercell_ref = Atoms()
-        shift_origin_adaptive = self.get_origin_offset(a_limit, b_limit, 'adaptive')
+        shift_origin_adaptive = self.get_origin_offset(a_limit, b_limit, "adaptive")
         # shift_origin_affine = self.get_origin_offset(a_limit, b_limit, 'affine')
-        shift_origin_perfect = self.get_origin_offset(a_limit, b_limit, 'perfect')
+        shift_origin_perfect = self.get_origin_offset(a_limit, b_limit, "perfect")
 
         for translation, new_origin in shift_origin_adaptive.items():
             unitcell = self.align_unit_cell_to_image(
@@ -222,24 +264,42 @@ class CrystalAnalyzer:
             )
             new_origin_ref = shift_origin_perfect[translation]
             unitcell_ref = self.align_unit_cell_to_image(
-                ref=(new_origin_ref, self.a_vector_perfect, self.b_vector_perfect), plot=False, mode='perfect'
+                ref=(new_origin_ref, self.a_vector_perfect, self.b_vector_perfect),
+                plot=False,
+                mode="perfect",
             )
             supercell.extend(unitcell)
             supercell_ref.extend(unitcell_ref)
 
-        is_within_image_bounds = (supercell.positions[:, :2] /self.dx > 0).all(axis=1) & (
-            supercell.positions[:, [1, 0]] /self.dx < self.image.shape
-        ).all(axis=1)
+        is_within_image_bounds = (supercell.positions[:, :2] / self.dx > 0).all(
+            axis=1
+        ) & (supercell.positions[:, [1, 0]] / self.dx < self.image.shape).all(axis=1)
         supercell = supercell[is_within_image_bounds]
         supercell_ref = supercell_ref[is_within_image_bounds]
-        supercell.set_cell(np.array([[self.nx*self.dx,0,0],[0,self.ny*self.dx,0], self.unit_cell.cell[2]]))
-        supercell_ref.set_cell(np.array([[self.nx*self.dx,0,0],[0,self.ny*self.dx,0], self.unit_cell.cell[2]]))
+        supercell.set_cell(
+            np.array(
+                [
+                    [self.nx * self.dx, 0, 0],
+                    [0, self.ny * self.dx, 0],
+                    self.unit_cell.cell[2],
+                ]
+            )
+        )
+        supercell_ref.set_cell(
+            np.array(
+                [
+                    [self.nx * self.dx, 0, 0],
+                    [0, self.ny * self.dx, 0],
+                    self.unit_cell.cell[2],
+                ]
+            )
+        )
 
-        valid_region_mask = self.region_of_interest(0.8/self.dx) & self.region_mask
+        valid_region_mask = self.region_of_interest(0.8 / self.dx) & self.region_mask
 
         peak_region_filter = np.ones(supercell.get_global_number_of_atoms(), dtype=bool)
         for i in range(supercell.get_global_number_of_atoms()):
-            x, y = supercell.positions[i,:2] /self.dx
+            x, y = supercell.positions[i, :2] / self.dx
             if not valid_region_mask[int(y), int(x)]:
                 peak_region_filter[i] = False
 
@@ -260,16 +320,19 @@ class CrystalAnalyzer:
         else:
             return None
 
-    def get_origin_offset(self, a_limit:int = 0, b_limit:int=0, mode='adaptive'):
-        assert mode in ['perfect','affine', 'adaptive'], "mode should be either 'perfect', 'affine' or 'adaptive'"
+    def get_origin_offset(self, a_limit: int = 0, b_limit: int = 0, mode="adaptive"):
+        assert mode in [
+            "perfect",
+            "affine",
+            "adaptive",
+        ], "mode should be either 'perfect', 'affine' or 'adaptive'"
         if not self._origin_offsets[mode]:
-            self._calc_origin_offsets(a_limit, b_limit)        
+            self._calc_origin_offsets(a_limit, b_limit)
         return self._origin_offsets[mode]
-            
-        
-    def _calc_origin_offsets(self, a_limit:int, b_limit:int):
+
+    def _calc_origin_offsets(self, a_limit: int, b_limit: int):
         # get the perfect mapping of the unit cell to the image
-        self.align_unit_cell_to_image(plot=False,mode='perfect')
+        self.align_unit_cell_to_image(plot=False, mode="perfect")
 
         # generate a meshgrid
         a_axis_mesh, b_axis_mesh = np.meshgrid(
@@ -280,14 +343,12 @@ class CrystalAnalyzer:
         # compute the distance in such meshgrid
         distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
         # apply the sort to the a_axis_mesh and b_axis_mesh
-        a_axis_mesh_sorted = a_axis_mesh.flatten()[
-            np.argsort(distance_mesh, axis=None)
-        ]
-        b_axis_mesh_sorted = b_axis_mesh.flatten()[
-            np.argsort(distance_mesh, axis=None)
-        ]
+        a_axis_mesh_sorted = a_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
+        b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
         order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
-        neighborhood_radius = np.linalg.norm(self.a_vector_affine + self.b_vector_affine).astype(int)
+        neighborhood_radius = np.linalg.norm(
+            self.a_vector_affine + self.b_vector_affine
+        ).astype(int)
 
         # Calculate the convex hull of the points
         hull = ConvexHull(self.peak_positions)
@@ -299,31 +360,41 @@ class CrystalAnalyzer:
         expanded_polygon = polygon.buffer(neighborhood_radius)
 
         # Find the closest peak to the origin to correct for drift
-        origin_offsets = {"perfect": {}, "affine":{}, "adaptive": {}}
+        origin_offsets = {"perfect": {}, "affine": {}, "adaptive": {}}
         origin_offsets["adaptive"][(0, 0)] = self.origin
-        origin_offsets['affine'][(0, 0)] = self.origin
-        origin_offsets['perfect'][(0, 0)] = self.origin
-        
+        origin_offsets["affine"][(0, 0)] = self.origin
+        origin_offsets["perfect"][(0, 0)] = self.origin
+
         for a_shift, b_shift in order_mesh[1:]:
-            shifted_origin_perfect = self.origin + self.a_vector_perfect* a_shift + self.b_vector_perfect* b_shift
-            shifted_origin_affine = self.origin + self.a_vector_affine* a_shift + self.b_vector_affine* b_shift
+            shifted_origin_perfect = (
+                self.origin
+                + self.a_vector_perfect * a_shift
+                + self.b_vector_perfect * b_shift
+            )
+            shifted_origin_affine = (
+                self.origin
+                + self.a_vector_affine * a_shift
+                + self.b_vector_affine * b_shift
+            )
 
             # Check if the shifted origin is within the expanded area
-            is_within_expanded_area = expanded_polygon.contains(Point(shifted_origin_affine))
+            is_within_expanded_area = expanded_polygon.contains(
+                Point(shifted_origin_affine)
+            )
             if not is_within_expanded_area:
                 continue
-            
+
             # if the shifted origin is within the region of interest, add it to the dictionary
             origin_offsets["perfect"][(a_shift, b_shift)] = shifted_origin_perfect
             origin_offsets["affine"][(a_shift, b_shift)] = shifted_origin_affine
-                
+
             # find the closet point of the a_shift and b_shift in the current shift_orgin
             distance = np.linalg.norm(
                 np.array(list(origin_offsets["adaptive"].values()))
                 - shifted_origin_affine,
                 axis=1,
             )
-            neighbor_distance_idx = np.where(distance < 2*neighborhood_radius)[0]
+            neighbor_distance_idx = np.where(distance < 2 * neighborhood_radius)[0]
             selected_keys = [
                 list(origin_offsets["adaptive"].keys())[idx]
                 for idx in neighbor_distance_idx
@@ -335,20 +406,21 @@ class CrystalAnalyzer:
                 b_shift_diff = b_shift - selected_key[1]
                 expect_origin = (
                     origin_offsets["adaptive"][selected_key]
-                    + self.a_vector_affine* a_shift_diff
-                    + self.b_vector_affine* b_shift_diff
+                    + self.a_vector_affine * a_shift_diff
+                    + self.b_vector_affine * b_shift_diff
                 )
                 expect_origin_list.append(expect_origin)
 
             expect_origin_avg = np.array(expect_origin_list).mean(axis=0)
 
             # check if the expect_origin_avg is close to any of the peak_positions within a threshold
-            distance_ref = min(
-                np.array([d for d in self.min_distances.values()])
-                / self.dx
-            )/2
-            
-            closest_peak = self.get_closest_peak(self.peak_positions, expect_origin_avg, distance_ref)
+            distance_ref = (
+                min(np.array([d for d in self.min_distances.values()]) / self.dx) / 2
+            )
+
+            closest_peak = self.get_closest_peak(
+                self.peak_positions, expect_origin_avg, distance_ref
+            )
             if closest_peak is not None:
                 origin_offsets["adaptive"][(a_shift, b_shift)] = closest_peak
             else:
@@ -368,7 +440,7 @@ class CrystalAnalyzer:
     #     return neighbor_sites
 
     ####### strain mapping #######
-    def get_strain(self, cut_off:float=5.0):
+    def get_strain(self, cut_off: float = 5.0):
         """
         Get the strain of the atomic columns based on the given cut-off radius.
 
@@ -421,21 +493,27 @@ class CrystalAnalyzer:
             fft_dx = 1 / (self.dx * self.image.shape[1])
             fft_dy = 1 / (self.dx * self.image.shape[0])
             fft_pixel_size = np.array([fft_dx, fft_dy])
-            fft_tolerance_x = int(1/ np.linalg.norm(real_a * self.dx)/ fft_dx/ 4)
-            fft_tolerance_y = int(1/ np.linalg.norm(real_b * self.dx)/ fft_dy/ 4)
+            fft_tolerance_x = int(1 / np.linalg.norm(real_a * self.dx) / fft_dx / 4)
+            fft_tolerance_y = int(1 / np.linalg.norm(real_b * self.dx) / fft_dy / 4)
 
             scale_y = fft_tolerance_x / fft_tolerance_y
-            if scale_y <1:
-                fft_log_rescaled = rescale(fft_log, (1, 1/scale_y), anti_aliasing=False)
-                fft_peaks = peak_local_max(fft_log_rescaled, min_distance=fft_tolerance_y, num_peaks=30)
+            if scale_y < 1:
+                fft_log_rescaled = rescale(
+                    fft_log, (1, 1 / scale_y), anti_aliasing=False
+                )
+                fft_peaks = peak_local_max(
+                    fft_log_rescaled, min_distance=fft_tolerance_y, num_peaks=30
+                )
                 fft_peaks[:, 1] = fft_peaks[:, 1] * scale_y
             else:
                 fft_log_rescaled = rescale(fft_log, (scale_y, 1), anti_aliasing=False)
-                fft_peaks = peak_local_max(fft_log_rescaled, min_distance=fft_tolerance_x, num_peaks=30)
+                fft_peaks = peak_local_max(
+                    fft_log_rescaled, min_distance=fft_tolerance_x, num_peaks=30
+                )
                 fft_peaks[:, 0] = fft_peaks[:, 0] / scale_y
 
             fft_peaks = fft_peaks[:, [1, 0]].astype(float)
-            zoom =3
+            zoom = 3
             fft_plot = InteractivePlot(
                 fft_log,
                 fft_peaks,
@@ -444,24 +522,30 @@ class CrystalAnalyzer:
                 dimension="si-length-reciprocal",
                 zoom=zoom,
             )
-            _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=min(fft_tolerance_x,fft_tolerance_y)*zoom)  # type: ignore
+            _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(
+                tolerance=min(fft_tolerance_x, fft_tolerance_y) * zoom
+            )  # type: ignore
             # normalize the fft vectors
 
             fft_a = fft_a_pixel * fft_pixel_size / zoom
             fft_b = fft_b_pixel * fft_pixel_size / zoom
             # get the matrix in real space
-            vec_a = fft_a / np.linalg.norm(fft_a)**2
-            vec_b = fft_b / np.linalg.norm(fft_b)**2
+            vec_a = fft_a / np.linalg.norm(fft_a) ** 2
+            vec_b = fft_b / np.linalg.norm(fft_b) ** 2
             vec_a_pixel = vec_a / self.dx
             vec_b_pixel = vec_b / self.dx
-            logging.info(f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel")
-            logging.info(f"FFT real a: {vec_a} {self.units}, Real b: {vec_b} {self.units}")
-            self.a_vector_affine= vec_a_pixel
-            self.b_vector_affine= vec_b_pixel
+            logging.info(
+                f"FFT real a: {vec_a_pixel} pixel, Real b: {vec_b_pixel} pixel"
+            )
+            logging.info(
+                f"FFT real a: {vec_a} {self.units}, Real b: {vec_b} {self.units}"
+            )
+            self.a_vector_affine = vec_a_pixel
+            self.b_vector_affine = vec_b_pixel
             self.origin = real_origin
             return real_origin, vec_a_pixel, vec_b_pixel
         else:
-            self.a_vector_affine= real_a
+            self.a_vector_affine = real_a
             self.b_vector_affine = real_b
             self.origin = real_origin
             return real_origin, real_a, real_b
@@ -474,8 +558,8 @@ class CrystalAnalyzer:
             mask = self.atom_types == atom_type
             element = self.elements[atom_type]
             plt.scatter(
-                self.lattice.positions[mask, 0]/self.dx,
-                self.lattice.positions[mask, 1]/self.dx,
+                self.lattice.positions[mask, 0] / self.dx,
+                self.lattice.positions[mask, 1] / self.dx,
                 label=element,
                 color=next(color_iterator),
             )
@@ -483,16 +567,15 @@ class CrystalAnalyzer:
         plt.legend()
         plt.show()
 
-    def plot_unitcell(self, mode='affine'):
-        if mode == 'perfect':
-            unitcell_transformed = self.unit_cell_transformed['perfect'].copy()
+    def plot_unitcell(self, mode="affine"):
+        if mode == "perfect":
+            unitcell_transformed = self.unit_cell_transformed["perfect"].copy()
             origin, a, b = self.origin, self.a_vector_perfect, self.b_vector_perfect
             unitcell_transformed.positions[:, :2] += origin * self.dx
         else:
-            unitcell_transformed = self.unit_cell_transformed['affine'].copy()
+            unitcell_transformed = self.unit_cell_transformed["affine"].copy()
             origin, a, b = self.origin, self.a_vector_affine, self.b_vector_affine
             unitcell_transformed.positions[:, :2] += origin * self.dx
-        
 
         plt.subplots()
         plt.imshow(self.image, cmap="gray")
@@ -559,75 +642,94 @@ class CrystalAnalyzer:
             fontsize=20,
         )
 
-    def plot_displacement(self, mode='local',cut_off=5.0, units='A'):
-        if mode == 'local':
+    def plot_displacement(self, mode="local", cut_off=5.0, units="A"):
+        if mode == "local":
             displacement = self.atomic_columns.get_local_displacement(cut_off, units)
         else:
             displacement = self.atomic_columns.get_column_displacement(units)
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=np.linalg.norm(displacement, axis=1), cmap='plasma')
+        plt.scatter(
+            self.atomic_columns.x,
+            self.atomic_columns.y,
+            c=np.linalg.norm(displacement, axis=1),
+            cmap="plasma",
+        )
         cbar = plt.colorbar()
-        cbar.set_label(f'Displacement ({units})')
-        plt.quiver(self.atomic_columns.x, self.atomic_columns.y, displacement[:, 0], displacement[:, 1], scale=1, scale_units='xy')
+        cbar.set_label(f"Displacement ({units})")
+        plt.quiver(
+            self.atomic_columns.x,
+            self.atomic_columns.y,
+            displacement[:, 0],
+            displacement[:, 1],
+            scale=1,
+            scale_units="xy",
+        )
         plt.gca().add_artist(self.scalebar)
-        plt.axis('off')
+        plt.axis("off")
 
-    def plot_strain(self, cut_off:float=5.0):
+    def plot_strain(self, cut_off: float = 5.0):
         epsilon_xx, epsilon_yy, epsilon_xy, omega_xy = self.get_strain(cut_off)
-        plt.subplots(2,2,constrained_layout=True)
+        plt.subplots(2, 2, constrained_layout=True)
         plt.subplot(2, 2, 1)
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xx, cmap='coolwarm')
-        plt.axis('off')
+        plt.scatter(
+            self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xx, cmap="coolwarm"
+        )
+        plt.axis("off")
         plt.gca().add_artist(self.scalebar)
         plt.colorbar()
         # bounds = np.abs(epsilon_xx).max()
         # get the 95 percentile of the strain
         bounds = np.percentile(np.abs(epsilon_xx), 95)
         plt.clim(-bounds, bounds)
-        plt.title(r'$\epsilon_{xx}$')
+        plt.title(r"$\epsilon_{xx}$")
         # plt.tight_layout()
         plt.subplot(2, 2, 2)
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_yy, cmap='coolwarm')
+        plt.scatter(
+            self.atomic_columns.x, self.atomic_columns.y, c=epsilon_yy, cmap="coolwarm"
+        )
         plt.colorbar()
         # bounds = np.abs(epsilon_yy).max()
         bounds = np.percentile(np.abs(epsilon_yy), 95)
         plt.clim(-bounds, bounds)
-        plt.axis('off')
-        plt.title(r'$\epsilon_{yy}$')
+        plt.axis("off")
+        plt.title(r"$\epsilon_{yy}$")
         # plt.tight_layout()
         plt.subplot(2, 2, 3)
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xy, cmap='coolwarm')
+        plt.scatter(
+            self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xy, cmap="coolwarm"
+        )
         plt.colorbar()
         # bounds = np.abs(epsilon_xy).max()
         bounds = np.percentile(np.abs(epsilon_xy), 95)
         plt.clim(-bounds, bounds)
-        plt.axis('off')
-        plt.title(r'$\epsilon_{xy}$')
+        plt.axis("off")
+        plt.title(r"$\epsilon_{xy}$")
         # plt.tight_layout()
         plt.subplot(2, 2, 4)
         plt.imshow(self.image, cmap="gray")
-        plt.scatter(self.atomic_columns.x, self.atomic_columns.y, c=omega_xy, cmap='coolwarm')
+        plt.scatter(
+            self.atomic_columns.x, self.atomic_columns.y, c=omega_xy, cmap="coolwarm"
+        )
         plt.colorbar()
         # bounds = np.abs(omega_xy).max()
         bounds = np.percentile(np.abs(omega_xy), 95)
         plt.clim(-bounds, bounds)
-        plt.axis('off')
-        plt.title(r'$\omega_{xy}$')
+        plt.axis("off")
+        plt.title(r"$\omega_{xy}$")
         # plt.tight_layout()
-        
 
     ####### properties #######
     @property
     def nx(self):
         return self.image.shape[1]
-    
+
     @property
     def ny(self):
         return self.image.shape[0]
-    
+
     @property
     def min_distances(self):
         if self._min_distances is not None:
