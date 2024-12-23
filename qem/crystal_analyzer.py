@@ -63,7 +63,7 @@ class CrystalAnalyzer:
         self.lattice_ref = Atoms
 
     ######### I/O ################
-    def read_cif(self, cif_file_path):
+    def read_cif(self, cif_file_path: str):
         atoms = read(cif_file_path)
         assert isinstance(atoms, Atoms), "atoms should be a ase Atoms object"
         mask = [atom.symbol in self.elements for atom in atoms]  # type: ignore
@@ -106,7 +106,11 @@ class CrystalAnalyzer:
 
     ######### lattice mapping ################
     def get_atomic_columns(
-        self, tol: float = 0, a_limit: int = 0, b_limit: int = 0, reciprocal=True
+        self,
+        tol: float = 0,
+        a_limit: int = 0,
+        b_limit: int = 0,
+        reciprocal: bool = True,
     ):
         self.select_lattice_vectors(reciprocal=reciprocal)
         # estimate the a_limit and b_limit if not provided
@@ -143,7 +147,9 @@ class CrystalAnalyzer:
         self.peak_positions = self.atomic_columns.positions_pixel
         return self.atomic_columns
 
-    def align_unit_cell_to_image(self, ref=None, plot=True, mode="affine"):
+    def align_unit_cell_to_image(
+        self, ref: tuple = None, plot: bool = True, mode: str = "affine"
+    ):
         """
         Transforms unit cell coordinates to the image coordinate system,
         aligning them with detected atomic peak positions. Optionally visualizes the
@@ -229,7 +235,7 @@ class CrystalAnalyzer:
             self.plot_unitcell(mode=mode)
         return shifted_unit_cell
 
-    def region_of_interest(self, sigma):
+    def region_of_interest(self, sigma: float = 1.5):
         # use the current coordinates to filter the peak_positions
         # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
         region_of_interest = np.zeros(self.image.shape, dtype=bool)
@@ -309,7 +315,12 @@ class CrystalAnalyzer:
         self.lattice_ref = supercell_ref[peak_region_filter]
         return self.lattice, self.lattice_ref
 
-    def get_closest_peak(self, candidate_peaks, target_peak, min_distance=1.5):
+    def get_closest_peak(
+        self,
+        candidate_peaks: np.ndarray,
+        target_peak: np.ndarray,
+        min_distance: float = 1.5,
+    ):
         """
         Find the closest 2D peak to the given atom position.
         """
@@ -320,7 +331,9 @@ class CrystalAnalyzer:
         else:
             return None
 
-    def get_origin_offset(self, a_limit: int = 0, b_limit: int = 0, mode="adaptive"):
+    def get_origin_offset(
+        self, a_limit: int = 0, b_limit: int = 0, mode: str = "adaptive"
+    ):
         assert mode in [
             "perfect",
             "affine",
@@ -455,7 +468,7 @@ class CrystalAnalyzer:
 
     ####### select region and lattice vectors #######
 
-    def select_region(self, peak_positions, atom_types):
+    def select_region(self, peak_positions: np.ndarray, atom_types: np.ndarray):
         atom_select = GetAtomSelection(
             image=self.image, atom_positions=peak_positions, invert_selection=False
         )
@@ -468,7 +481,7 @@ class CrystalAnalyzer:
         region_mask = atom_select.region_mask
         return peak_positions_selected, atom_types_selected, region_mask
 
-    def select_lattice_vectors(self, tolerance=10, reciprocal=False):
+    def select_lattice_vectors(self, tolerance: int = 10, reciprocal: bool = False):
         """
         Choose the lattice vectors based on the given tolerance.
 
@@ -567,7 +580,7 @@ class CrystalAnalyzer:
         plt.legend()
         plt.show()
 
-    def plot_unitcell(self, mode="affine"):
+    def plot_unitcell(self, mode: str = "affine"):
         if mode == "perfect":
             unitcell_transformed = self.unit_cell_transformed["perfect"].copy()
             origin, a, b = self.origin, self.a_vector_perfect, self.b_vector_perfect
@@ -642,7 +655,9 @@ class CrystalAnalyzer:
             fontsize=20,
         )
 
-    def plot_displacement(self, mode="local", cut_off=5.0, units="A"):
+    def plot_displacement(
+        self, mode: str = "local", cut_off: float = 5.0, units: str = "A"
+    ):
         if mode == "local":
             displacement = self.atomic_columns.get_local_displacement(cut_off, units)
         else:
