@@ -15,6 +15,7 @@ from jax.scipy.optimize import minimize
 from jaxopt import OptaxSolver
 from matplotlib_scalebar.scalebar import ScaleBar
 from scipy.ndimage import center_of_mass
+from qem.refine import calculate_center_of_mass, fit_gaussian
 from scipy.optimize import lsq_linear
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
@@ -26,9 +27,11 @@ from ase import Atoms
 from qem.crystal_analyzer import CrystalAnalyzer
 from qem.gui_classes import InteractivePlot
 from qem.model import (
-    add_gaussian_at_positions,
+    add_peak_at_positions,
     butterworth_window,
     gaussian_2d_numba,
+    lorentzian_2d_numba,
+    voigt_2d_numba,
     gaussian_sum_parallel,
     lorentzian_sum_parallel,
     mask_grads,
@@ -460,6 +463,7 @@ class ImageModelFitting:
         exclude_border: bool = False,
         plot: bool = True,
         region_index: int = 0,
+        sigma: float = 2,
     ):
         """
         Find the peaks in the image.
@@ -475,7 +479,7 @@ class ImageModelFitting:
         """
         assert region_index in self.region_map, "The region index is not in the region map."
         region_map = self.region_map == region_index
-        image_filtered = gaussian_filter(self.image, 2)
+        image_filtered = gaussian_filter(self.image, sigma)
         peaks_locations = peak_local_max(
             image_filtered*region_map,
             min_distance=min_distance,
@@ -497,8 +501,23 @@ class ImageModelFitting:
         if plot:
             self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
         return self.coordinates
+    
+    def get_nearest_peak_distance(self, peak_position: np.ndarray):
+        """
+        Get the distance of the nearest peak for each peak.
 
-    def refine_center_of_mass(self, windows_size: int = 5, plot=False):
+        Args:
+            peak_positions (np.array): The positions of the peaks.
+            threshold (int, optional): The threshold distance. Defaults to 10.
+
+        Returns:
+            np.array: The distances of the nearest peaks.
+        """
+        other_peaks = np.delete(self.coordinates, np.where(self.coordinates == peak_position), axis=0)
+        distances= np.linalg.norm(other_peaks - peak_position, axis=1).min()
+        return distances
+
+    def refine_center_of_mass(self, percent_to_nn: float=0.4, plot=False):
         # do center of mass for each atom
         pre_coordinates = self.coordinates
         current_coordinates = self.coordinates
@@ -506,30 +525,49 @@ class ImageModelFitting:
         while converged is False:
             for i in tqdm(range(self.num_coordinates)):
                 x, y = pre_coordinates[i]
+                windows_size = self.get_nearest_peak_distance(pre_coordinates[i])
+                mask_size = int(windows_size * percent_to_nn)
+
                 # calculate the mask for distance < r
+                top, bottom = int(max(int(y) - windows_size, 0)), int(min(int(y) + windows_size + 1, self.ny))
+                left, right = int(max(int(x) - windows_size, 0)), int(min(int(x) + windows_size + 1, self.nx))
+
+                cetre_x, cetre_y = int(x) - left, int(y) - top
+                
                 region = self.image[
-                    int(y) - windows_size : int(y) + windows_size + 1,
-                    int(x) - windows_size : int(x) + windows_size + 1,
+                    top:bottom,
+                    left:right,
                 ]
+                if region.size == 0:
+                    continue
                 region = (region - region.min()) / (region.max() - region.min())
-                local_y, local_x = center_of_mass(region)
+                # region = gaussian_filter(region, 5)
+                
+                # create a mask with radius r for region
+                mask = np.zeros_like(region)
+                grid_y, grid_x = np.mgrid[0:region.shape[0], 0:region.shape[1]]
+                mask[(grid_x - cetre_x) ** 2 + (grid_y - cetre_y) ** 2 < mask_size ** 2] = 1
+
+                region = region * mask
+
+                local_y, local_x = calculate_center_of_mass(region)
                 assert isinstance(local_x, float), "local_x is not a float"
                 assert isinstance(local_y, float), "local_y is not a float"
                 current_coordinates[i] = np.array(
                     [
-                        int(x) - windows_size + local_x,
-                        int(y) - windows_size + local_y,
+                        int(x) - cetre_x + local_x, 
+                        int(y) - cetre_y + local_y,
                     ],
                     dtype=float,
                 )
                 if plot:
                     plt.clf()
                     plt.imshow(region, cmap="gray")
-                    plt.scatter(local_y, local_x, color="red", s=2)
+                    plt.scatter(local_x, local_y, color="red", s=2, label = 'refined')
                     plt.scatter(
-                        y % 1 + windows_size, x % 1 + windows_size, color="blue", s=2
-                    )
-                    plt.show()
+                        cetre_x, cetre_y, color="blue", s=2, label = 'initial'
+                    ) 
+                    plt.legend()
                     plt.pause(1.0)
             converged = np.abs(current_coordinates - pre_coordinates).max() < 0.5
         return current_coordinates
