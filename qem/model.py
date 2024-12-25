@@ -18,6 +18,28 @@ def gaussian_2d_numba(X, Y, pos_x, pos_y, height, width):
     )
     return gauss
 
+@njit(nopython=True)
+def lorentzian_2d_numba(X, Y, pos_x, pos_y, height, gamma):
+    # Unpack the parameters
+    lorentz = height * gamma**2 / (
+        (X[:, :, None] - pos_x[None, None, :]) ** 2
+        + (Y[:, :, None] - pos_y[None, None, :]) ** 2
+        + gamma**2
+    )
+    return lorentz
+
+@njit(nopython=True)
+def voigt_2d_numba(X, Y, pos_x, pos_y, height, sigma, gamma, ratio):
+    # Unpack the parameters
+    R2 = (X[:, :, None] - pos_x[None, None, :]) ** 2 + (
+        Y[:, :, None] - pos_y[None, None, :]
+    ) ** 2
+
+    voigt = height * (
+        ratio * np.exp(-(R2) / (2 * sigma**2))
+        + (1 - ratio) * gamma**3 / (R2 + gamma**2) ** (3 / 2)
+    )
+    return voigt
 
 @jit
 def gaussian_2d_jax(X, Y, pos_x, pos_y, height, width):
@@ -33,7 +55,7 @@ def gaussian_2d_jax(X, Y, pos_x, pos_y, height, width):
 
 
 @njit(nopython=True, parallel=True)
-def add_gaussian_at_positions(total_sum, pos_x, pos_y, gaussian_local, windows_size):
+def add_peak_at_positions(total_sum, pos_x, pos_y, gaussian_local, windows_size):
     pos_x = pos_x.astype(np.int32)
     pos_y = pos_y.astype(np.int32)
     for i in range(len(pos_x)):

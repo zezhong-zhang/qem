@@ -104,6 +104,7 @@ class ImageModelFitting:
         self.X, self.Y = np.meshgrid(x, y, indexing="xy")
 
     ### Properties
+
     @property
     def window(self):
         """
@@ -311,10 +312,8 @@ class ImageModelFitting:
             if len(self.atom_types) != self.num_coordinates:
                 self.atom_types = self.atom_types[mask]
 
-        # self.center_of_mass()
         pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
         pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
-        # background = np.percentile(self.image, 20)
         if self.fit_background:
             init_background = self.image.min()
         else:
@@ -777,22 +776,58 @@ class ImageModelFitting:
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
         height = params["height"]
-        sigma = params["sigma"]
-        if self.same_width:
-            sigma = sigma[self.atom_types]
-        if use_mask:
-            sigma = sigma[self.atoms_selected]
 
-        windos_size = int(sigma.max() * 5)
+        if self.model_type == "gaussian":
+            sigma = params["sigma"]
+            if self.same_width:
+                sigma = sigma[self.atom_types]
+            if use_mask:
+                sigma = sigma[self.atoms_selected]
+            width = sigma.mean()
+        elif self.model_type == "lorentzian":
+            gamma = params["gamma"]
+            if self.same_width:
+                gamma = gamma[self.atom_types]
+            if use_mask:
+                gamma = gamma[self.atoms_selected]
+            width = gamma.mean()
+        elif self.model_type == "voigt":
+            sigma = params["sigma"]
+            gamma = params["gamma"]
+            ratio = params["ratio"]
+            if self.same_width:
+                ratio = ratio[self.atom_types]
+                sigma = sigma[self.atom_types]
+                gamma = gamma[self.atom_types]
+            if use_mask:
+                ratio = ratio[self.atoms_selected]
+                gamma = gamma[self.atoms_selected]
+                sigma = sigma[self.atoms_selected]
+            width = gamma.mean()
+        else:
+            raise ValueError("The model type is not valid.")
+
+
+        windos_size = int(width * 5)
         x = np.arange(-windos_size, windos_size + 1, 1)
         y = np.arange(-windos_size, windos_size + 1, 1)
         local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_2d_numba(
-            local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
-        )
-        gauss_local = np.array(gauss_local)
-        prediction = add_gaussian_at_positions(
-                np.zeros(self.image.shape), pos_x, pos_y, gauss_local, windos_size
+        if self.model_type == "gaussian":
+            peak_local = gaussian_2d_numba(
+                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
+            )
+        elif self.model_type == "lorentzian":
+            peak_local = lorentzian_2d_numba(
+                local_X, local_Y, pos_x % 1, pos_y % 1, height, gamma
+            )
+        elif self.model_type == "voigt":
+            peak_local = voigt_2d_numba(
+                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma, gamma, ratio
+            )
+
+        peak_local = np.array(peak_local)
+        prediction = add_peak_at_positions(
+                np.zeros(self.image.shape), pos_x, pos_y, peak_local, windos_size
             ) + background
         
         if self.pbc:
@@ -806,11 +841,11 @@ class ImageModelFitting:
                 (1, -1),
                 (-1, 1),
             ]:
-                prediction += add_gaussian_at_positions(
+                prediction += add_peak_at_positions(
                     np.zeros(self.image.shape),
                     pos_x + i * self.nx,
                     pos_y + j * self.ny,
-                    gauss_local,
+                    peak_local,
                     windos_size,
                 )
         return prediction
@@ -835,7 +870,7 @@ class ImageModelFitting:
 
         if self.same_width:
             # broadcast the sigma, gamma and ratio according to the self.atom_types
-            if self.model_type in {"voigt", "gaussian"} and sigma is not None:
+            if self.model_type in {"gaussian","voigt"}  and sigma is not None:
                 sigma = sigma[self.atom_types[mask]]
             # Check the model type and broadcast gamma and ratio as needed
             if self.model_type in {"voigt", "lorentzian"} and gamma is not None:
@@ -880,29 +915,47 @@ class ImageModelFitting:
         # create the design matrix as array of gaussian peaks + background
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
-        sigma = params["sigma"]
-        if self.model_type in {"voigt", "lorentzian"}:
+        if self.model_type in {"gaussian", "voigt"}:
+            sigma = params["sigma"]
+            if self.same_width:
+                sigma = sigma[self.atom_types]
+            width = sigma.mean()
+        elif self.model_type in {"voigt", "lorentzian"}:
             gamma = params["gamma"]
+            if self.model_type == "voigt":
+                ratio = params["ratio"]
+            if self.same_width:
+                gamma = gamma[self.atom_types]
+                ratio = ratio[self.atom_types]
+            width = gamma.mean()
+        else:
+            raise ValueError("The model type is not valid.")
         height = params["height"]
         if (height<0).any():
             logging.warning("The height has negative values, the linear estimator is not valid, I will make it to zero but be careful with the results.")
             height[height<0] = 0
             
-
-        if self.same_width:
-            sigma = sigma[self.atom_types]
-            if self.model_type in {"voigt", "lorentzian"}:
-                gamma = gamma[self.atom_types]
         rows = []
         cols = []
         data = []
-        window_size = int(sigma.mean() * 5)
+        window_size = int(width * 5)
         x = np.arange(-window_size, window_size + 1, 1)
         y = np.arange(-window_size, window_size + 1, 1)
         local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        gauss_local = gaussian_2d_numba(
-            local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
-        )
+        if self.model_type == "gaussian":
+            peak_local = gaussian_2d_numba(
+                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
+            )
+        elif self.model_type == "lorentzian":
+            peak_local = lorentzian_2d_numba(
+                local_X, local_Y, pos_x % 1, pos_y % 1, height, gamma
+            )
+        elif self.model_type == "voigt":
+            peak_local = voigt_2d_numba(
+                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma, gamma, ratio
+            )
+        else:
+            raise ValueError("The model type is not valid.")
 
         for atomic_column_index in range(self.num_coordinates):
             global_X = local_X + pos_x[atomic_column_index].astype(int)
@@ -916,7 +969,7 @@ class ImageModelFitting:
             flat_index = global_Y[mask].flatten() * self.nx + global_X[mask].flatten()
             rows.extend(flat_index)
             cols.extend(np.tile(atomic_column_index, flat_index.shape[0]))
-            data.extend(gauss_local[:, :, atomic_column_index][mask].ravel())
+            data.extend(peak_local[:, :, atomic_column_index][mask].ravel())
         if self.fit_background:
             rows.extend(self.Y.flatten() * self.nx + self.X.flatten())
             cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
@@ -1463,7 +1516,7 @@ class ImageModelFitting:
         if self.fit_background:
             select_params["background"] = params["background"]
         if self.same_width:
-            if self.model_type in {"voigt", "gaussian"}:
+            if self.model_type in {"gaussian", "voigt"}:
                 select_params["sigma"] = params["sigma"]
             if self.model_type in {"voigt", "lorentzian"}:
                 select_params["gamma"] = params["gamma"]
@@ -1604,7 +1657,7 @@ class ImageModelFitting:
         plt.title("Residual")
         plt.tight_layout()
 
-    def plot_scs(self, layout="horizontal", per_element=False):
+    def plot_scs(self, layout="horizontal", per_element=False, s = 1):
         assert layout in {"horizontal", "vertical"}, "Layout should be horizontal or vertical"
         if layout == "horizontal":
             row, col = 1, 2
@@ -1623,7 +1676,7 @@ class ImageModelFitting:
             plt.scatter(
                 self.coordinates[mask, 0],
                 self.coordinates[mask, 1],
-                s=1,
+                s=s,
                 label=element,
             )
         plt.legend()
@@ -1646,7 +1699,7 @@ class ImageModelFitting:
                     pos_x[mask],
                     pos_y[mask],
                     c=self.volume[mask],
-                    s=1,
+                    s=s,
                     label=element,
                 )
                 plt.colorbar(im, fraction=0.046, pad=0.04)
@@ -1663,33 +1716,65 @@ class ImageModelFitting:
             plt.title(r"QEM refined scs ($\AA^2$)")
             plt.tight_layout()
 
-    def plot_scs_voronoi(self, layout="horizontal", s=1):
+    def plot_scs_voronoi(self, layout="horizontal", s=1, per_element=False):
         assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
-        row, col = (1, 2) if layout == "horizontal" else (2, 1)
-        plt.subplots(row, col)
-        plt.subplot(row, col, 1)
-        plt.imshow(self.image, cmap="gray")
-        for atom_type in np.unique(self.atom_types):
-            mask = self.atom_types == atom_type
-            element = self.elements[atom_type]
-            plt.scatter(
-                self.coordinates[mask, 0],
-                self.coordinates[mask, 1],
-                s=1,
-                label=element,
-            )
-        plt.legend()
-        plt.gca().set_aspect("equal", adjustable="box")
-        plt.title("Image")
-        plt.subplot(row, col, 2)
-        pos_x = self.params["pos_x"] * self.dx
-        pos_y = self.params["pos_y"] * self.dx
-        im = plt.scatter(pos_x, pos_y, c=self.voronoi_volume, s=s)
-        # make aspect ratio equal
-        plt.gca().invert_yaxis()
-        plt.gca().set_aspect("equal", adjustable="box")
-        plt.colorbar(im, fraction=0.046, pad=0.04)
-        plt.title(r"Voronoi scs ($\AA^2$)")
+        if per_element:
+            row, col = 1, 2
+            col += len(np.unique(self.atom_types)) - 1
+            plt.subplot(row, col, 1)
+            plt.imshow(self.image, cmap="gray")
+            for atom_type in np.unique(self.atom_types):
+                mask = self.atom_types == atom_type
+                element = self.elements[atom_type]
+                plt.scatter(
+                    self.coordinates[mask, 0],
+                    self.coordinates[mask, 1],
+                    s=1,
+                    label=element,
+                )
+            plt.legend()
+            plot_idx = 2
+            for atom_type in np.unique(self.atom_types):
+                mask = self.atom_types == atom_type
+                plt.subplot(row, col, plot_idx)
+                element = self.elements[atom_type]
+                pos_x = self.params["pos_x"][mask] * self.dx
+                pos_y = self.params["pos_y"][mask] * self.dx
+                im = plt.scatter(
+                    pos_x, pos_y, c=self.voronoi_volume[mask], s=s, label=element
+                )
+                plt.legend()
+                plt.gca().invert_yaxis()
+                plt.gca().set_aspect("equal", adjustable="box")
+                plt.colorbar(im, fraction=0.046, pad=0.04)
+                plt.title(rf"Voronoi scs ($\AA^2$) for {element}")
+                plot_idx += 1
+        else:
+            row, col = (1, 2) if layout == "horizontal" else (2, 1)
+            plt.subplots(row, col)
+            plt.subplot(row, col, 1)
+            plt.imshow(self.image, cmap="gray")
+            for atom_type in np.unique(self.atom_types):
+                mask = self.atom_types == atom_type
+                element = self.elements[atom_type]
+                plt.scatter(
+                    self.coordinates[mask, 0],
+                    self.coordinates[mask, 1],
+                    s=1,
+                    label=element,
+                )
+            plt.legend()
+            plt.gca().set_aspect("equal", adjustable="box")
+            plt.title("Image")
+            plt.subplot(row, col, 2)
+            pos_x = self.params["pos_x"] * self.dx
+            pos_y = self.params["pos_y"] * self.dx
+            im = plt.scatter(pos_x, pos_y, c=self.voronoi_volume, s=s)
+            # make aspect ratio equal
+            plt.gca().invert_yaxis()
+            plt.gca().set_aspect("equal", adjustable="box")
+            plt.colorbar(im, fraction=0.046, pad=0.04)
+            plt.title(r"Voronoi scs ($\AA^2$)")
 
     def plot_scs_histogram(self):
         plt.figure()
