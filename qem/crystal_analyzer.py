@@ -1,5 +1,4 @@
 import copy
-
 # from shapely.affinity import scale
 import logging
 import re
@@ -10,12 +9,11 @@ import numpy as np
 from ase import Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
+from matplotlib_scalebar.scalebar import ScaleBar
 from scipy.spatial import ConvexHull
 from shapely.geometry import Point, Polygon
 from skimage.feature import peak_local_max
-from matplotlib_scalebar.scalebar import ScaleBar
 from skimage.transform import rescale
-
 
 from qem.atomic_column import AtomicColumns
 from qem.color import get_unique_colors
@@ -44,10 +42,8 @@ class CrystalAnalyzer:
         self.elements = elements
         self.unit_cell = Atoms
         self.origin = np.array([0, 0])
-        self.a_vector_affine = np.array([1, 0])
-        self.b_vector_affine = np.array([0, 1])
-        self.a_vector_perfect = np.array([1, 0])
-        self.b_vector_perfect = np.array([0, 1])
+        self.a_vector = {"perfect": np.array([1, 0]), "affine": np.array([1, 0])}
+        self.b_vector = {"perfect": np.array([1, 0]), "affine": np.array([1, 0])}
         self._min_distances = None
         self.atomic_columns = None
         if region_mask is None:
@@ -55,8 +51,6 @@ class CrystalAnalyzer:
         self.region_mask = region_mask
         self.rotation_matrix = None
         self.affine_matrix = None
-        # self.add_missing_elements = add_missing_elements
-        # self.neighbor_site_dict = {}
         self.unit_cell_transformed = {"perfect": None, "affine": None}
         self._origin_offsets = {"perfect": {}, "affine": {}, "adaptive": {}}
         self.lattice = Atoms
@@ -137,8 +131,8 @@ class CrystalAnalyzer:
         ), "lattice_3d_ref should be an Atoms object"
         ref = {
             "origin": self.origin,
-            "vector_a": self.a_vector_perfect,
-            "vector_b": self.b_vector_perfect,
+            "vector_a": self.a_vector["perfect"],
+            "vector_b": self.b_vector["perfect"],
         }
         self.atomic_columns = AtomicColumns(
             lattice_3d, lattice_3d_ref, self.elements, tol, self.dx, ref
@@ -168,8 +162,8 @@ class CrystalAnalyzer:
             origin, a, b = ref
         else:
             origin = self.origin
-            a = self.a_vector_affine
-            b = self.b_vector_affine
+            a = self.a_vector["affine"]
+            b = self.b_vector["affine"]
 
         assert isinstance(
             self.unit_cell, Atoms
@@ -211,14 +205,14 @@ class CrystalAnalyzer:
                             ]
                         )
                 new_coords_xy = (coords_xy @ self.rotation_matrix) / self.dx
-                self.a_vector_perfect = (
+                self.a_vector["perfect"] = (
                     unit_cell.cell[0][:2] @ self.rotation_matrix / self.dx
                 )
-                self.b_vector_perfect = (
+                self.b_vector["perfect"] = (
                     unit_cell.cell[1][:2] @ self.rotation_matrix / self.dx
                 )
                 logging.info(
-                    f"Perfect a: {self.a_vector_perfect} pixel, Perfect b: {self.b_vector_perfect} pixel by rotation of unit cell and scaling with pixel size."
+                    f"Perfect a: {self.a_vector['perfect']} pixel, Perfect b: {self.b_vector['perfect']} pixel by rotation of unit cell and scaling with pixel size."
                 )
             else:  # affine transformation
                 if self.affine_matrix is None:
@@ -266,11 +260,11 @@ class CrystalAnalyzer:
 
         for translation, new_origin in shift_origin_adaptive.items():
             unitcell = self.align_unit_cell_to_image(
-                ref=(new_origin, self.a_vector_affine, self.b_vector_affine), plot=False
+                ref=(new_origin, self.a_vector["affine"], self.b_vector["affine"]), plot=False
             )
             new_origin_ref = shift_origin_perfect[translation]
             unitcell_ref = self.align_unit_cell_to_image(
-                ref=(new_origin_ref, self.a_vector_perfect, self.b_vector_perfect),
+                ref=(new_origin_ref, self.a_vector["perfect"], self.b_vector["perfect"]),
                 plot=False,
                 mode="perfect",
             )
@@ -351,8 +345,8 @@ class CrystalAnalyzer:
         a_axis_mesh, b_axis_mesh = np.meshgrid(
             np.arange(-a_limit, a_limit + 1), np.arange(-b_limit, b_limit + 1)
         )
-        a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a_vector_perfect)
-        b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b_vector_perfect)
+        a_axis_distance_mesh = a_axis_mesh * np.linalg.norm(self.a_vector["perfect"])
+        b_axis_distance_mesh = b_axis_mesh * np.linalg.norm(self.b_vector["perfect"])
         # compute the distance in such meshgrid
         distance_mesh = np.sqrt(a_axis_distance_mesh**2 + b_axis_distance_mesh**2)
         # apply the sort to the a_axis_mesh and b_axis_mesh
@@ -360,7 +354,7 @@ class CrystalAnalyzer:
         b_axis_mesh_sorted = b_axis_mesh.flatten()[np.argsort(distance_mesh, axis=None)]
         order_mesh = np.array([a_axis_mesh_sorted, b_axis_mesh_sorted]).T
         neighborhood_radius = np.linalg.norm(
-            self.a_vector_affine + self.b_vector_affine
+            self.a_vector["affine"] + self.b_vector["affine"]
         ).astype(int)
 
         # Calculate the convex hull of the points
@@ -381,13 +375,13 @@ class CrystalAnalyzer:
         for a_shift, b_shift in order_mesh[1:]:
             shifted_origin_perfect = (
                 self.origin
-                + self.a_vector_perfect * a_shift
-                + self.b_vector_perfect * b_shift
+                + self.a_vector["perfect"] * a_shift
+                + self.b_vector["perfect"] * b_shift
             )
             shifted_origin_affine = (
                 self.origin
-                + self.a_vector_affine * a_shift
-                + self.b_vector_affine * b_shift
+                + self.a_vector["affine"] * a_shift
+                + self.b_vector["affine"] * b_shift
             )
 
             # Check if the shifted origin is within the expanded area
@@ -419,8 +413,8 @@ class CrystalAnalyzer:
                 b_shift_diff = b_shift - selected_key[1]
                 expect_origin = (
                     origin_offsets["adaptive"][selected_key]
-                    + self.a_vector_affine * a_shift_diff
-                    + self.b_vector_affine * b_shift_diff
+                    + self.a_vector["affine"] * a_shift_diff
+                    + self.b_vector["affine"] * b_shift_diff
                 )
                 expect_origin_list.append(expect_origin)
 
@@ -498,7 +492,9 @@ class CrystalAnalyzer:
             dx=self.dx,
             units=self.units,
         )
+        
         real_origin, real_a, real_b = real_plot.select_vectors(tolerance=tolerance)  # type: ignore
+
         if reciprocal:
             image_filtered = gaussian_filter(self.image, 1)
             fft_image = np.abs(np.fft.fftshift(np.fft.fft2(image_filtered)))
@@ -506,8 +502,8 @@ class CrystalAnalyzer:
             fft_dx = 1 / (self.dx * self.image.shape[1])
             fft_dy = 1 / (self.dx * self.image.shape[0])
             fft_pixel_size = np.array([fft_dx, fft_dy])
-            fft_tolerance_x = int(1 / np.linalg.norm(real_a * self.dx) / fft_dx / 4)
-            fft_tolerance_y = int(1 / np.linalg.norm(real_b * self.dx) / fft_dy / 4)
+            fft_tolerance_x = np.ceil(1 / np.linalg.norm(real_a * self.dx) / fft_dx / 2).astype(int)
+            fft_tolerance_y = np.ceil(1 / np.linalg.norm(real_b * self.dx) / fft_dy / 2).astype(int)
 
             scale_y = fft_tolerance_x / fft_tolerance_y
             if scale_y < 1:
@@ -535,9 +531,7 @@ class CrystalAnalyzer:
                 dimension="si-length-reciprocal",
                 zoom=zoom,
             )
-            _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(
-                tolerance=min(fft_tolerance_x, fft_tolerance_y) * zoom
-            )  # type: ignore
+            _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=min(fft_tolerance_x, fft_tolerance_y) * zoom)  # type: ignore
             # normalize the fft vectors
 
             fft_a = fft_a_pixel * fft_pixel_size / zoom
@@ -553,13 +547,13 @@ class CrystalAnalyzer:
             logging.info(
                 f"FFT real a: {vec_a} {self.units}, Real b: {vec_b} {self.units}"
             )
-            self.a_vector_affine = vec_a_pixel
-            self.b_vector_affine = vec_b_pixel
+            self.a_vector["affine"] = vec_a_pixel
+            self.b_vector["affine"] = vec_b_pixel
             self.origin = real_origin
             return real_origin, vec_a_pixel, vec_b_pixel
         else:
-            self.a_vector_affine = real_a
-            self.b_vector_affine = real_b
+            self.a_vector["affine"] = real_a
+            self.b_vector["affine"] = real_b
             self.origin = real_origin
             return real_origin, real_a, real_b
 
@@ -583,11 +577,11 @@ class CrystalAnalyzer:
     def plot_unitcell(self, mode: str = "affine"):
         if mode == "perfect":
             unitcell_transformed = self.unit_cell_transformed["perfect"].copy()
-            origin, a, b = self.origin, self.a_vector_perfect, self.b_vector_perfect
+            origin, a, b = self.origin, self.a_vector["perfect"], self.b_vector["perfect"]
             unitcell_transformed.positions[:, :2] += origin * self.dx
         else:
             unitcell_transformed = self.unit_cell_transformed["affine"].copy()
-            origin, a, b = self.origin, self.a_vector_affine, self.b_vector_affine
+            origin, a, b = self.origin, self.a_vector["affine"], self.b_vector["affine"]
             unitcell_transformed.positions[:, :2] += origin * self.dx
 
         plt.subplots()
