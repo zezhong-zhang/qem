@@ -39,8 +39,7 @@ from qem.model import (
 )
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import voronoi_integrate
-from qem.color import color_iter
-from qem.gui_classes import GetAtomSelection,GetRegionSelection
+from qem.gui_classes import GetAtomSelection, GetRegionSelection
 from matplotlib.path import Path
 
 logging.basicConfig(level=logging.INFO)
@@ -74,7 +73,14 @@ class ImageModelFitting:
         self.image = image.astype(np.float32)
         self.model = np.zeros(image.shape)
         self._region_map = np.zeros(image.shape).astype(int)
-        init_region_path = Path([(0,0), (0, self.image.shape[1]-1), (self.image.shape[0]-1, self.image.shape[1]-1),(self.image.shape[0]-1, 0)])
+        init_region_path = Path(
+            [
+                (0, 0),
+                (0, self.image.shape[1] - 1),
+                (self.image.shape[0] - 1, self.image.shape[1] - 1),
+                (self.image.shape[0] - 1, 0),
+            ]
+        )
         self.region_path_dict = {0: init_region_path}
         self.region_crysal_analyzer = {}
         self.region_atomic_column = {}
@@ -87,7 +93,9 @@ class ImageModelFitting:
         self.dx = dx * scale_factor
         self.units = "A"
         self._atom_types = np.array([])
-        logging.info(f"Elements: {elements}, the order is used for the atom types. Please initiate the correct elements in your system.")
+        logging.info(
+            f"Elements: {elements}, the order is used for the atom types. Please initiate the correct elements in your system."
+        )
         self.elements = elements
         self.atoms_selected = np.array([])
         self._coordinates = np.array([])
@@ -171,12 +179,18 @@ class ImageModelFitting:
 
     @property
     def region_column_labels(self):
-        return self.region_map[self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)]
+        return self.region_map[
+            self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
+        ]
 
     @property
     def region_map(self):
         for key in self.region_path_dict.keys():
-            self._region_map[self.region_path_dict[key].contains_points(np.array([self.X.ravel(), self.Y.ravel()]).T).reshape(self.X.shape)] = key
+            self._region_map[
+                self.region_path_dict[key]
+                .contains_points(np.array([self.X.ravel(), self.Y.ravel()]).T)
+                .reshape(self.X.shape)
+            ] = key
         return self._region_map
 
     @property
@@ -299,7 +313,12 @@ class ImageModelFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def init_params(self, atom_size: float = 0.7, guess_radius: bool = False, init_background: float = 0.0):
+    def init_params(
+        self,
+        atom_size: float = 0.7,
+        guess_radius: bool = False,
+        init_background: float = 0.0,
+    ):
         if guess_radius:
             width = self.guess_radius()[0]
         else:
@@ -318,7 +337,9 @@ class ImageModelFitting:
             init_background = self.image.min()
         else:
             self.init_background = init_background
-        height = self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
+        height = (
+            self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
+        )
         # get the lowest 20% of the intensity as the background
         if self.same_width:
             width = np.tile(width, self.num_atom_types).astype(float)
@@ -407,15 +428,16 @@ class ImageModelFitting:
         self.region_atomic_column[region_index] = atomic_column_list
         return atomic_column_list
 
-    def assign_region_label(self, region_index: int = 0, invert_selection:bool=False):
-
+    def assign_region_label(
+        self, region_index: int = 0, invert_selection: bool = False
+    ):
         atom_select = GetRegionSelection(
             image=self.image,
             invert_selection=invert_selection,
-            region_map = self.region_map
+            region_map=self.region_map,
         )
         try:
-            atom_select.poly.verts = self.region_path_dict[region_index].vertices # type: ignore
+            atom_select.poly.verts = self.region_path_dict[region_index].vertices  # type: ignore
             atom_select.path = self.region_path_dict[region_index]
         except KeyError:
             pass
@@ -428,10 +450,11 @@ class ImageModelFitting:
             self.region_path_dict[region_index] = atom_select.path
         except AttributeError:
             pass
-        logging.info(f'Assigned label {region_index} with {region_mask.sum()} pixels to the region map.')
+        logging.info(
+            f"Assigned label {region_index} with {region_mask.sum()} pixels to the region map."
+        )
 
-    def select_atoms(self, invert_selection:bool=False):
-
+    def select_atoms(self, invert_selection: bool = False):
         atom_select = GetAtomSelection(
             image=self.image,
             atom_positions=self.coordinates,
@@ -462,7 +485,7 @@ class ImageModelFitting:
         exclude_border: bool = False,
         plot: bool = True,
         region_index: int = 0,
-        sigma: float = 2,
+        sigma: float = 5,
     ):
         """
         Find the peaks in the image.
@@ -476,11 +499,13 @@ class ImageModelFitting:
         Returns:
             np.array: The coordinates of the peaks.
         """
-        assert region_index in self.region_map, "The region index is not in the region map."
+        assert (
+            region_index in self.region_map
+        ), "The region index is not in the region map."
         region_map = self.region_map == region_index
         image_filtered = gaussian_filter(self.image, sigma)
         peaks_locations = peak_local_max(
-            image_filtered*region_map,
+            image_filtered * region_map,
             min_distance=min_distance,
             threshold_rel=threshold_rel,
             threshold_abs=threshold_abs,
@@ -489,10 +514,14 @@ class ImageModelFitting:
         if self.coordinates.size > 0:
             column_mask = self.region_column_labels == region_index
             coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
-            coordinates = np.vstack([coordinates, peaks_locations[:, [1, 0]].astype(float)])
-            self. coordinates = coordinates
+            coordinates = np.vstack(
+                [coordinates, peaks_locations[:, [1, 0]].astype(float)]
+            )
+            self.coordinates = coordinates
             atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
-            atom_types = np.append(atom_types, np.zeros(peaks_locations.shape[0], dtype=int))
+            atom_types = np.append(
+                atom_types, np.zeros(peaks_locations.shape[0], dtype=int)
+            )
             self.atom_types = atom_types
         else:
             self.coordinates = peaks_locations[:, [1, 0]].astype(float)
@@ -500,7 +529,7 @@ class ImageModelFitting:
         if plot:
             self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
         return self.coordinates
-    
+
     def get_nearest_peak_distance(self, peak_position: np.ndarray):
         """
         Get the distance of the nearest peak for each peak.
@@ -512,11 +541,13 @@ class ImageModelFitting:
         Returns:
             np.array: The distances of the nearest peaks.
         """
-        other_peaks = np.delete(self.coordinates, np.where(self.coordinates == peak_position), axis=0)
-        distances= np.linalg.norm(other_peaks - peak_position, axis=1).min()
+        other_peaks = np.delete(
+            self.coordinates, np.where(self.coordinates == peak_position), axis=0
+        )
+        distances = np.linalg.norm(other_peaks - peak_position, axis=1).min()
         return distances
 
-    def refine_center_of_mass(self, percent_to_nn: float=0.4, plot=False):
+    def refine_center_of_mass(self, percent_to_nn: float = 0.4, plot=False):
         # do center of mass for each atom
         pre_coordinates = self.coordinates
         current_coordinates = self.coordinates
@@ -528,11 +559,17 @@ class ImageModelFitting:
                 mask_size = int(windows_size * percent_to_nn)
 
                 # calculate the mask for distance < r
-                top, bottom = int(max(int(y) - windows_size, 0)), int(min(int(y) + windows_size + 1, self.ny))
-                left, right = int(max(int(x) - windows_size, 0)), int(min(int(x) + windows_size + 1, self.nx))
+                top, bottom = (
+                    int(max(int(y) - windows_size, 0)),
+                    int(min(int(y) + windows_size + 1, self.ny)),
+                )
+                left, right = (
+                    int(max(int(x) - windows_size, 0)),
+                    int(min(int(x) + windows_size + 1, self.nx)),
+                )
 
                 cetre_x, cetre_y = int(x) - left, int(y) - top
-                
+
                 region = self.image[
                     top:bottom,
                     left:right,
@@ -541,11 +578,13 @@ class ImageModelFitting:
                     continue
                 region = (region - region.min()) / (region.max() - region.min())
                 # region = gaussian_filter(region, 5)
-                
+
                 # create a mask with radius r for region
                 mask = np.zeros_like(region)
-                grid_y, grid_x = np.mgrid[0:region.shape[0], 0:region.shape[1]]
-                mask[(grid_x - cetre_x) ** 2 + (grid_y - cetre_y) ** 2 < mask_size ** 2] = 1
+                grid_y, grid_x = np.mgrid[0 : region.shape[0], 0 : region.shape[1]]
+                mask[
+                    (grid_x - cetre_x) ** 2 + (grid_y - cetre_y) ** 2 < mask_size**2
+                ] = 1
 
                 region = region * mask
 
@@ -554,7 +593,7 @@ class ImageModelFitting:
                 assert isinstance(local_y, float), "local_y is not a float"
                 current_coordinates[i] = np.array(
                     [
-                        int(x) - cetre_x + local_x, 
+                        int(x) - cetre_x + local_x,
                         int(y) - cetre_y + local_y,
                     ],
                     dtype=float,
@@ -562,10 +601,8 @@ class ImageModelFitting:
                 if plot:
                     plt.clf()
                     plt.imshow(region, cmap="gray")
-                    plt.scatter(local_x, local_y, color="red", s=2, label = 'refined')
-                    plt.scatter(
-                        cetre_x, cetre_y, color="blue", s=2, label = 'initial'
-                    ) 
+                    plt.scatter(local_x, local_y, color="red", s=2, label="refined")
+                    plt.scatter(cetre_x, cetre_y, color="blue", s=2, label="initial")
                     plt.legend()
                     plt.pause(1.0)
             converged = np.abs(current_coordinates - pre_coordinates).max() < 0.5
@@ -807,7 +844,6 @@ class ImageModelFitting:
         else:
             raise ValueError("The model type is not valid.")
 
-
         windos_size = int(width * 5)
         x = np.arange(-windos_size, windos_size + 1, 1)
         y = np.arange(-windos_size, windos_size + 1, 1)
@@ -824,12 +860,17 @@ class ImageModelFitting:
             peak_local = voigt_2d_numba(
                 local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma, gamma, ratio
             )
+        else:
+            raise ValueError("The model type is not valid.")
 
         peak_local = np.array(peak_local)
-        prediction = add_peak_at_positions(
+        prediction = (
+            add_peak_at_positions(
                 np.zeros(self.image.shape), pos_x, pos_y, peak_local, windos_size
-            ) + background
-        
+            )
+            + background
+        )
+
         if self.pbc:
             for i, j in [
                 (1, 0),
@@ -850,7 +891,7 @@ class ImageModelFitting:
                 )
         return prediction
 
-    def predict(self, params: dict=None, X: np.ndarray = None, Y: np.ndarray = None):
+    def predict(self, params: dict = None, X: np.ndarray = None, Y: np.ndarray = None):
         if params is None:
             params = self.params
         if X is None or Y is None:
@@ -870,7 +911,7 @@ class ImageModelFitting:
 
         if self.same_width:
             # broadcast the sigma, gamma and ratio according to the self.atom_types
-            if self.model_type in {"gaussian","voigt"}  and sigma is not None:
+            if self.model_type in {"gaussian", "voigt"} and sigma is not None:
                 sigma = sigma[self.atom_types[mask]]
             # Check the model type and broadcast gamma and ratio as needed
             if self.model_type in {"voigt", "lorentzian"} and gamma is not None:
@@ -878,17 +919,49 @@ class ImageModelFitting:
             if self.model_type == "voigt" and ratio is not None:
                 ratio = ratio[self.atom_types[mask]]
         if self.model_type == "gaussian":
-            prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: gaussian_sum_parallel(
-                X, Y, pos_x, pos_y, height, sigma, background
+            prediction_func = (
+                lambda X,
+                Y,
+                pos_x,
+                pos_y,
+                height,
+                sigma,
+                gamma,
+                ratio,
+                background: gaussian_sum_parallel(
+                    X, Y, pos_x, pos_y, height, sigma, background
+                )
             )
         elif self.model_type == "voigt":
-            prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: voigt_sum_parallel(
-                X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background
+            prediction_func = (
+                lambda X,
+                Y,
+                pos_x,
+                pos_y,
+                height,
+                sigma,
+                gamma,
+                ratio,
+                background: voigt_sum_parallel(
+                    X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background
+                )
             )
         elif self.model_type == "lorentzian":
-            prediction_func = lambda X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background: lorentzian_sum_parallel(
-                X, Y, pos_x, pos_y, height, gamma, background
+            prediction_func = (
+                lambda X,
+                Y,
+                pos_x,
+                pos_y,
+                height,
+                sigma,
+                gamma,
+                ratio,
+                background: lorentzian_sum_parallel(
+                    X, Y, pos_x, pos_y, height, gamma, background
+                )
             )
+        else:
+            raise ValueError("The model type is not valid.")
 
         prediction = prediction_func(
             X,
@@ -931,10 +1004,12 @@ class ImageModelFitting:
         else:
             raise ValueError("The model type is not valid.")
         height = params["height"]
-        if (height<0).any():
-            logging.warning("The height has negative values, the linear estimator is not valid, I will make it to zero but be careful with the results.")
-            height[height<0] = 0
-            
+        if (height < 0).any():
+            logging.warning(
+                "The height has negative values, the linear estimator is not valid, I will make it to zero but be careful with the results."
+            )
+            height[height < 0] = 0
+
         rows = []
         cols = []
         data = []
@@ -975,7 +1050,8 @@ class ImageModelFitting:
             cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
             data.extend(np.ones(self.nx * self.ny))
             design_matrix = coo_matrix(
-                (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates + 1)
+                (data, (rows, cols)),
+                shape=(self.nx * self.ny, self.num_coordinates + 1),
             )
         else:
             design_matrix = coo_matrix(
@@ -1015,10 +1091,11 @@ class ImageModelFitting:
 
         # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
         # update the background and height
-        
 
         if self.fit_background:
-            params["background"] = solution[-1] if solution[-1] > 0 else self.init_background
+            params["background"] = (
+                solution[-1] if solution[-1] > 0 else self.init_background
+            )
             height_scale = solution[:-1]
         else:
             height_scale = solution
@@ -1031,16 +1108,18 @@ class ImageModelFitting:
             logging.warning(
                 "The height_scale has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
             )
-            height_scale[height_scale>2] =2
+            height_scale[height_scale > 2] = 2
         if (height_scale < 0.5).any():
             logging.warning(
                 "The height_scale has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
             )
-            height_scale[height_scale<0.5] = 0.5
+            height_scale[height_scale < 0.5] = 0.5
         params["height"] = height_scale * params["height"]
         mask_negative_height = params["height"] < 0
         if mask_negative_height.any():
-            logging.warning(f"The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results.")
+            logging.warning(
+                f"The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results."
+            )
         params["height"][mask_negative_height] = 0
         self.params = params
         return params
@@ -1657,16 +1736,19 @@ class ImageModelFitting:
         plt.title("Residual")
         plt.tight_layout()
 
-    def plot_scs(self, layout="horizontal", per_element=False, s = 1):
-        assert layout in {"horizontal", "vertical"}, "Layout should be horizontal or vertical"
+    def plot_scs(self, layout="horizontal", per_element=False, s=1):
+        assert layout in {
+            "horizontal",
+            "vertical",
+        }, "Layout should be horizontal or vertical"
         if layout == "horizontal":
             row, col = 1, 2
             if per_element:
-                col += len(np.unique(self.atom_types)) -1
+                col += len(np.unique(self.atom_types)) - 1
         else:
             row, col = 2, 1
             if per_element:
-                row += len(np.unique(self.atom_types)) -1
+                row += len(np.unique(self.atom_types)) - 1
         plt.subplots(row, col)
         plt.subplot(row, col, 1)
         plt.imshow(self.image, cmap="gray")
@@ -1792,10 +1874,10 @@ class ImageModelFitting:
         # cmap = color_iter('Set3', self.num_regions)
         # cmap = plt.get_cmap("tab10", self.num_regions)
         plt.imshow(self.image, cmap="gray")
-        plt.imshow(self.region_map,  alpha=0.5)
+        plt.imshow(self.region_map, alpha=0.5)
         scalebar = self.scalebar
         plt.gca().add_artist(scalebar)
         plt.axis("off")
         cbar = plt.colorbar()
-        cbar.set_ticks(np.arange(self.num_regions)) # type: ignore
+        cbar.set_ticks(np.arange(self.num_regions))  # type: ignore
         plt.title("Region Map")
