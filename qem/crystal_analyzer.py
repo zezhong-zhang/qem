@@ -501,41 +501,41 @@ class CrystalAnalyzer:
             fft_log = np.log(fft_image)
             fft_dx = 1 / (self.dx * self.image.shape[1])
             fft_dy = 1 / (self.dx * self.image.shape[0])
-            fft_pixel_size = np.array([fft_dx, fft_dy])
             fft_tolerance_x = np.ceil(1 / np.linalg.norm(real_a * self.dx) / fft_dx / 2).astype(int)
             fft_tolerance_y = np.ceil(1 / np.linalg.norm(real_b * self.dx) / fft_dy / 2).astype(int)
 
-            scale_y = fft_tolerance_x / fft_tolerance_y
+            scale_y = fft_dy/fft_dx
             if scale_y < 1:
                 fft_log_rescaled = rescale(
-                    fft_log, (1, 1 / scale_y), anti_aliasing=False
+                    fft_log, (1, 1/scale_y), anti_aliasing=True
                 )
-                fft_peaks = peak_local_max(
-                    fft_log_rescaled, min_distance=fft_tolerance_y, num_peaks=30
-                )
-                fft_peaks[:, 1] = fft_peaks[:, 1] * scale_y
-            else:
-                fft_log_rescaled = rescale(fft_log, (scale_y, 1), anti_aliasing=False)
                 fft_peaks = peak_local_max(
                     fft_log_rescaled, min_distance=fft_tolerance_x, num_peaks=30
                 )
-                fft_peaks[:, 0] = fft_peaks[:, 0] / scale_y
+                # fft_peaks[:, 1] = fft_peaks[:, 1] * scale_y
+            else:
+                fft_log_rescaled = rescale(fft_log, (scale_y, 1), anti_aliasing=True)
+                fft_peaks = peak_local_max(
+                    fft_log_rescaled, min_distance=fft_tolerance_y, num_peaks=30
+                )
+                # fft_peaks[:, 0] = fft_peaks[:, 0] / scale_y
 
             fft_peaks = fft_peaks[:, [1, 0]].astype(float)
             zoom = 3
             fft_plot = InteractivePlot(
-                fft_log,
+                fft_log_rescaled,
                 fft_peaks,
                 dx=fft_dx,
                 units=f"1/{self.units}",
                 dimension="si-length-reciprocal",
                 zoom=zoom,
+                scale_y=scale_y,
             )
             _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=min(fft_tolerance_x, fft_tolerance_y) * zoom)  # type: ignore
             # normalize the fft vectors
 
-            fft_a = fft_a_pixel * fft_pixel_size / zoom
-            fft_b = fft_b_pixel * fft_pixel_size / zoom
+            fft_a = fft_a_pixel * fft_dx 
+            fft_b = fft_b_pixel * fft_dx
             # get the matrix in real space
             vec_a = fft_a / np.linalg.norm(fft_a) ** 2
             vec_b = fft_b / np.linalg.norm(fft_b) ** 2

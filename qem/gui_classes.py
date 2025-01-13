@@ -211,6 +211,7 @@ class InteractivePlot:
         units: str = "A",
         dimension: str = "si-length",
         zoom: float = 1,
+        scale_y: float = 1,
     ):
         self.pos_x = peaks_locations[:, 0]
         self.pos_y = peaks_locations[:, 1]
@@ -232,6 +233,7 @@ class InteractivePlot:
             0  # 0: Select origin, 1: Select vector a, 2: Select vector b
         )
         self.zoom = zoom
+        self.scale_y = scale_y
         if zoom != 1:
             self.image = zoom_nd(image, upsample_factor=zoom)
             self.pos_x = self.pos_x * zoom - self.image.shape[1] // 2 * (zoom - 1)
@@ -433,6 +435,14 @@ class InteractivePlot:
         )
 
         if selected:
+            if self.scale_y <1:
+                self.vector_a = self.vector_a * self.scale_y
+                self.vector_b = self.vector_b * self.scale_y
+            else:
+                self.vector_a = self.vector_a / self.zoom
+                self.vector_b = self.vector_b / self.zoom
+            self.vector_a = self.vector_a/self.zoom
+            self.vector_b = self.vector_b/self.zoom
             logging.info(
                 f"In pixel: Origin: {self.origin}, Vector a: {self.vector_a}, Vector b: {self.vector_b}"
             )
