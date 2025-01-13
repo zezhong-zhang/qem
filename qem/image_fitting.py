@@ -1,3 +1,4 @@
+from calendar import c
 import copy
 import logging
 import warnings
@@ -99,6 +100,8 @@ class ImageModelFitting:
         self.elements = elements
         self.atoms_selected = np.array([])
         self._coordinates = np.array([])
+        self.coordinates_history = dict()
+        self.coordinates_state = 0
         self.fit_background = True
         self.init_background = 0.0
         self.same_width = True
@@ -319,6 +322,8 @@ class ImageModelFitting:
         guess_radius: bool = False,
         init_background: float = 0.0,
     ):
+        self.coordinates_history = dict()
+        self.coordinates_state = 0
         if guess_radius:
             width = self.guess_radius()[0]
         else:
@@ -1279,8 +1284,9 @@ class ImageModelFitting:
 
         self.fit_local = False
         self.converged = False
+        params = self.linear_estimator(params)
         while self.converged is False and num_epoch > 0:
-            params = self.linear_estimator(params)
+            # params = self.linear_estimator(params)
             pre_params = copy.deepcopy(params)
             num_epoch -= 1
             random_batches = get_random_indices_in_batches(
@@ -1338,7 +1344,7 @@ class ImageModelFitting:
                     plt.show()
             # params = self.same_width_on_atom_type(params)
             self.converged = self.convergence(params, pre_params, tol)
-        params = self.linear_estimator(params)
+        # params = self.linear_estimator(params)
         self.params = params
         self.model = self.predict(params, self.X, self.Y)
         return params
@@ -1431,7 +1437,7 @@ class ImageModelFitting:
             )
             # get equal aspect ratio
             plt.gca().set_aspect("equal", adjustable="box")
-            # plt.gca().invert_yaxis()
+            plt.gca().invert_yaxis()
             plt.subplot(1, 3, 2)
 
             plt.imshow(local_prediction, cmap="gray")
@@ -1455,7 +1461,7 @@ class ImageModelFitting:
             # plt.scatter(local_params["pos_x"][mask] - left, local_params["pos_y"][mask] - top, color='red',s = 1)
             plt.gca().set_aspect("equal", adjustable="box")
 
-            # plt.gca().invert_yaxis()
+            plt.gca().invert_yaxis()
             plt.show()
         return params, local_params
 
@@ -1667,7 +1673,50 @@ class ImageModelFitting:
                 params[key] = jnp.clip(value, 0, np.max(self.image))
         return params
 
+    def update_coordinates(self):
+        # check the refined coorinates is different from the current coordinates
+        refined_coordinates = np.stack([self.params["pos_x"], self.params["pos_y"]], axis=1)
+        if np.allclose(refined_coordinates, self.coordinates):
+            logging.info("The coordinates have converged.")
+            return self.coordinates
+        else: 
+            # create & save the initial coordinates
+            self.coordinates_history[self.coordinates_state] = self.coordinates.copy()
+            # update the coordinates from the params refinement
+            self.coordinates = np.stack([self.params["pos_x"], self.params["pos_y"]], axis=1)
+            self.coordinates_state += 1
+            logging.info(f"The coordinates have been updated. Current state: {self.coordinates_state}" )
+        return self.coordinates
+
     ##### plot functions
+    def calibrate(self, cif_file: str = None, a: float = None, b: float = None, region_index: int = 0, unit_cell: list = None):
+        """
+        Calibrate the pixel size based on the FFT of the lattice.
+        """
+        column_mask = self.region_column_labels == region_index
+        region_mask = self.region_map == region_index
+        crystal_analyzer = CrystalAnalyzer(
+            image=self.image,
+            dx=self.dx,
+            peak_positions=self.coordinates[column_mask],
+            atom_types=self.atom_types[column_mask],
+            elements=self.elements,
+            units=self.units,
+            region_mask=region_mask,
+        )
+        if unit_cell is not None:
+            crystal_analyzer.unit_cell = unit_cell
+        if cif_file is not None:
+            crystal_analyzer.read_cif(cif_file)
+
+        a = a if a is not None else np.linalg.norm(crystal_analyzer.unit_cell.cell[0])
+        b = b if b is not None else np.linalg.norm(crystal_analyzer.unit_cell.cell[1])
+        _, vec_a_pixel, vec_b_pixel = crystal_analyzer.select_lattice_vectors(reciprocal=True)
+        dx_a = a /np.linalg.norm(vec_a_pixel) 
+        dx_b = b /np.linalg.norm(vec_b_pixel)
+        self.dx = (dx_a + dx_b) / 2
+        logging.info(f"Calibrated pixel size: {self.dx} {self.units}")
+    
     def plot(self, vmin=None, vmax=None):
         if vmin is None:
             # get the bottom 5% of the image
@@ -1736,7 +1785,7 @@ class ImageModelFitting:
         plt.title("Residual")
         plt.tight_layout()
 
-    def plot_scs(self, layout="horizontal", per_element=False, s=1):
+    def plot_scs(self, layout="horizontal", per_element=False, s=1, save=False, has_units=True, half:str=None, figsize=(10, 5)):
         assert layout in {
             "horizontal",
             "vertical",
@@ -1749,21 +1798,32 @@ class ImageModelFitting:
             row, col = 2, 1
             if per_element:
                 row += len(np.unique(self.atom_types)) - 1
-        plt.subplots(row, col)
+        plt.figure(figsize=figsize)
         plt.subplot(row, col, 1)
         plt.imshow(self.image, cmap="gray")
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
             element = self.elements[int(atom_type)]
+            if half is not None:
+                if half == "top":
+                    mask = mask & (self.coordinates[:, 1] < self.ny / 2)
+                elif half == "bottom":
+                    mask = mask & (self.coordinates[:, 1] > self.ny / 2)
+                elif half == "left":
+                    mask = mask & (self.coordinates[:, 0] < self.nx / 2)
+                elif half == "right":
+                    mask = mask & (self.coordinates[:, 0] > self.nx / 2)
             plt.scatter(
                 self.coordinates[mask, 0],
                 self.coordinates[mask, 1],
                 s=s,
                 label=element,
             )
-        plt.legend()
+        plt.legend(loc = "upper right")
         plt.gca().set_aspect("equal", adjustable="box")
         plt.axis("off")
+        scalebar = self.scalebar
+        plt.gca().add_artist(scalebar)
         plt.title("Image")
         plt.tight_layout()
 
@@ -1772,6 +1832,7 @@ class ImageModelFitting:
         pos_y = self.params["pos_y"] * self.dx
         if per_element:
             plt_idx = 1
+            col = len(np.unique(self.atom_types)) + 1
             for atom_type in np.unique(self.atom_types):
                 plt_idx += 1
                 plt.subplot(row, col, plt_idx)
@@ -1784,37 +1845,70 @@ class ImageModelFitting:
                     s=s,
                     label=element,
                 )
-                plt.colorbar(im, fraction=0.046, pad=0.04)
-                plt.gca().invert_yaxis()
+                cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
                 plt.gca().set_aspect("equal", adjustable="box")
-                plt.title(rf"Refined {element} scs ($\AA^2$)")
+                # plt.axis("off")
+                plt.xlim(0, self.nx * self.dx)
+                plt.ylim(0, self.ny * self.dx)
+                plt.xlabel(r"X ($\AA$)")
+                plt.ylabel(r"Y ($\AA$)")
+                plt.title(f"{element}")
+                plt.gca().invert_yaxis()
+                # add title to the colorbar
+                if atom_type == self.atom_types.max():
+                    if has_units:
+                        cbar.set_label(r"SCS ($\AA^2$)")
+                    else:
+                        cbar.set_label("Integrated intensities")
                 plt.tight_layout()
         else:
             plt.subplot(row, col, 2)
             im = plt.scatter(pos_x, pos_y, c=self.volume, s=2)
             plt.colorbar(im, fraction=0.046, pad=0.04)
+            # plt.axis("off")
+            plt.xlim(0, self.nx * self.dx)
+            plt.ylim(0, self.ny * self.dx)
+            plt.xlabel(r"X ($\AA$)")
+            plt.ylabel(r"Y ($\AA$)")
             plt.gca().invert_yaxis()
             plt.gca().set_aspect("equal", adjustable="box")
-            plt.title(r"QEM refined scs ($\AA^2$)")
+            if has_units:
+                cbar.set_label(r"SCS ($\AA^2$)")
+            else:
+                cbar.set_label("Integrated intensities")
             plt.tight_layout()
+        if save:
+            plt.savefig("scs.svg")
+            plt.savefig("scs.png", dpi=300)
 
-    def plot_scs_voronoi(self, layout="horizontal", s=1, per_element=False):
+    def plot_scs_voronoi(self, layout="horizontal", s=1, per_element=False, save=False, has_units=True, half:str=None, figsize=(10, 5)):
         assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
         if per_element:
             row, col = 1, 2
             col += len(np.unique(self.atom_types)) - 1
+            plt.figure(figsize=figsize)
             plt.subplot(row, col, 1)
             plt.imshow(self.image, cmap="gray")
             for atom_type in np.unique(self.atom_types):
                 mask = self.atom_types == atom_type
                 element = self.elements[atom_type]
+                if half is not None:
+                    if half == "top":
+                        mask = mask & (self.coordinates[:, 1] < self.ny / 2)
+                    elif half == "bottom":
+                        mask = mask & (self.coordinates[:, 1] > self.ny / 2)
+                    elif half == "left":
+                        mask = mask & (self.coordinates[:, 0] < self.nx / 2)
+                    elif half == "right":
+                        mask = mask & (self.coordinates[:, 0] > self.nx / 2)
                 plt.scatter(
                     self.coordinates[mask, 0],
                     self.coordinates[mask, 1],
                     s=1,
                     label=element,
                 )
-            plt.legend()
+            plt.legend(loc="upper right")
+            plt.gca().add_artist(self.scalebar)
             plot_idx = 2
             for atom_type in np.unique(self.atom_types):
                 mask = self.atom_types == atom_type
@@ -1825,15 +1919,24 @@ class ImageModelFitting:
                 im = plt.scatter(
                     pos_x, pos_y, c=self.voronoi_volume[mask], s=s, label=element
                 )
-                plt.legend()
-                plt.gca().invert_yaxis()
                 plt.gca().set_aspect("equal", adjustable="box")
-                plt.colorbar(im, fraction=0.046, pad=0.04)
-                plt.title(rf"Voronoi scs ($\AA^2$) for {element}")
+                cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
+                # plt.axis("off")
+                plt.xlim(0, self.nx * self.dx)
+                plt.ylim(0, self.ny * self.dx)
+                plt.xlabel(r"X ($\AA$)")
+                plt.ylabel(r"Y ($\AA$)")
+                plt.gca().invert_yaxis()
+                plt.title(f"{element}")
+                if atom_type == self.atom_types.max():
+                    if has_units:
+                        cbar.set_label(r"Voronoi SCS ($\AA^2$)")
+                    else:
+                        cbar.set_label("Voronoi integrated intensities")
                 plot_idx += 1
         else:
             row, col = (1, 2) if layout == "horizontal" else (2, 1)
-            plt.subplots(row, col)
+            plt.figure()
             plt.subplot(row, col, 1)
             plt.imshow(self.image, cmap="gray")
             for atom_type in np.unique(self.atom_types):
@@ -1856,18 +1959,32 @@ class ImageModelFitting:
             plt.gca().invert_yaxis()
             plt.gca().set_aspect("equal", adjustable="box")
             plt.colorbar(im, fraction=0.046, pad=0.04)
-            plt.title(r"Voronoi scs ($\AA^2$)")
+            if has_units:
+                plt.title(r"Voronoi scs ($\AA^2$)")
+            else:
+                plt.title("Voronoi integrated intensities")
+        plt.tight_layout()
 
-    def plot_scs_histogram(self):
+        if save:
+            plt.savefig("voronoi_scs.svg")
+            plt.savefig("voronoi_scs.png", dpi=300)
+
+    def plot_scs_histogram(self, save=False, has_units=True):
         plt.figure()
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
             element = self.elements[atom_type]
             plt.hist(self.volume[mask], bins=100, alpha=0.5, label=element)
         plt.legend()
-        plt.xlabel(r"Refined SCS ($\AA^2$)")
+        if has_units:
+            plt.xlabel(r"Refined SCS ($\AA^2$)")
+        else:
+            plt.xlabel("Integrated intensities")
         plt.ylabel("Frequency")
         plt.title("Histogram of QEM refined SCS")
+        if save:
+            plt.savefig("scs_histogram.svg")
+            plt.savefig("scs_histogram.png", dpi=300)
 
     def plot_region(self):
         plt.figure()
