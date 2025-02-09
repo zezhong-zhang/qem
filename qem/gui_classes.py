@@ -439,8 +439,8 @@ class InteractivePlot:
                 self.vector_a = self.vector_a * self.scale_y
                 self.vector_b = self.vector_b * self.scale_y
             else:
-                self.vector_a = self.vector_a / self.zoom
-                self.vector_b = self.vector_b / self.zoom
+                self.vector_a = self.vector_a / self.scale_y
+                self.vector_b = self.vector_b / self.scale_y
             self.vector_a = self.vector_a/self.zoom
             self.vector_b = self.vector_b/self.zoom
             logging.info(
