@@ -24,6 +24,7 @@ from skimage.feature.peak import peak_local_max
 from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 from ase import Atoms
+from ase.visualize import view
 
 from qem.crystal_analyzer import CrystalAnalyzer
 from qem.gui_classes import InteractivePlot
@@ -387,6 +388,25 @@ class ImageModelFitting:
     def import_coordinates(self, coordinates: np.ndarray):
         self.coordinates = coordinates
 
+    def total_lattice(self):
+        # combine all the regional atomic columns
+        for region_index in self.region_atomic_column.keys():
+            atomic_column = self.region_atomic_column[region_index]
+            lattice = atomic_column.lattice
+            if region_index == 0:
+                lattice_total = lattice
+            else:
+                lattice_total += lattice
+        return lattice_total
+
+
+    def view_3d(self, region_index: int = None):
+        if region_index is None:
+            view(self.total_lattice())
+        else:
+            assert region_index in self.region_atomic_column.keys(), "The region index is not in the region_atomic_column."
+            view(self.region_atomic_column[region_index].lattice)
+
     def map_lattice(
         self,
         elements: list[str],
@@ -394,6 +414,7 @@ class ImageModelFitting:
         unit_cell: Atoms = None,  # type: ignore
         reciprocal: bool = False,
         region_index: int = 0,
+        sigma: float = 0.8,
     ):
         """
         Find the peaks in the image based on the CIF file.
@@ -420,7 +441,7 @@ class ImageModelFitting:
             crystal_analyzer.unit_cell = unit_cell
         if cif_file is not None:
             crystal_analyzer.read_cif(cif_file)
-        atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal)
+        atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal,sigma=sigma)
         # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
         coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
         coordinates = np.vstack([coordinates, atomic_column_list.positions_pixel])
@@ -1300,7 +1321,6 @@ class ImageModelFitting:
                 mask = np.zeros(self.num_coordinates, dtype=bool)
                 mask[index] = True
                 self.atoms_selected = mask
-                # params = self.same_width_on_atom_type(params)
                 select_params = self.select_params(params, mask)
                 try:
                     if not self.gpu_memory_limit:
@@ -1342,9 +1362,8 @@ class ImageModelFitting:
                     plt.imshow(image - global_prediction, cmap="gray")
                     plt.gca().set_aspect("equal", adjustable="box")
                     plt.show()
-            # params = self.same_width_on_atom_type(params)
             self.converged = self.convergence(params, pre_params, tol)
-        # params = self.linear_estimator(params)
+        params = self.linear_estimator(params)
         self.params = params
         self.model = self.predict(params, self.X, self.Y)
         return params
