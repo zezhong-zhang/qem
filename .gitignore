@@ -1,14 +1,10 @@
-data/
 qem/archieve/
 qem/__pycache__/
+tests/__pycache__/
 .vscode/
 examples/ABO3.lammps
 examples/adf_aligned.hspy
 examples/SrTiO3_mp-5229_conventional_standard.cif
-tests/__pycache__/__init__.cpython-311.pyc
-tests/__pycache__/test_crystal_analyzer.cpython-311-pytest-8.1.1.pyc
-tests/__pycache__/test_GMM.cpython-311-pytest-8.1.1.pyc
-tests/__pycache__/test_preprocessing.cpython-311-pytest-8.1.1.pyc
 examples/*.cif
 examples/*.lmp
 examples/*.xyz
@@ -22,9 +18,13 @@ examples/yolo/
 examples/__pycache__/
 examples/others/
 archieve/
+data_local/
 
 examples/fft_utils.py
 examples/Spectral_Unmixing.ipynb
 examples/1859 HAADF 33.7 nm.emd.hspy
 examples/ETO_KTO.ipynb
 examples/ETO_KTO.py
+examples/ETO_KTO/
+.coverage
+data/2016-05_efficientFitProgram/
