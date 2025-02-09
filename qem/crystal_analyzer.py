@@ -61,6 +61,7 @@ class CrystalAnalyzer:
         atoms = read(cif_file_path)
         assert isinstance(atoms, Atoms), "atoms should be a ase Atoms object"
         mask = [atom.symbol in self.elements for atom in atoms]  # type: ignore
+        logging.info(f"Reading CIF file: {cif_file_path}. The elements selected are {self.elements} and the elements in the CIF file are {atoms.symbols}")
         self.unit_cell = atoms[mask]
         return atoms
 
@@ -102,29 +103,13 @@ class CrystalAnalyzer:
     def get_atomic_columns(
         self,
         tol: float = 0,
-        a_limit: int = 0,
-        b_limit: int = 0,
         reciprocal: bool = True,
+        sigma: float = 0.8,
     ):
         self.select_lattice_vectors(reciprocal=reciprocal)
-        # estimate the a_limit and b_limit if not provided
-        if a_limit == 0:
-            a_limit = np.ceil(
-                max(self.nx - self.origin[0], self.origin[0])
-                * self.dx
-                / self.unit_cell.get_cell()[0][0]  # type: ignore
-            ).astype(int)
-        if b_limit == 0:
-            b_limit = np.ceil(
-                max(self.ny - self.origin[1], self.origin[1])
-                * self.dx
-                / self.unit_cell.get_cell()[1][1]  # type: ignore
-            ).astype(int)
 
         # get the supercell lattice in 3d and project to 2d
-        lattice_3d, lattice_3d_ref = self.get_lattice_3d(
-            a_limit=a_limit, b_limit=b_limit
-        )
+        lattice_3d, lattice_3d_ref = self.get_lattice_3d(sigma)
         assert isinstance(lattice_3d, Atoms), "lattice_3d should be an Atoms object"
         assert isinstance(
             lattice_3d_ref, Atoms
@@ -229,34 +214,33 @@ class CrystalAnalyzer:
             self.plot_unitcell(mode=mode)
         return shifted_unit_cell
 
-    def region_of_interest(self, sigma: float = 1.5):
+    def region_of_interest(self, sigma: float = 0.8):
         # use the current coordinates to filter the peak_positions
         # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
         region_of_interest = np.zeros(self.image.shape, dtype=bool)
         for i in range(len(self.peak_positions)):
             x, y = self.peak_positions[i]
             region_of_interest[
-                int(max(y - 3 * sigma, 0)) : int(min(y + 3 * sigma, self.ny)),
-                int(max(x - 3 * sigma, 0)) : int(min(x + 3 * sigma, self.nx)),
+                int(max(y - 3 * sigma/self.dx, 0)) : int(min(y + 3 * sigma/self.dx, self.ny)),
+                int(max(x - 3 * sigma/self.dx, 0)) : int(min(x + 3 * sigma/self.dx, self.nx)),
             ] = True
         return region_of_interest
 
-    def get_lattice_3d(self, a_limit: int = 0, b_limit: int = 0):
+    def get_lattice_3d(self,sigma: float = 0.8):
         """
         Generate a supercell lattice based on the given lattice vectors and limits.
 
         Parameters:
-        - a_limit: The number of times to repeat the a lattice vector.
-        - b_limit: The number of times to repeat the b lattice vector.
+        - sigma: The sigma value around the intial peak positions to consider for the supercell lattice.
 
         Returns:
         - supercell_lattice: The supercell lattice.
         """
         supercell = Atoms()
         supercell_ref = Atoms()
-        shift_origin_adaptive = self.get_origin_offset(a_limit, b_limit, "adaptive")
-        # shift_origin_affine = self.get_origin_offset(a_limit, b_limit, 'affine')
-        shift_origin_perfect = self.get_origin_offset(a_limit, b_limit, "perfect")
+        shift_origin_adaptive = self.get_origin_offset("adaptive")
+        # shift_origin_affine = self.get_origin_offset('affine')
+        shift_origin_perfect = self.get_origin_offset("perfect")
 
         for translation, new_origin in shift_origin_adaptive.items():
             unitcell = self.align_unit_cell_to_image(
@@ -271,7 +255,7 @@ class CrystalAnalyzer:
             supercell.extend(unitcell)
             supercell_ref.extend(unitcell_ref)
 
-        is_within_image_bounds = (supercell.positions[:, :2] / self.dx > 0).all(
+        is_within_image_bounds = (supercell.positions[:, :2] / self.dx >= 0).all(
             axis=1
         ) & (supercell.positions[:, [1, 0]] / self.dx < self.image.shape).all(axis=1)
         supercell = supercell[is_within_image_bounds]
@@ -295,7 +279,7 @@ class CrystalAnalyzer:
             )
         )
 
-        valid_region_mask = self.region_of_interest(0.8 / self.dx) & self.region_mask
+        valid_region_mask = self.region_of_interest(sigma / self.dx) & self.region_mask
 
         peak_region_filter = np.ones(supercell.get_global_number_of_atoms(), dtype=bool)
         for i in range(supercell.get_global_number_of_atoms()):
@@ -326,7 +310,7 @@ class CrystalAnalyzer:
             return None
 
     def get_origin_offset(
-        self, a_limit: int = 0, b_limit: int = 0, mode: str = "adaptive"
+        self, mode: str = "adaptive"
     ):
         assert mode in [
             "perfect",
@@ -334,12 +318,29 @@ class CrystalAnalyzer:
             "adaptive",
         ], "mode should be either 'perfect', 'affine' or 'adaptive'"
         if not self._origin_offsets[mode]:
-            self._calc_origin_offsets(a_limit, b_limit)
+            self._calc_origin_offsets()
         return self._origin_offsets[mode]
 
-    def _calc_origin_offsets(self, a_limit: int, b_limit: int):
+    def _calc_origin_offsets(self):
         # get the perfect mapping of the unit cell to the image
         self.align_unit_cell_to_image(plot=False, mode="perfect")
+        # estimate the a_limit and b_limit if not provided
+
+        # distance_up_left = np.linalg.norm(self.origin) 
+        # distance_up_right = np.linalg.norm(self.origin - np.array([self.nx, 0]))
+        # distance_down_left = np.linalg.norm(self.origin - np.array([0,self.ny]))
+        # distance_down_right = np.linalg.norm(self.origin - np.array([self.nx, self.ny]))
+
+        a_limit = 5* np.ceil(
+            max(self.nx - self.origin[0], self.origin[0])
+            * self.dx
+            / self.unit_cell.get_cell()[0][0]  # type: ignore
+        ).astype(int)
+        b_limit = 5* np.ceil(
+            max(self.ny - self.origin[1], self.origin[1])
+            * self.dx
+            / self.unit_cell.get_cell()[1][1]  # type: ignore
+        ).astype(int)
 
         # generate a meshgrid
         a_axis_mesh, b_axis_mesh = np.meshgrid(
@@ -676,7 +677,7 @@ class CrystalAnalyzer:
         plt.gca().add_artist(self.scalebar)
         plt.axis("off")
 
-    def plot_strain(self, cut_off: float = 5.0):
+    def plot_strain(self, cut_off: float = 5.0, save: bool = False):
         epsilon_xx, epsilon_yy, epsilon_xy, omega_xy = self.get_strain(cut_off)
         plt.subplots(2, 2, constrained_layout=True)
         plt.subplot(2, 2, 1)
@@ -729,6 +730,9 @@ class CrystalAnalyzer:
         plt.axis("off")
         plt.title(r"$\omega_{xy}$")
         # plt.tight_layout()
+        if save:
+            plt.savefig("strain_map.png", dpi=300)
+            plt.savefig("strain_map.svg")
 
     ####### properties #######
     @property
