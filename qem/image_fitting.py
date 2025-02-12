@@ -10,7 +10,7 @@ import optax
 from hyperspy._signals.signal2d import Signal2D
 from jax import numpy as jnp
 from jax import value_and_grad
-from jax.lib.xla_extension import XlaRuntimeError
+from jaxlib.xla_extension import XlaRuntimeError
 from jax.example_libraries import optimizers
 from jax.scipy.optimize import minimize
 from jaxopt import OptaxSolver
