@@ -45,9 +45,8 @@ jobs:
 
     - name: Setup GPU (if needed)
       if: matrix.platform == 'gpu'
-      uses: Jimver/cuda-toolkit@v0.2.14
+      uses: Jimver/cuda-toolkit@v0.2.21
       with:
-        cuda: '12.1.0'
         method: 'network'
         sub-packages: '["nvcc", "cudart", "cublas", "cublas-dev"]'
     
