@@ -1,18 +1,24 @@
 import os
-import numpy as np
-import jax.numpy as jnp
 import pytest
+import numpy as np
+import jax
+import jax.numpy as jnp
+
+# Configure JAX to use CPU if CUDA is not available
+if not jax.config.jax_platforms:
+    os.environ["JAX_PLATFORMS"] = "cpu"
+    os.environ["JAX_ENABLE_X64"] = "True"
+
+import jax
+if os.environ.get('JAX_PLATFORMS') == 'cuda':
+    jax.config.update('jax_platform_name', 'gpu')
+    jax.config.update('jax_enable_x64', True)
+
 from qem.model import (
     gaussian_2d_numba, lorentzian_2d_numba, voigt_2d_numba,
     gaussian_2d_jax, butterworth_window, gaussian_kernel,
     gaussian_filter_jax, mask_grads
 )
-
-# Configure JAX
-import jax
-if os.environ.get('JAX_PLATFORMS') == 'cuda':
-    jax.config.update('jax_platform_name', 'gpu')
-    jax.config.update('jax_enable_x64', True)
 
 @pytest.fixture
 def grid_2d():
