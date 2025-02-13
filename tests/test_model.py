@@ -1,7 +1,4 @@
-# Configure JAX to use CPU when GPU is not available
 import os
-os.environ['JAX_PLATFORMS'] = 'cpu'
-
 import numpy as np
 import jax.numpy as jnp
 import pytest
@@ -10,10 +7,6 @@ from qem.model import (
     gaussian_2d_jax, butterworth_window, gaussian_kernel,
     gaussian_filter_jax, mask_grads
 )
-
-# Configure JAX to use CPU when GPU is not available
-import os
-os.environ['JAX_PLATFORMS'] = 'cpu'
 
 @pytest.fixture
 def grid_2d():
