@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax import jit, lax, vmap
+from jax import jit
 from jax.scipy.signal import convolve2d
 from numba import jit as njit
 

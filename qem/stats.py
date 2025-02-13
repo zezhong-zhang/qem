@@ -1,7 +1,6 @@
 import jax
 import jax.numpy as jnp
 import jax.random as random
-import matplotlib.pyplot as plt
 import numpy as np
 
 

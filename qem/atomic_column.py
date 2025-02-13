@@ -1,6 +1,6 @@
 import numpy as np
 from dataclasses import dataclass, field
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from ase import Atoms
 from qem.periodic_table import chemical_symbols
 from matscipy.atomic_strain import atomic_strain

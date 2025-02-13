@@ -1,4 +1,3 @@
-from calendar import c
 import copy
 import logging
 import warnings
@@ -15,8 +14,7 @@ from jax.example_libraries import optimizers
 from jax.scipy.optimize import minimize
 from jaxopt import OptaxSolver
 from matplotlib_scalebar.scalebar import ScaleBar
-from scipy.ndimage import center_of_mass
-from qem.refine import calculate_center_of_mass, fit_gaussian
+from qem.refine import calculate_center_of_mass
 from scipy.optimize import lsq_linear
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
@@ -1144,7 +1142,7 @@ class ImageModelFitting:
         mask_negative_height = params["height"] < 0
         if mask_negative_height.any():
             logging.warning(
-                f"The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results."
+                "The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results."
             )
         params["height"][mask_negative_height] = 0
         self.params = params

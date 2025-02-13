@@ -1,11 +1,9 @@
-import math
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import PolygonSelector
 from matplotlib.path import Path
 import logging
 from qem.color import get_unique_colors
-import os
 
 logging.basicConfig(level=logging.INFO)
 from matplotlib_scalebar.scalebar import ScaleBar
