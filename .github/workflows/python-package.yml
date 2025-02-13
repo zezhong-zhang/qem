@@ -34,11 +34,22 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
     
+    - name: Install GCC 11
+      if: matrix.platform == 'gpu'
+      run: |
+        sudo apt update
+        sudo apt install -y gcc-11 g++-11
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
+        gcc --version
+
     - name: Setup GPU (if needed)
       if: matrix.platform == 'gpu'
       uses: Jimver/cuda-toolkit@v0.2.14
       with:
         cuda: '12.1.0'
+        method: 'network'
+        sub-packages: '["nvcc", "cudart", "cublas", "cublas-dev"]'
     
     - name: Install dependencies
       run: |
@@ -72,5 +83,5 @@ jobs:
         files: ./coverage.xml
         fail_ci_if_error: false
         flags: ${{ matrix.platform }}_py${{ matrix.python-version }}
-        name: ${{ matrix.platform }}-python${{ matrix.python-version }}
+        name: coverage-${{ matrix.platform }}-python${{ matrix.python-version }}-${{ github.run_id }}
         verbose: true
