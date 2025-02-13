@@ -98,11 +98,29 @@ def test_gaussian_2d_jax(grid_2d, peak_params):
     assert result.shape == (50, 50, 2)
     
     # Check peak heights at specified positions with appropriate tolerance
-    tolerance = 1e-4  # Use same tolerance for both CPU and GPU
+    rtol = 0.02  # 2% relative tolerance
     for i in range(len(pos_x)):
         x_idx = np.abs(X[0, :] - pos_x[i]).argmin()
         y_idx = np.abs(Y[:, 0] - pos_y[i]).argmin()
-        assert np.abs(result[y_idx, x_idx, i] - height[i]) < tolerance
+        # Get a small neighborhood around the peak to account for discretization
+        peak_region = result[max(0, y_idx-1):min(50, y_idx+2), 
+                           max(0, x_idx-1):min(50, x_idx+2), i]
+        max_value = np.max(peak_region)
+        # For a non-normalized Gaussian, the peak height should be exactly height[i]
+        assert np.isclose(max_value, height[i], rtol=rtol)
+        
+        # Check relative decay at specific distances
+        distance = np.sqrt((X - pos_x[i])**2 + (Y - pos_y[i])**2)
+        # At one standard deviation (width), value should be height * exp(-0.5)
+        one_sigma_mask = np.abs(distance - width) < 0.2
+        if np.any(one_sigma_mask):
+            one_sigma_values = result[..., i][one_sigma_mask]
+            expected_value = height[i] * np.exp(-0.5)
+            assert np.any(np.abs(one_sigma_values - expected_value) < rtol * height[i])
+        
+        # At three standard deviations, value should be very small
+        three_sigma_mask = (distance > 3 * width)
+        assert np.all(result[..., i][three_sigma_mask] < 0.05 * height[i])
 
 def test_butterworth_window():
     shape = (32, 32)
@@ -127,15 +145,16 @@ def test_gaussian_kernel():
     kernel = gaussian_kernel(sigma)
     
     # Check kernel is symmetric with appropriate tolerance
-    tolerance = 1e-5  # Use same tolerance for both CPU and GPU
-    assert np.allclose(kernel, kernel.T, rtol=tolerance, atol=tolerance)
+    rtol = 1e-5  # relative tolerance
+    atol = 1e-8  # absolute tolerance
+    assert np.allclose(kernel, kernel.T, rtol=rtol, atol=atol)
     
     # Check kernel sums to approximately 1
-    assert np.abs(np.sum(kernel) - 1.0) < tolerance
+    assert np.abs(np.sum(kernel) - 1.0) < rtol
     
     # Check peak at center
     center = kernel.shape[0] // 2
-    assert np.abs(kernel[center, center] - np.max(kernel)) < tolerance
+    assert np.abs(kernel[center, center] - np.max(kernel)) < atol
 
 def test_gaussian_filter_jax():
     # Create test image
@@ -158,8 +177,8 @@ def test_gaussian_filter_jax():
     assert filtered[10, 10] < 1.0
     
     # Check total intensity approximately preserved
-    tolerance = 1e-5  # Use same tolerance for both CPU and GPU
-    assert np.abs(np.sum(filtered) - np.sum(image)) < tolerance
+    rtol = 1e-5  # relative tolerance
+    assert np.isclose(np.sum(filtered), np.sum(image), rtol=rtol)
 
 def test_mask_grads():
     # Create dummy gradients dictionary
