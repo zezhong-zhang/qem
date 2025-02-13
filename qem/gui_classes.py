@@ -1,14 +1,18 @@
-import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.widgets import PolygonSelector
-from matplotlib.path import Path
 import logging
+
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.path import Path
+from matplotlib.widgets import PolygonSelector
+
 from qem.color import get_unique_colors
 
 logging.basicConfig(level=logging.INFO)
-from matplotlib_scalebar.scalebar import ScaleBar
 import tkinter as tk
 from tkinter import simpledialog
+
+from matplotlib_scalebar.scalebar import ScaleBar
+
 from qem.zoom import zoom_nd
 
 

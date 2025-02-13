@@ -1,5 +1,6 @@
-import itertools
 import colorsys
+import itertools
+
 import numpy as np
 
 YlGn = {

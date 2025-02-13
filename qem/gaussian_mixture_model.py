@@ -1,9 +1,11 @@
+import logging
+
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit, minimize
 from tqdm import tqdm
+
 from qem.utils import safe_ln
-import matplotlib.pyplot as plt
-import logging
 
 logging.basicConfig(level=logging.INFO)
 
@@ -111,15 +113,15 @@ class GaussianMixtureModel:
         n_component,
         use_scs_channel=None,
         metric="nllh",
-        score_method=["icl"],
+        score_method=None,
         init_method="middle",
         lim_rate=1e-5,
         lim_ite=1e5,
         given_weight=None,
         given_mean=None,
         given_width=None,
-        fit_step_size=[1, [1, 1], [1, 1]],
-        constraint=[],
+        fit_step_size=None,
+        constraint=None,
     ):
         """
         Fits a Gaussian Mixture Model (GMM) to the data.
@@ -143,6 +145,12 @@ class GaussianMixtureModel:
         """
         # constraint = ['uni_width', 'no_cov', '45deg', 'dose_width']
 
+        if constraint is None:
+            constraint = []
+        if fit_step_size is None:
+            fit_step_size = [1, [1, 1], [1, 1]]
+        if score_method is None:
+            score_method = ["icl"]
         self.initCondition(
             n_component,
             use_scs_channel,
@@ -428,7 +436,7 @@ class GaussianMixtureModel:
             plt.plot(
                 np.argmin(self.result.score[cri]) + 1, min(self.result.score[cri]), "o"
             )
-        legend = ax.legend(loc="upper center")
+        ax.legend(loc="upper center")
         plt.show(block=False)
         plt.pause(1)
         return None

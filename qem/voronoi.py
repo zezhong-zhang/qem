@@ -1,7 +1,7 @@
-import numpy as np
 import numba as nb
+import numpy as np
+from hyperspy.signals import BaseSignal, Signal2D
 from skimage.segmentation import watershed
-from hyperspy.signals import Signal2D, BaseSignal
 from tqdm import tqdm as progressbar
 
 

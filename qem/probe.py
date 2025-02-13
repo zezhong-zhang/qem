@@ -1,7 +1,9 @@
 """Functions for emulating electron optics of a TEM."""
 
-import numpy as np
 import copy
+
+import numpy as np
+
 from qem.utils import q_space_array
 
 
@@ -100,7 +102,7 @@ def aberration_starter_pack():
     return aberrations
 
 
-def chi(q, qphi, lam, df=0.0, aberrations=[]):
+def chi(q, qphi, lam, df=0.0, aberrations=None):
     r"""
     Calculate the aberration function, chi.
 
@@ -123,6 +125,8 @@ def chi(q, qphi, lam, df=0.0, aberrations=[]):
         The aberration function, will be the same shape as `q`. This is used to
         calculate the probe wave function in reciprocal space.
     """
+    if aberrations is None:
+        aberrations = []
     qlam = q * lam
     chi_ = qlam ** 2 / 2 * df
     for ab in aberrations:
@@ -140,11 +144,11 @@ def make_contrast_transfer_function(
     real_dim,
     eV,
     app,
-    optic_axis=[0, 0],
-    aperture_shift=[0, 0],
+    optic_axis=None,
+    aperture_shift=None,
     tilt_units="mrad",
     df=0,
-    aberrations=[],
+    aberrations=None,
     q=None,
     app_units="mrad",
 ):
@@ -184,6 +188,12 @@ def make_contrast_transfer_function(
         The lens contrast transfer function in reciprocal space
     """
     # Make reciprocal space array
+    if aberrations is None:
+        aberrations = []
+    if aperture_shift is None:
+        aperture_shift = [0, 0]
+    if optic_axis is None:
+        optic_axis = [0, 0]
     if q is None:
         q = q_space_array(pix_dim, real_dim[:2])
 
@@ -233,11 +243,11 @@ def focused_probe(
     rsize,
     eV,
     app,
-    beam_tilt=[0, 0],
-    aperture_shift=[0, 0],
+    beam_tilt=None,
+    aperture_shift=None,
     tilt_units="mrad",
     df=0,
-    aberrations=[],
+    aberrations=None,
     q=None,
     app_units="mrad",
     qspace=False,
@@ -280,6 +290,12 @@ def focused_probe(
     probe : complex (Y,X) np.ndarray
         The requested electron probe wave function
     """
+    if aberrations is None:
+        aberrations = []
+    if aperture_shift is None:
+        aperture_shift = [0, 0]
+    if beam_tilt is None:
+        beam_tilt = [0, 0]
     probe = make_contrast_transfer_function(
         gridshape,
         rsize,
@@ -304,7 +320,7 @@ def focused_probe(
 
 
 def plane_wave_illumination(
-    gridshape, gridsize, eV, tilt=[0, 0], tilt_units="mrad", qspace=False
+    gridshape, gridsize, eV, tilt=None, tilt_units="mrad", qspace=False
 ):
     """
     Generate plane wave illumination for input to multislice.
@@ -333,6 +349,8 @@ def plane_wave_illumination(
     illum : np.ndarray (Y,X)
     """
     # Initialize array that contains wave function
+    if tilt is None:
+        tilt = [0, 0]
     illum = np.zeros(gridshape, dtype=complex)
 
     # Convert tilt to units of pixels
@@ -385,7 +403,7 @@ def relativistic_mass_correction(E):
 
 
 def simulation_result_with_Cc(
-    func, Cc, deltaE, eV, args=[], kwargs={}, npoints=7, deltaEconv="1/e"
+    func, Cc, deltaE, eV, args=None, kwargs=None, npoints=7, deltaEconv="1/e"
 ):
     """
     Perform a simulation using function, taking into account chromatic aberration.
@@ -423,6 +441,10 @@ def simulation_result_with_Cc(
     """
     # Check if a defocii has already been specified if not, assume that nominal
     # (mean) defocus is 0
+    if kwargs is None:
+        kwargs = {}
+    if args is None:
+        args = []
     if "df" in kwargs.keys():
         nominal_df = kwargs["df"]
     else:
@@ -498,7 +520,7 @@ def Cc_integration_points(Cc, deltaE, eV, npoints=7, deltaEconv="1/e"):
     """
     # Import the error function (integral of Gaussian) and inverse error function
     # from scipy's special functions library
-    from scipy.special import erfinv, erf
+    from scipy.special import erf, erfinv
 
     # First divide the gaussian pdf into npoints different regions of equal
     # "area"

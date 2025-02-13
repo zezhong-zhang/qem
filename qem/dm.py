@@ -6,8 +6,9 @@ can be used under
 GNU Lesser General Public License  
 """
 
-import numpy as np
 import struct
+
+import numpy as np
 
 
 def dm_load(filename, index=0, prt=False) -> tuple:
@@ -380,7 +381,7 @@ class read_DM(object):
         4:number of tags in group
         """
         l_group = 0
-        if self.dm_ext == 4 and root == False:
+        if self.dm_ext == 4 and root is False:
             l_group = get_uint64(self.f, "big")
         is_sorted = get_int8(self.f, "big")
         is_open = get_int8(self.f, "big")
@@ -416,7 +417,7 @@ class read_DM(object):
 
             markers = 0  # markers count
             # find th eright position
-            for i in range(4 + 2 * deviation):
+            for _i in range(4 + 2 * deviation):
                 ch = self.read_string(1)  # read '%' marker
                 if self.print:
                     print(ch)
@@ -466,7 +467,7 @@ class read_DM(object):
                 "number of tags ",
                 n_tags,
             )
-        if is_sorted == False:
+        if is_sorted is False:
             group_dict["sorted"] = False
 
         index = 0
@@ -474,7 +475,7 @@ class read_DM(object):
             tag_code, tag_name = self.name_header()
             if self.print:
                 print("   ", tag, "Name:", tag_name, "      code:", tag_code)
-            if root == False and not tag_name:  # if tag_name=='', they are numbered
+            if root is False and not tag_name:  # if tag_name=='', they are numbered
                 tag_name = str(index)
                 index += 1
 
@@ -674,7 +675,7 @@ class read_DM(object):
         for the strings, array of 2byte symbols (DM code 4) mostly used
         """
         data = b""
-        for char in range(length):
+        for _char in range(length):
             data += get_char(self.f, self.endian)
 
         try:
@@ -690,11 +691,11 @@ class read_DM(object):
         read the tuple with types of structure elements
         (type_0,type_1,...,type_n-1)
         """
-        dummy0 = self.read_DMvalue()  # should be zero
+        self.read_DMvalue()  # should be zero
         n_notes = self.read_DMvalue()
         types = ()
-        for type in range(n_notes):
-            dummyI = self.read_DMvalue()  # should be zero
+        for _type in range(n_notes):
+            self.read_DMvalue()  # should be zero
             types += (self.read_DMvalue(),)
 
         return types
@@ -725,7 +726,7 @@ class read_DM(object):
         else:  # array of numbers
             if eltype == 4:  # array of char, i.e. string (often in DM files)
                 data = ""
-                for i in range(size):
+                for _i in range(size):
                     data += chr(reader(self.f, self.endian))
             else:
                 data = [reader(self.f, self.endian) for element in range(size)]
@@ -818,7 +819,7 @@ class write_DM(object):
         according Bernhard Schaffer these Tags are obligatory for any dm file
         """
         im_data_dict = {}
-        if calibration != None:
+        if calibration is not None:
             calibrationC = calibration.copy()
             int_dict = calibrationC["Intensity"]
             del calibrationC["Intensity"]
@@ -841,7 +842,7 @@ class write_DM(object):
 
         im_dict = {"ImageData": im_data_dict}
 
-        if metadata != None:
+        if metadata is not None:
             im_dict["ImageTags"] = metadata
 
         im_list_dict = {"ImageList": {"0": im_dict}}
@@ -1065,7 +1066,7 @@ class write_DM(object):
         if offset == (-1):  # dm3 or dm4 root group, no need to store the group length
             self.group_stack.append(-1)  # reset buffer
         else:
-            if is_broken == True:
+            if is_broken is True:
                 group_length = (
                     len(self.b_before) - offset + self.size * self.depth + len(self.b)
                 )

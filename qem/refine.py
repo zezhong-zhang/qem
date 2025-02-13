@@ -1,7 +1,7 @@
+import matplotlib.pyplot as plt
 import numpy as np
 from numba import jit
 from scipy.optimize import curve_fit
-import matplotlib.pyplot as plt
 
 
 def calculate_center_of_mass(arr):

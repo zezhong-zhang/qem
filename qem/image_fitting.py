@@ -6,41 +6,40 @@ import jax
 import matplotlib.pyplot as plt
 import numpy as np
 import optax
+from ase import Atoms
+from ase.visualize import view
 from hyperspy._signals.signal2d import Signal2D
 from jax import numpy as jnp
 from jax import value_and_grad
-from jaxlib.xla_extension import XlaRuntimeError
 from jax.example_libraries import optimizers
 from jax.scipy.optimize import minimize
+from jaxlib.xla_extension import XlaRuntimeError
 from jaxopt import OptaxSolver
+from matplotlib.path import Path
 from matplotlib_scalebar.scalebar import ScaleBar
-from qem.refine import calculate_center_of_mass
+from scipy.ndimage import gaussian_filter
 from scipy.optimize import lsq_linear
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 from skimage.feature.peak import peak_local_max
-from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
-from ase import Atoms
-from ase.visualize import view
 
 from qem.crystal_analyzer import CrystalAnalyzer
-from qem.gui_classes import InteractivePlot
+from qem.gui_classes import GetAtomSelection, GetRegionSelection, InteractivePlot
 from qem.model import (
     add_peak_at_positions,
     butterworth_window,
     gaussian_2d_numba,
-    lorentzian_2d_numba,
-    voigt_2d_numba,
     gaussian_sum_parallel,
+    lorentzian_2d_numba,
     lorentzian_sum_parallel,
     mask_grads,
+    voigt_2d_numba,
     voigt_sum_parallel,
 )
+from qem.refine import calculate_center_of_mass
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import voronoi_integrate
-from qem.gui_classes import GetAtomSelection, GetRegionSelection
-from matplotlib.path import Path
 
 logging.basicConfig(level=logging.INFO)
 
@@ -943,47 +942,14 @@ class ImageModelFitting:
             if self.model_type == "voigt" and ratio is not None:
                 ratio = ratio[self.atom_types[mask]]
         if self.model_type == "gaussian":
-            prediction_func = (
-                lambda X,
-                Y,
-                pos_x,
-                pos_y,
-                height,
-                sigma,
-                gamma,
-                ratio,
-                background: gaussian_sum_parallel(
-                    X, Y, pos_x, pos_y, height, sigma, background
-                )
-            )
+            def prediction_func(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
+                return gaussian_sum_parallel(X, Y, pos_x, pos_y, height, sigma, background)
         elif self.model_type == "voigt":
-            prediction_func = (
-                lambda X,
-                Y,
-                pos_x,
-                pos_y,
-                height,
-                sigma,
-                gamma,
-                ratio,
-                background: voigt_sum_parallel(
-                    X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background
-                )
-            )
+            def prediction_func(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
+                return voigt_sum_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background)
         elif self.model_type == "lorentzian":
-            prediction_func = (
-                lambda X,
-                Y,
-                pos_x,
-                pos_y,
-                height,
-                sigma,
-                gamma,
-                ratio,
-                background: lorentzian_sum_parallel(
-                    X, Y, pos_x, pos_y, height, gamma, background
-                )
-            )
+            def prediction_func(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
+                return lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background)
         else:
             raise ValueError("The model type is not valid.")
 
@@ -1183,7 +1149,9 @@ class ImageModelFitting:
         )
         opt_state = opt_init(params)
 
-        def step(step_index, opt_state, params, image, X, Y, keys_to_mask=[]):
+        def step(step_index, opt_state, params, image, X, Y, keys_to_mask=None):
+            if keys_to_mask is None:
+                keys_to_mask = []
             loss, grads = value_and_grad(self.loss)(params, image, X, Y)
             masked_grads = mask_grads(grads, keys_to_mask)
             opt_state = opt_update(step_index, masked_grads, opt_state)

@@ -1,5 +1,6 @@
 import numpy as np
 
+
 def zoom_on_pixel(input_array, coordinates, upsample_factor=1, output_shape=None, 
                   num_threads=1, use_numpy_fft=False, return_real=True, 
                   return_coordinates=False):
@@ -27,7 +28,7 @@ def zoom_on_pixel(input_array, coordinates, upsample_factor=1, output_shape=None
         output_shape = input_shape
 
     coordinate_grid = np.zeros((input_array.ndim,) + tuple(output_shape), dtype='float')
-    for dim, (input_size, output_size, target) in enumerate(zip(input_shape, output_shape, coordinates)):
+    for dim, (_input_size, output_size, target) in enumerate(zip(input_shape, output_shape, coordinates)):
         zoom_range = np.linspace(
             target - (output_size - 1) / (2 * upsample_factor),
             target + (output_size - 1) / (2 * upsample_factor),

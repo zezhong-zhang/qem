@@ -1,7 +1,8 @@
+from os.path import exists as file_exists
+
+import numpy as np
 import scipy.io as sio
 from PIL import Image
-from os.path import exists as file_exists
-import numpy as np
 
 
 def read_legacyInputStatSTEM(filename):
