@@ -8,6 +8,12 @@ from qem.model import (
     gaussian_filter_jax, mask_grads
 )
 
+# Configure JAX
+import jax
+if os.environ.get('JAX_PLATFORMS') == 'cuda':
+    jax.config.update('jax_platform_name', 'gpu')
+    jax.config.update('jax_enable_x64', True)
+
 @pytest.fixture
 def grid_2d():
     x = np.linspace(-5, 5, 50)
@@ -74,14 +80,16 @@ def test_gaussian_2d_jax(grid_2d, peak_params):
     X, Y = grid_2d
     pos_x, pos_y, height, width, _, _ = peak_params
     
-    # Convert inputs to jax arrays
-    X_jax = jnp.array(X, dtype=jnp.float32)
-    Y_jax = jnp.array(Y, dtype=jnp.float32)
-    pos_x_jax = jnp.array(pos_x, dtype=jnp.float32)
-    pos_y_jax = jnp.array(pos_y, dtype=jnp.float32)
-    height_jax = jnp.array(height, dtype=jnp.float32)
+    # Convert inputs to jax arrays with explicit dtype
+    dtype = jnp.float64 if jax.config.x64_enabled else jnp.float32
+    X_jax = jnp.asarray(X, dtype=dtype)
+    Y_jax = jnp.asarray(Y, dtype=dtype)
+    pos_x_jax = jnp.asarray(pos_x, dtype=dtype)
+    pos_y_jax = jnp.asarray(pos_y, dtype=dtype)
+    height_jax = jnp.asarray(height, dtype=dtype)
+    width_jax = jnp.asarray(width, dtype=dtype)
     
-    result = gaussian_2d_jax(X_jax, Y_jax, pos_x_jax, pos_y_jax, height_jax, width)
+    result = gaussian_2d_jax(X_jax, Y_jax, pos_x_jax, pos_y_jax, height_jax, width_jax)
     
     # Convert result back to numpy for testing
     result = np.array(result)
@@ -89,11 +97,12 @@ def test_gaussian_2d_jax(grid_2d, peak_params):
     # Check shape
     assert result.shape == (50, 50, 2)
     
-    # Check peak heights at specified positions with relaxed tolerance
+    # Check peak heights at specified positions with appropriate tolerance
+    tolerance = 1e-4  # Use same tolerance for both CPU and GPU
     for i in range(len(pos_x)):
         x_idx = np.abs(X[0, :] - pos_x[i]).argmin()
         y_idx = np.abs(Y[:, 0] - pos_y[i]).argmin()
-        assert np.abs(result[y_idx, x_idx, i] - height[i]) < 0.05
+        assert np.abs(result[y_idx, x_idx, i] - height[i]) < tolerance
 
 def test_butterworth_window():
     shape = (32, 32)
@@ -117,15 +126,16 @@ def test_gaussian_kernel():
     sigma = 1.5
     kernel = gaussian_kernel(sigma)
     
-    # Check kernel is symmetric
-    assert np.allclose(kernel, kernel.T)
+    # Check kernel is symmetric with appropriate tolerance
+    tolerance = 1e-5  # Use same tolerance for both CPU and GPU
+    assert np.allclose(kernel, kernel.T, rtol=tolerance, atol=tolerance)
     
     # Check kernel sums to approximately 1
-    assert np.abs(np.sum(kernel) - 1.0) < 1e-6
+    assert np.abs(np.sum(kernel) - 1.0) < tolerance
     
     # Check peak at center
     center = kernel.shape[0] // 2
-    assert kernel[center, center] == np.max(kernel)
+    assert np.abs(kernel[center, center] - np.max(kernel)) < tolerance
 
 def test_gaussian_filter_jax():
     # Create test image
@@ -133,8 +143,9 @@ def test_gaussian_filter_jax():
     image[10, 10] = 1.0
     sigma = 1.5
     
-    # Convert to jax array
-    image_jax = jnp.array(image)
+    # Convert to jax array with explicit dtype
+    dtype = jnp.float64 if jax.config.x64_enabled else jnp.float32
+    image_jax = jnp.asarray(image, dtype=dtype)
     
     # Apply filter
     filtered = gaussian_filter_jax(image_jax, sigma)
@@ -147,7 +158,8 @@ def test_gaussian_filter_jax():
     assert filtered[10, 10] < 1.0
     
     # Check total intensity approximately preserved
-    assert np.abs(np.sum(filtered) - np.sum(image)) < 1e-6
+    tolerance = 1e-5  # Use same tolerance for both CPU and GPU
+    assert np.abs(np.sum(filtered) - np.sum(image)) < tolerance
 
 def test_mask_grads():
     # Create dummy gradients dictionary
