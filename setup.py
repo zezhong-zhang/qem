@@ -25,6 +25,7 @@ setup(
         "hyperspy",
         "jaxopt",
         "optax",
+        "matplotlib-scalebar @ git+https://github.com/zezhong-zhang/matplotlib-scalebar.git",
     ],
     python_requires=">=3.6",
     extras_require={
