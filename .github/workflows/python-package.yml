@@ -24,7 +24,7 @@ jobs:
             runs-on: ubuntu-latest
             jax-platform: cuda
     
-    runs-on: ${{ matrix.runs-on }}
+    runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
@@ -68,7 +68,9 @@ jobs:
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:
-        file: ./coverage.xml
-        fail_ci_if_error: true
-        flags: ${{ matrix.platform }}-py${{ matrix.python-version }}
-        name: codecov-${{ matrix.platform }}-py${{ matrix.python-version }}
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.xml
+        fail_ci_if_error: false
+        flags: ${{ matrix.platform }}_py${{ matrix.python-version }}
+        name: ${{ matrix.platform }}-python${{ matrix.python-version }}
+        verbose: true
