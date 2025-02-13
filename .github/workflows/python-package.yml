@@ -10,61 +10,94 @@ on:
     branches: [ "master" ]
 
 jobs:
-  # lint:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #   - uses: actions/checkout@v3
-  #   - name: Set up Python
-  #     uses: actions/setup-python@v3
-  #     with:
-  #       python-version: '3.11'
-  #   - name: Install dependencies
-  #     run: |
-  #       python -m pip install --upgrade pip
-  #       pip install ruff
-  #   - name: Check formatting
-  #     run: |
-  #       ruff check . --output-format=github
-  #       ruff format --check .
-
   test:
-    # needs: lint
-    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.8", "3.9", "3.10", "3.11"]
-
+        python-version: ["3.9", "3.10", "3.11"]
+        platform: [cpu]
+        include:
+          - python-version: "3.11"
+            platform: gpu
+            jax-platform: cuda
+    
+    runs-on: ubuntu-latest
+    
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
+    
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v3
       with:
         python-version: ${{ matrix.python-version }}
+    
+    - name: Install GCC 11
+      if: matrix.platform == 'gpu'
+      run: |
+        sudo apt update
+        sudo apt install -y gcc-11 g++-11
+        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-11 100
+        sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-11 100
+        gcc --version
+
+    - name: Setup GPU (if needed)
+      if: matrix.platform == 'gpu'
+      uses: Jimver/cuda-toolkit@v0.2.21
+      with:
+        cuda: '12.8.0'
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        python -m pip install pytest pytest-cov
+        python -m pip install flake8 pytest pytest-cov
         # Install git so we can install from git repositories
         sudo apt-get update && sudo apt-get install -y git
         if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-        pip install jax jaxlib
-        pip install -e .
-
-    - name: Set JAX platform
-      run: |
-        if [ -x "$(command -v nvidia-smi)" ]; then
-          echo "CUDA GPU found"
-          pip install --upgrade "jax[cuda]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
-          echo "JAX_PLATFORMS=cuda" >> $GITHUB_ENV
-          echo "JAX_ENABLE_X64=True" >> $GITHUB_ENV
+        # Install JAX with appropriate backend
+        if [ "${{ matrix.platform }}" = "gpu" ]; then
+          pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
         else
-          echo "No CUDA GPU found, using CPU"
           pip install --upgrade "jax[cpu]"
-          echo "JAX_PLATFORMS=cpu" >> $GITHUB_ENV
-          echo "JAX_ENABLE_X64=True" >> $GITHUB_ENV
         fi
+        # Install the package with dev dependencies
+        pip install -e ".[dev]"
+    
+    - name: Configure JAX Platform
+      run: |
+        if [ "${{ matrix.platform }}" = "gpu" ]; then
+          echo "JAX_PLATFORMS=cuda" >> $GITHUB_ENV
+          echo "JAX_ENABLE_X64=true" >> $GITHUB_ENV
+          echo "XLA_PYTHON_CLIENT_PREALLOCATE=false" >> $GITHUB_ENV
+          echo "XLA_PYTHON_CLIENT_MEM_FRACTION=.5" >> $GITHUB_ENV
+        else
+          echo "JAX_PLATFORMS=cpu" >> $GITHUB_ENV
+        fi
+    
+    - name: Lint with flake8
+      run: |
+        # stop the build if there are Python syntax errors or undefined names
+        flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+        # exit-zero treats all errors as warnings
+        flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
     
     - name: Test with pytest
       run: |
-        pytest
+        # Configure JAX for the appropriate platform
+        if [ "${{ matrix.platform }}" = "gpu" ]; then
+          export XLA_FLAGS="--xla_gpu_strict_conv_algorithm_picker=false"
+          export JAX_ENABLE_X64=true
+          export JAX_PLATFORMS=cuda
+        else
+          export JAX_PLATFORMS=cpu
+        fi
+        python -m pytest tests/ --cov=qem --cov-report=xml -v
+    
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        files: ./coverage.xml
+        fail_ci_if_error: false
+        flags: ${{ matrix.platform }}_py${{ matrix.python-version }}
+        name: coverage-${{ matrix.platform }}-python${{ matrix.python-version }}-${{ github.run_id }}
+        verbose: true
