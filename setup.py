@@ -32,7 +32,7 @@ setup(
             "build",
             "black",
             "pytest",
-            "pytest-cov"
+            "pytest-cov",
             "sphinx",
             "sphinx_rtd_theme",
             "myst-parser",
