@@ -47,8 +47,7 @@ jobs:
       if: matrix.platform == 'gpu'
       uses: Jimver/cuda-toolkit@v0.2.21
       with:
-        method: 'network'
-        sub-packages: '["nvcc", "cudart", "cublas", "cublas-dev"]'
+        cuda: '12.8.0'
     
     - name: Install dependencies
       run: |
