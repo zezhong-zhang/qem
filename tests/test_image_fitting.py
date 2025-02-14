@@ -1,11 +1,17 @@
 import os
+
 os.environ["JAX_PLATFORMS"] = "cpu"  # Force JAX to use CPU
 
+import jax
 import numpy as np
 import pytest
-from qem.image_fitting import ImageModelFitting
-from qem.model import gaussian_sum_parallel
 
+from qem.image_fitting import ImageModelFitting
+from qem.model import (gaussian_sum_parallel, lorentzian_sum_parallel,
+                       voigt_sum_parallel)
+
+# Set JAX to use CPU since no GPU is available
+jax.config.update('jax_platforms', 'cpu')
 
 def test_gaussian_peak_fitting():
     # Test parameters
@@ -101,21 +107,6 @@ def test_gaussian_peak_fitting():
     model_image = fitter.predict(fitter.params, fitter.X, fitter.Y)
     residual = np.mean(np.abs(synthetic_image - model_image))
     assert residual < 0.1, f"Residual {residual} is too large"
-
-
-import numpy as np
-import jax
-import pytest
-
-from qem.model import (
-    gaussian_sum_parallel,
-    lorentzian_sum_parallel,
-    voigt_sum_parallel
-)
-from qem.image_fitting import ImageModelFitting
-
-# Set JAX to use CPU since no GPU is available
-jax.config.update('jax_platforms', 'cpu')
 
 @pytest.mark.parametrize("peak_type,gen_func", [
     ("gaussian", gaussian_sum_parallel),
