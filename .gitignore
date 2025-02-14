@@ -29,3 +29,4 @@ examples/ETO_KTO/
 .coverage
 data/2016-05_efficientFitProgram/
 flake8_autofix/
+examples/dev.ipynb
