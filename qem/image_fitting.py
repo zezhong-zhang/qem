@@ -1848,7 +1848,7 @@ class ImageModelFitting:
         else:
             plt.subplot(row, col, 2)
             im = plt.scatter(pos_x, pos_y, c=self.volume, s=2)
-            plt.colorbar(im, fraction=0.046, pad=0.04)
+            cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
             # plt.axis("off")
             plt.xlim(0, self.nx * self.dx)
             plt.ylim(0, self.ny * self.dx)
