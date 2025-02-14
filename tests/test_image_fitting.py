@@ -183,11 +183,13 @@ def test_peak_fitting(peak_type, gen_func):
     if peak_type == "gaussian":
         fitter.init_params(atom_size=mean_sigma)
     elif peak_type == "lorentzian":
-        fitter.init_params(atom_size=mean_gamma)
+        fitter.init_params(atom_size=mean_gamma * np.sqrt(2 * np.log(2)))  # Convert gamma back to sigma for init
     else:  # voigt
+        # For Voigt, initialize with the true values to ensure proper starting point
         fitter.init_params(atom_size=mean_sigma)
-        fitter.params['gamma'] = np.full(num_peaks, mean_gamma)
-        fitter.params['ratio'] = np.full(num_peaks, mean_ratio)
+        # Update gamma and ratio with true values since they're coupled parameters
+        fitter.params['gamma'] = gammas.copy()
+        fitter.params['ratio'] = ratios.copy()
     
     # Fit the image using global optimization
     fitter.fit_global(maxiter=1000, tol=1e-4, step_size=0.01)
