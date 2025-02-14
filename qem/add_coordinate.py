@@ -1,4 +1,7 @@
-# add_coordinate.py
+"""
+Module for handling interactive coordinate addition and removal in matplotlib plots.
+"""
+
 import numpy as np
 
 
@@ -9,12 +12,14 @@ class AddCoordinate:
     on the plot to add or remove coordinates.
 
     Attributes:
-        line (matplotlib.lines.Line2D): The line object which is updated upon user interaction.
+        line (matplotlib.lines.Line2D): The line object which is updated
+            upon user interaction.
         init_coordinate (numpy.ndarray): Initial coordinates.
         extra_line (list): List of additional line objects to be updated.
 
     Methods:
-        __call__(event): Method that handles mouse events; adds or removes coordinates based on user clicks.
+        __call__(event): Method that handles mouse events; adds or removes coordinates
+            based on user clicks.
     """
 
     def __init__(self, line, init_coordinate, extra_line):
@@ -22,9 +27,11 @@ class AddCoordinate:
         Initializes the AddCoordinate object.
 
         Parameters:
-            line (matplotlib.lines.Line2D): The line object in the matplotlib plot.
+            line (matplotlib.lines.Line2D): The line object in the
+                matplotlib plot.
             init_coordinate (numpy.ndarray): Initial set of coordinates.
-            extra_line (list): Additional line objects that need to be updated along with the main line.
+            extra_line (list): Additional line objects that need to be
+                updated along with the main line.
         """
         self.line = line
         self.y, self.x = init_coordinate
@@ -33,7 +40,8 @@ class AddCoordinate:
 
     def __call__(self, event):
         """
-        Method to handle mouse click events. Left-click adds a point, right-click removes the nearest point.
+        Method to handle mouse click events. Left-click adds a point, right-click
+            removes the nearest point.
 
         Parameters:
             event: Mouse event object containing information about the click.
