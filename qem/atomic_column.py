@@ -75,7 +75,14 @@ class AtomicColumns:
         _, mask = np.unique(lattice_2d.positions[:, :2], axis=0, return_index=True)
         lattice_2d = lattice_2d[mask]
         i, j = neighbour_list('ij', lattice_2d, cutoff)
-        local_displacements = self.get_column_displacement(units) - np.array([np.mean(self.get_column_displacement(units)[j[i == idx]], axis=0) for idx in range(len(lattice_2d))])
+        local_displacements = (
+            self.get_column_displacement(units)
+            -
+            np.array([
+                np.mean(self.get_column_displacement(units)[j[i == idx]], axis=0)
+                for idx in range(len(i))
+            ])
+        )
         return local_displacements
 
     def get_column_displacement(self, units='pixel') -> np.ndarray:
@@ -151,7 +158,10 @@ class AtomicColumns:
         # sign_a = np.sign((self.positions_pixel - origin) @ vector_a)
         # sign_b = np.sign((self.positions_pixel - origin) @ vector_b)
         # project th local displacements onto the lattice vectors
-        deformation_gradient_tensor = np.array([np.dot(displacement, vector_a)/np.linalg.norm(vector_a)**2*vector_a[:, None], np.dot(displacement, vector_b)/np.linalg.norm(vector_b)**2 * vector_b[:, None]])
+        deformation_gradient_tensor = np.array([
+            np.dot(displacement, vector_a) / np.linalg.norm(vector_a)**2 * vector_a[:, None],
+            np.dot(displacement, vector_b) / np.linalg.norm(vector_b)**2 * vector_b[:, None]
+        ])
         lattice_matrix = np.array([vector_a, vector_b])
         strain_matrix = np.linalg.inv(lattice_matrix) @ deformation_gradient_tensor
         epsilon_xx = strain_matrix[0, 0]
