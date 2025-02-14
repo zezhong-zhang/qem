@@ -9,6 +9,7 @@ from qem.utils import safe_ln
 
 logging.basicConfig(level=logging.INFO)
 
+
 class GaussianMixtureModel:
     """
     Represents a Gaussian Mixture Model.
@@ -583,12 +584,12 @@ class GaussianMixtureModel:
         """
         penalty = 2
         n_component, n_val = np.shape(tau)
-        ## weight
+        # weight
         n_para = (self.step[0] != 0) * (n_component - 1)
-        ## mean
+        # mean
         n_para_mean = n_component * self.n_dim
         n_para += n_para_mean
-        ## width
+        # width
         n_para_width = [1, n_component]
         if "uni_width" in self.constraint:
             n_para_width[1] = 1

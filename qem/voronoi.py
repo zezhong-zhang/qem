@@ -348,5 +348,5 @@ def _border_elems(image, pixels=1):
 
     """
     arr = np.ones_like(image, dtype=bool)
-    arr[pixels : -1 - (pixels - 1), pixels : -1 - (pixels - 1)] = False
+    arr[pixels: -1 - (pixels - 1), pixels: -1 - (pixels - 1)] = False
     return image[arr]

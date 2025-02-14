@@ -18,6 +18,7 @@ def gaussian_2d_numba(X, Y, pos_x, pos_y, height, width):
     )
     return gauss
 
+
 @njit(nopython=True)
 def lorentzian_2d_numba(X, Y, pos_x, pos_y, height, gamma):
     # Unpack the parameters
@@ -27,6 +28,7 @@ def lorentzian_2d_numba(X, Y, pos_x, pos_y, height, gamma):
         + gamma**2
     )
     return lorentz
+
 
 @njit(nopython=True)
 def voigt_2d_numba(X, Y, pos_x, pos_y, height, sigma, gamma, ratio):
@@ -40,6 +42,7 @@ def voigt_2d_numba(X, Y, pos_x, pos_y, height, sigma, gamma, ratio):
         + (1 - ratio) * gamma**3 / (R2 + gamma**2) ** (3 / 2)
     )
     return voigt
+
 
 @jit
 def gaussian_2d_jax(X, Y, pos_x, pos_y, height, width):

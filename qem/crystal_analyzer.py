@@ -57,7 +57,7 @@ class CrystalAnalyzer:
         self.lattice = Atoms
         self.lattice_ref = Atoms
 
-    ######### I/O ################
+    # I/O ################
     def read_cif(self, cif_file_path: str):
         atoms = read(cif_file_path)
         assert isinstance(atoms, Atoms), "atoms should be a ase Atoms object"
@@ -100,7 +100,7 @@ class CrystalAnalyzer:
             mask.append(site.symbol == element_symbol)
         return mask
 
-    ######### lattice mapping ################
+    # lattice mapping ################
     def get_atomic_columns(
         self,
         tol: float = 0,
@@ -222,12 +222,12 @@ class CrystalAnalyzer:
         for i in range(len(self.peak_positions)):
             x, y = self.peak_positions[i]
             region_of_interest[
-                int(max(y - 3 * sigma/self.dx, 0)) : int(min(y + 3 * sigma/self.dx, self.ny)),
-                int(max(x - 3 * sigma/self.dx, 0)) : int(min(x + 3 * sigma/self.dx, self.nx)),
+                int(max(y - 3 * sigma/self.dx, 0)): int(min(y + 3 * sigma/self.dx, self.ny)),
+                int(max(x - 3 * sigma/self.dx, 0)): int(min(x + 3 * sigma/self.dx, self.nx)),
             ] = True
         return region_of_interest
 
-    def get_lattice_3d(self,sigma: float = 0.8):
+    def get_lattice_3d(self, sigma: float = 0.8):
         """
         Generate a supercell lattice based on the given lattice vectors and limits.
 
@@ -327,17 +327,17 @@ class CrystalAnalyzer:
         self.align_unit_cell_to_image(plot=False, mode="perfect")
         # estimate the a_limit and b_limit if not provided
 
-        # distance_up_left = np.linalg.norm(self.origin) 
+        # distance_up_left = np.linalg.norm(self.origin)
         # distance_up_right = np.linalg.norm(self.origin - np.array([self.nx, 0]))
         # distance_down_left = np.linalg.norm(self.origin - np.array([0,self.ny]))
         # distance_down_right = np.linalg.norm(self.origin - np.array([self.nx, self.ny]))
 
-        a_limit = 5* np.ceil(
+        a_limit = 5 * np.ceil(
             max(self.nx - self.origin[0], self.origin[0])
             * self.dx
             / self.unit_cell.get_cell()[0][0]  # type: ignore
         ).astype(int)
-        b_limit = 5* np.ceil(
+        b_limit = 5 * np.ceil(
             max(self.ny - self.origin[1], self.origin[1])
             * self.dx
             / self.unit_cell.get_cell()[1][1]  # type: ignore
@@ -448,7 +448,7 @@ class CrystalAnalyzer:
     #         self.neighbor_site_dict[site_idx] = neighbor_sites
     #     return neighbor_sites
 
-    ####### strain mapping #######
+    # strain mapping #######
     def get_strain(self, cut_off: float = 5.0):
         """
         Get the strain of the atomic columns based on the given cut-off radius.
@@ -462,7 +462,7 @@ class CrystalAnalyzer:
         return self.atomic_columns.get_strain(float(cut_off))
         # return self.atomic_columns.get_strain(cut_off)
 
-    ####### select region and lattice vectors #######
+    # select region and lattice vectors #######
 
     def select_region(self, peak_positions: np.ndarray, atom_types: np.ndarray):
         atom_select = GetAtomSelection(
@@ -494,7 +494,7 @@ class CrystalAnalyzer:
             dx=self.dx,
             units=self.units,
         )
-        
+
         real_origin, real_a, real_b = real_plot.select_vectors(tolerance=tolerance)  # type: ignore
 
         if reciprocal:
@@ -536,7 +536,7 @@ class CrystalAnalyzer:
             _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=min(fft_tolerance_x, fft_tolerance_y) * zoom)  # type: ignore
             # normalize the fft vectors
 
-            fft_a = fft_a_pixel * fft_dx 
+            fft_a = fft_a_pixel * fft_dx
             fft_b = fft_b_pixel * fft_dx
             # get the matrix in real space
             vec_a = fft_a / np.linalg.norm(fft_a) ** 2
@@ -559,7 +559,7 @@ class CrystalAnalyzer:
             self.origin = real_origin
             return real_origin, real_a, real_b
 
-    ####### plot #######
+    # plot #######
     def plot(self):
         plt.imshow(self.image, cmap="gray")
         color_iterator = get_unique_colors()
@@ -735,7 +735,7 @@ class CrystalAnalyzer:
             plt.savefig("strain_map.png", dpi=300)
             plt.savefig("strain_map.svg")
 
-    ####### properties #######
+    # properties #######
     @property
     def nx(self):
         return self.image.shape[1]

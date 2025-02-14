@@ -72,6 +72,7 @@ def get_atom_type():
     root.destroy()  # Close the main window
     return atom_type
 
+
 class GetRegionSelection:
     def __init__(self, image, region_map, invert_selection=False):
         self.image = image
@@ -93,7 +94,7 @@ class GetRegionSelection:
 
     def onselect(self, verts):
         self.path = Path(verts)
-        self.verts = verts    
+        self.verts = verts
         self.region_mask = self.get_region_mask()
         self.fig.canvas.draw()
         self.fig.canvas.flush_events()
@@ -199,7 +200,6 @@ class GetAtomSelection:
         if invert_selection:
             region_mask = ~region_mask
         return region_mask
-   
 
 
 class InteractivePlot:
@@ -343,7 +343,7 @@ class InteractivePlot:
                 i = np.argmin(distance)
                 self.selected_point = (self.pos_x[i], self.pos_y[i])
                 plt.scatter(
-                    self.pos_x[i], self.pos_y[i], color="black",edgecolors="black", marker="x"
+                    self.pos_x[i], self.pos_y[i], color="black", edgecolors="black", marker="x"
                 )
                 plt.draw()
 
@@ -437,7 +437,7 @@ class InteractivePlot:
         )
 
         if selected:
-            if self.scale_y <1:
+            if self.scale_y < 1:
                 self.vector_a = self.vector_a * self.scale_y
                 self.vector_b = self.vector_b * self.scale_y
             else:

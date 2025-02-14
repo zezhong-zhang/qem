@@ -112,7 +112,7 @@ class ImageModelFitting:
         y = np.arange(self.ny)
         self.X, self.Y = np.meshgrid(x, y, indexing="xy")
 
-    ### Properties
+    # Properties
 
     @property
     def window(self):
@@ -221,7 +221,7 @@ class ImageModelFitting:
     def num_regions(self):
         return len(np.unique(self.region_map))
 
-    ### voronoi integration
+    # voronoi integration
     def voronoi_integration(self, plot=False):
         """
         Compute the Voronoi integration of the atomic columns.
@@ -253,7 +253,7 @@ class ImageModelFitting:
             intensity_record.plot(cmap="viridis")
         return integrated_intensity, intensity_record, point_record
 
-    ### init peaks and parameters
+    # init peaks and parameters
     def guess_radius(self):
         """
         Estimate the density of atomic columns in an image.
@@ -278,7 +278,7 @@ class ImageModelFitting:
                 i_r = np.minimum(self.coordinates[i, 0] + n, self.nx).astype(np.int64)
                 i_u = np.maximum(self.coordinates[i, 1] - n, 0).astype(np.int64)
                 i_d = np.minimum(self.coordinates[i, 1] + n, self.ny).astype(np.int64)
-                influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
+                influence_map[i_l: i_r + 1, i_u: i_d + 1] = 1
             if n == 0:
                 rate = (np.sum(influence_map) - n_filled) / num_coordinates
             else:
@@ -300,14 +300,14 @@ class ImageModelFitting:
             i_r = np.minimum(self.coordinates[i, 0] + n1, nx).astype(np.int64)
             i_u = np.maximum(self.coordinates[i, 1] - n1, 0).astype(np.int64)
             i_d = np.minimum(self.coordinates[i, 1] + n1, ny).astype(np.int64)
-            influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
+            influence_map[i_l: i_r + 1, i_u: i_d + 1] = 1
 
             # Calculate the indices for the smaller area (direct_influence_map)
             i_l = np.maximum(self.coordinates[i, 0] - n2, 0).astype(np.int64)
             i_r = np.minimum(self.coordinates[i, 0] + n2, nx).astype(np.int64)
             i_u = np.maximum(self.coordinates[i, 1] - n2, 0).astype(np.int64)
             i_d = np.minimum(self.coordinates[i, 1] + n2, ny).astype(np.int64)
-            direct_influence_map[i_l : i_r + 1, i_u : i_d + 1] = 1
+            direct_influence_map[i_l: i_r + 1, i_u: i_d + 1] = 1
 
         radius = (np.sum(direct_influence_map) / num_coordinates) ** (1 / 2) / np.pi
 
@@ -396,7 +396,6 @@ class ImageModelFitting:
                 lattice_total += lattice
         return lattice_total
 
-
     def view_3d(self, region_index: int = None):
         if region_index is None:
             view(self.total_lattice())
@@ -438,7 +437,7 @@ class ImageModelFitting:
             crystal_analyzer.unit_cell = unit_cell
         if cif_file is not None:
             crystal_analyzer.read_cif(cif_file)
-        atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal,sigma=sigma)
+        atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal, sigma=sigma)
         # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
         coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
         coordinates = np.vstack([coordinates, atomic_column_list.positions_pixel])
@@ -604,7 +603,7 @@ class ImageModelFitting:
 
                 # create a mask with radius r for region
                 mask = np.zeros_like(region)
-                grid_y, grid_x = np.mgrid[0 : region.shape[0], 0 : region.shape[1]]
+                grid_y, grid_x = np.mgrid[0: region.shape[0], 0: region.shape[1]]
                 mask[
                     (grid_x - cetre_x) ** 2 + (grid_y - cetre_y) ** 2 < mask_size**2
                 ] = 1
@@ -759,7 +758,7 @@ class ImageModelFitting:
         self.coordinates = coordinates[mask]
         return self.coordinates
 
-    ### loss function and model prediction
+    # loss function and model prediction
 
     def loss(self, params: dict, image: np.ndarray, X: np.ndarray, Y: np.ndarray):
         # Compute the sum of the Gaussians
@@ -968,7 +967,7 @@ class ImageModelFitting:
             prediction = self.apply_pbc(prediction, prediction_func, params, X, Y)
         return prediction
 
-    ### fitting
+    # fitting
 
     def linear_estimator(self, params: dict = None, non_negative=False):
         if params is None:
@@ -1535,7 +1534,7 @@ class ImageModelFitting:
         self.model = self.predict(params, self.X, self.Y)
         return params
 
-    ### parameters updates and convergence
+    # parameters updates and convergence
     def convergence(self, params: dict, pre_params: dict, tol: float = 1e-2):
         """
         Checks if the parameters have converged within a specified tolerance.
@@ -1664,16 +1663,16 @@ class ImageModelFitting:
         if np.allclose(refined_coordinates, self.coordinates):
             logging.info("The coordinates have converged.")
             return self.coordinates
-        else: 
+        else:
             # create & save the initial coordinates
             self.coordinates_history[self.coordinates_state] = self.coordinates.copy()
             # update the coordinates from the params refinement
             self.coordinates = np.stack([self.params["pos_x"], self.params["pos_y"]], axis=1)
             self.coordinates_state += 1
-            logging.info(f"The coordinates have been updated. Current state: {self.coordinates_state}" )
+            logging.info(f"The coordinates have been updated. Current state: {self.coordinates_state}")
         return self.coordinates
 
-    ##### plot functions
+    # plot functions
     def calibrate(self, cif_file: str = None, a: float = None, b: float = None, region_index: int = 0, unit_cell: list = None):
         """
         Calibrate the pixel size based on the FFT of the lattice.
@@ -1697,11 +1696,11 @@ class ImageModelFitting:
         a = a if a is not None else np.linalg.norm(crystal_analyzer.unit_cell.cell[0])
         b = b if b is not None else np.linalg.norm(crystal_analyzer.unit_cell.cell[1])
         _, vec_a_pixel, vec_b_pixel = crystal_analyzer.select_lattice_vectors(reciprocal=True)
-        dx_a = a /np.linalg.norm(vec_a_pixel) 
-        dx_b = b /np.linalg.norm(vec_b_pixel)
+        dx_a = a / np.linalg.norm(vec_a_pixel)
+        dx_b = b / np.linalg.norm(vec_b_pixel)
         self.dx = (dx_a + dx_b) / 2
         logging.info(f"Calibrated pixel size: {self.dx} {self.units}")
-    
+
     def plot(self, vmin=None, vmax=None):
         if vmin is None:
             # get the bottom 5% of the image
@@ -1770,7 +1769,7 @@ class ImageModelFitting:
         plt.title("Residual")
         plt.tight_layout()
 
-    def plot_scs(self, layout="horizontal", per_element=False, s=1, save=False, has_units=True, half:str=None, figsize=(10, 5)):
+    def plot_scs(self, layout="horizontal", per_element=False, s=1, save=False, has_units=True, half: str = None, figsize=(10, 5)):
         assert layout in {
             "horizontal",
             "vertical",
@@ -1804,7 +1803,7 @@ class ImageModelFitting:
                 s=s,
                 label=element,
             )
-        plt.legend(loc = "upper right")
+        plt.legend(loc="upper right")
         plt.gca().set_aspect("equal", adjustable="box")
         plt.axis("off")
         scalebar = self.scalebar
@@ -1866,7 +1865,7 @@ class ImageModelFitting:
             plt.savefig("scs.svg")
             plt.savefig("scs.png", dpi=300)
 
-    def plot_scs_voronoi(self, layout="horizontal", s=1, per_element=False, save=False, has_units=True, half:str=None, figsize=(10, 5)):
+    def plot_scs_voronoi(self, layout="horizontal", s=1, per_element=False, save=False, has_units=True, half: str = None, figsize=(10, 5)):
         assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
         if per_element:
             row, col = 1, 2

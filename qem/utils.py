@@ -279,7 +279,7 @@ def export_params(params, filename):
 def get_random_indices_in_batches(total_examples, batch_size):
     all_indices = np.random.permutation(total_examples)
     batches = [
-        all_indices[i : i + batch_size] for i in range(0, total_examples, batch_size)
+        all_indices[i: i + batch_size] for i in range(0, total_examples, batch_size)
     ]
     return batches
 
@@ -400,7 +400,8 @@ def q_space_array(pixels, gridsize, meshed=True):
         return broadcast_from_unmeshed(qspace)
     else:
         return qspace
-    
+
+
 def broadcast_from_unmeshed(coords):
     """
     For an unmeshed set of coordinates broadcast to a meshed ND array.

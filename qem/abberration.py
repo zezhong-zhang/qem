@@ -39,16 +39,18 @@ def aberration_function(aberrations, wavelength, kx, ky):
     return phase_shift
 
 # Define constants
+
+
 def contrast_transfer_function(u, defocus, Cs, wavelength):
     """
     Calculate the Contrast Transfer Function (CTF) for given parameters.
-    
+
     Parameters:
     u         : array-like, spatial frequency
     defocus   : defocus value (Delta f)
     Cs        : spherical aberration coefficient
     wavelength: wavelength of the electron
-    
+
     Returns:
     CTF value for the given spatial frequencies.
     """
@@ -58,6 +60,8 @@ def contrast_transfer_function(u, defocus, Cs, wavelength):
     return ctf
 
 # Parameters (example values)
+
+
 defocus = 1e-8  # in meters
 Cs = 1e-3  # spherical aberration in meters
 voltage = 1.97e-12  # electron wavelength for 300 keV in meters

@@ -3,7 +3,7 @@ Reading/writting dm3/dm4 files
 Pavel Potapov, temDM, 2022
 
 can be used under
-GNU Lesser General Public License  
+GNU Lesser General Public License
 """
 
 import struct
@@ -535,7 +535,7 @@ class read_DM(object):
                         data = self.read_array(size, eltype)
 
                 elif length_definitions > 3:  # composed data
-                    if dtype == 15:  #  structure
+                    if dtype == 15:  # structure
                         types = (
                             self.struct_types()
                         )  # types of all elements in structure
@@ -644,7 +644,7 @@ class read_DM(object):
             cal_dict["Intensity"] = self.image_list[index]["ImageData"]["Calibrations"][
                 "Brightness"
             ]
-            #'Brightness' is renamed to 'Intensity' and kept similar to dimensional items
+            # 'Brightness' is renamed to 'Intensity' and kept similar to dimensional items
             if "sorted" in cal_dict:
                 del cal_dict["sorted"]
 
@@ -985,7 +985,7 @@ class write_DM(object):
         offset = self.tag_address  # retrive the last stored address of the tag length
         tag_length = len(self.b) - offset
         tag_length_b = set_int64(tag_length, "big")
-        self.b[offset - 8 : offset] = tag_length_b
+        self.b[offset - 8: offset] = tag_length_b
 
     def tag(self, Ttype: str, item):
         self.tag_header(Ttype, item)  # write tag header
@@ -1072,11 +1072,11 @@ class write_DM(object):
                 )
                 group_length_b = set_int64(group_length, "big")
                 # as offset was accounted in b_before
-                self.b_before[offset - 8 : offset] = group_length_b
+                self.b_before[offset - 8: offset] = group_length_b
             else:
                 group_length = len(self.b) - offset
                 group_length_b = set_int64(group_length, "big")
-                self.b[offset - 8 : offset] = group_length_b
+                self.b[offset - 8: offset] = group_length_b
 
             if self.print:
                 print("end of group", "offset", offset, "groupLength", group_length)

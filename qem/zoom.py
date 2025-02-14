@@ -1,8 +1,8 @@
 import numpy as np
 
 
-def zoom_on_pixel(input_array, coordinates, upsample_factor=1, output_shape=None, 
-                  num_threads=1, use_numpy_fft=False, return_real=True, 
+def zoom_on_pixel(input_array, coordinates, upsample_factor=1, output_shape=None,
+                  num_threads=1, use_numpy_fft=False, return_real=True,
                   return_coordinates=False):
     """
     Zoom in on a 1D or 2D array using Fourier upsampling.
@@ -74,7 +74,8 @@ def zoom_nd(input_array, offsets=(), center_convention=float, **kwargs):
         for size, offset in zip(input_array.shape, offsets)
     ]
 
-    return zoom_on_pixel(input_array, center_coordinates,**kwargs)
+    return zoom_on_pixel(input_array, center_coordinates, **kwargs)
+
 
 def fourier_interp2d(data, outinds, nthreads=1, use_numpy_fft=False,
                      return_real=True):
@@ -95,29 +96,28 @@ def fourier_interp2d(data, outinds, nthreads=1, use_numpy_fft=False,
     # load fft
     # fftn,ifftn = fast_ffts.get_ffts(nthreads=nthreads, use_numpy_fft=use_numpy_fft)
 
-    if hasattr(outinds,'ndim') and outinds.ndim not in (data.ndim+1,data.ndim):
+    if hasattr(outinds, 'ndim') and outinds.ndim not in (data.ndim+1, data.ndim):
         raise ValueError("Must specify an array of output indices with # of dimensions = input # of dims + 1")
     elif len(outinds) != data.ndim:
         raise ValueError("outind array must have an axis for each dimension")
 
     fft_data = np.fft.ifft2(data)
 
-
     freqY = np.fft.fftfreq(data.shape[0])
-    if hasattr(outinds,'ndim') and outinds.ndim == 3:
+    if hasattr(outinds, 'ndim') and outinds.ndim == 3:
         # if outinds = np.indices(shape), we extract just lines along each index
-        indsY = freqY[np.newaxis,:]*outinds[0,:,0][:,np.newaxis]
+        indsY = freqY[np.newaxis, :]*outinds[0, :, 0][:, np.newaxis]
     else:
-        indsY = freqY[np.newaxis,:]*np.array(outinds[0])[:,np.newaxis]
-    kerny=np.exp((-1j*2*np.pi)*indsY)
+        indsY = freqY[np.newaxis, :]*np.array(outinds[0])[:, np.newaxis]
+    kerny = np.exp((-1j*2*np.pi)*indsY)
 
     freqX = np.fft.fftfreq(data.shape[1])
-    if hasattr(outinds,'ndim') and outinds.ndim == 3:
+    if hasattr(outinds, 'ndim') and outinds.ndim == 3:
         # if outinds = np.indices(shape), we extract just lines along each index
-        indsX = freqX[:,np.newaxis]*outinds[1,0,:][np.newaxis,:]
+        indsX = freqX[:, np.newaxis]*outinds[1, 0, :][np.newaxis, :]
     else:
-        indsX = freqX[:,np.newaxis]*np.array(outinds[1])[np.newaxis,:]
-    kernx=np.exp((-1j*2*np.pi)*indsX)
+        indsX = freqX[:, np.newaxis]*np.array(outinds[1])[np.newaxis, :]
+    kernx = np.exp((-1j*2*np.pi)*indsX)
 
     result = np.dot(np.dot(kerny, fft_data), kernx)
 
@@ -125,4 +125,3 @@ def fourier_interp2d(data, outinds, nthreads=1, use_numpy_fft=False,
         return result.real
     else:
         return result
-

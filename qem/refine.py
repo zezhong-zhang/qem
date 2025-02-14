@@ -52,8 +52,9 @@ def calculate_center_of_mass(arr):
 @jit(nopython=True)
 def gauss2d(xy_meshgrid, amplitude, x0, y0, sigma_x, sigma_y, theta, offset):
     x, y = xy_meshgrid
-    gauss = (amplitude* np.exp( -( (x-x0)*np.cos(theta) + (y-y0)*np.sin(theta) )**2 / (2*sigma_x**2) - (-(x-x0)*np.sin(theta) + (y-y0)*np.cos(theta))**2 / (2*sigma_y**2) ) + offset)
+    gauss = (amplitude * np.exp(-((x-x0)*np.cos(theta) + (y-y0)*np.sin(theta))**2 / (2*sigma_x**2) - (-(x-x0)*np.sin(theta) + (y-y0)*np.cos(theta))**2 / (2*sigma_y**2)) + offset)
     return gauss.ravel()
+
 
 def fit_gaussian(
     x0, y0, sigma_x, sigma_y, theta, offset, data, plot=False, verbose=True
