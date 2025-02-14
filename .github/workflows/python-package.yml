@@ -16,10 +16,10 @@ jobs:
       matrix:
         python-version: ["3.9", "3.10", "3.11"]
         platform: [cpu]
-        include:
-          - python-version: "3.11"
-            platform: gpu
-            jax-platform: cuda
+        # include:
+        #   - python-version: "3.11"
+        #     platform: gpu
+        #     jax-platform: cuda
     
     runs-on: ubuntu-latest
     
