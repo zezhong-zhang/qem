@@ -129,7 +129,7 @@ def test_peak_fitting(peak_type, gen_func):
     sigmas = np.full(num_peaks, mean_sigma)
     mean_gamma = mean_sigma / np.sqrt(2 * np.log(2))  # Convert sigma to gamma
     gammas = np.full(num_peaks, mean_gamma)
-    mean_ratio = 0.9  # Default ratio in init_params
+    mean_ratio = 0.88  # Default ratio in init_params
     ratios = np.full(num_peaks, mean_ratio)
     
     # Create synthetic image
@@ -183,7 +183,7 @@ def test_peak_fitting(peak_type, gen_func):
         fitter.params['ratio'] = ratios.copy()
     
     # Fit the image using global optimization
-    fitter.fit_global(maxiter=1000, tol=1e-4, step_size=0.01)
+    fitter.fit_global(maxiter=1000, tol=1e-3, step_size=0.01)
     
     # Get fitted parameters
     fitted_params = fitter.params
