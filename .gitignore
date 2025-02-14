@@ -28,3 +28,4 @@ examples/ETO_KTO.py
 examples/ETO_KTO/
 .coverage
 data/2016-05_efficientFitProgram/
+flake8_autofix/
