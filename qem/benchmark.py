@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.ensemble import IsolationForest
 
-import qem
+from qem.io import read_legacyInputStatSTEM
 from qem.image_fitting import ImageModelFitting
 
 
@@ -50,7 +50,7 @@ def get_scs(StatSTEM):
 
 class Benchmark:
     def __init__(self, filepath):
-        legacyStatSTEM = qem.io.read_legacyInputStatSTEM(filepath)
+        legacyStatSTEM = read_legacyInputStatSTEM(filepath)
         try:
             if "dx" in legacyStatSTEM.keys():
                 self.dx = legacyStatSTEM["dx"]

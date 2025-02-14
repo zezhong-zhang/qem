@@ -36,6 +36,8 @@ from qem.model import (
     mask_grads,
     voigt_2d_numba,
     voigt_sum_parallel,
+    get_static_window_size,
+    create_gaussian_sum_local
 )
 from qem.refine import calculate_center_of_mass
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
@@ -51,6 +53,11 @@ class ImageModelFitting:
         dx: float = 1.0,
         units: str = "A",
         elements: list[str] = None,  # type: ignore
+        model_type: str = "gaussian",
+        same_width: bool = True,
+        pbc: bool = False,
+        fit_background: bool = True,
+        gpu_memory_limit: bool = False,
     ):
         """
         Initialize the Fitting class.
@@ -60,8 +67,12 @@ class ImageModelFitting:
             dx (float, optional): The size of each pixel. Defaults to 1.
             units (str, optional): The units of the image. Defaults to "A".
             elements (list[str], optional): The elements in the image. Defaults to None. If None, the elements are ["Sr", "Ti", "O"].
+            model_type (str, optional): Type of model to use. Defaults to "gaussian".
+            same_width (bool, optional): Whether to use same width for all peaks. Defaults to True.
+            pbc (bool, optional): Whether to use periodic boundary conditions. Defaults to False.
+            fit_background (bool, optional): Whether to fit background. Defaults to True.
+            gpu_memory_limit (bool, optional): Whether to use memory-efficient GPU computation. Defaults to False.
         """
-
         if elements is None:
             elements = ["Sr", "Ti", "O"]
 
@@ -80,6 +91,7 @@ class ImageModelFitting:
                 (self.image.shape[0] - 1, 0),
             ]
         )
+
         self.region_path_dict = {0: init_region_path}
         self.region_crysal_analyzer = {}
         self.region_atomic_column = {}
@@ -100,17 +112,25 @@ class ImageModelFitting:
         self._coordinates = np.array([])
         self.coordinates_history = dict()
         self.coordinates_state = 0
-        self.fit_background = True
+        
+        # Initialize model parameters
+        self.model_type = model_type
+        self.same_width = same_width
+        self.pbc = pbc
+        self.fit_background = fit_background
         self.init_background = 0.0
-        self.same_width = True
-        self.model_type = "gaussian"
-        self.params = dict()
-        self.fit_local = False
-        self.pbc = False
-        self.gpu_memory_limit = False
+        self.gpu_memory_limit = gpu_memory_limit
+        
+        # Initialize coordinate system
         x = np.arange(self.nx)
         y = np.arange(self.ny)
         self.X, self.Y = np.meshgrid(x, y, indexing="xy")
+        self.converged = False
+        self.params = dict()
+        
+        # Create JIT-compiled function for this image size if using GPU memory limit
+        if gpu_memory_limit:
+            self._gaussian_sum_local = create_gaussian_sum_local(self.ny, self.nx)
 
     # Properties
 
@@ -706,7 +726,7 @@ class ImageModelFitting:
             coords_boundary = coords[mask_boundary]
             # identify the coords in the coords_boundary that are close to the coords_boundary_pbc
             coords_boundary_pbc = coords_boundary.copy()
-            for i, j in [(1, 0), (0, 1), (1, 1)]:
+            for i, j in [(1, 0), (0, 1), (1, 1), (-1, 0), (0, -1), (-1, -1), (1, -1), (-1, 1)]:
                 coords_boundary_shifted = coords_boundary + np.array(
                     [i * self.nx, j * self.ny]
                 )
@@ -825,94 +845,6 @@ class ImageModelFitting:
             )
         return prediction
 
-    def predict_local(self, params: dict = None, use_mask=False):
-        if params is None:
-            params = self.params
-        if self.fit_background:
-            background = params["background"]
-        else:
-            background = self.init_background
-        pos_x = params["pos_x"]
-        pos_y = params["pos_y"]
-        height = params["height"]
-
-        if self.model_type == "gaussian":
-            sigma = params["sigma"]
-            if self.same_width:
-                sigma = sigma[self.atom_types]
-            if use_mask:
-                sigma = sigma[self.atoms_selected]
-            width = sigma.mean()
-        elif self.model_type == "lorentzian":
-            gamma = params["gamma"]
-            if self.same_width:
-                gamma = gamma[self.atom_types]
-            if use_mask:
-                gamma = gamma[self.atoms_selected]
-            width = gamma.mean()
-        elif self.model_type == "voigt":
-            sigma = params["sigma"]
-            gamma = params["gamma"]
-            ratio = params["ratio"]
-            if self.same_width:
-                ratio = ratio[self.atom_types]
-                sigma = sigma[self.atom_types]
-                gamma = gamma[self.atom_types]
-            if use_mask:
-                ratio = ratio[self.atoms_selected]
-                gamma = gamma[self.atoms_selected]
-                sigma = sigma[self.atoms_selected]
-            width = gamma.mean()
-        else:
-            raise ValueError("The model type is not valid.")
-
-        windos_size = int(width * 5)
-        x = np.arange(-windos_size, windos_size + 1, 1)
-        y = np.arange(-windos_size, windos_size + 1, 1)
-        local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        if self.model_type == "gaussian":
-            peak_local = gaussian_2d_numba(
-                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
-            )
-        elif self.model_type == "lorentzian":
-            peak_local = lorentzian_2d_numba(
-                local_X, local_Y, pos_x % 1, pos_y % 1, height, gamma
-            )
-        elif self.model_type == "voigt":
-            peak_local = voigt_2d_numba(
-                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma, gamma, ratio
-            )
-        else:
-            raise ValueError("The model type is not valid.")
-
-        peak_local = np.array(peak_local)
-        prediction = (
-            add_peak_at_positions(
-                np.zeros(self.image.shape), pos_x, pos_y, peak_local, windos_size
-            )
-            + background
-        )
-
-        if self.pbc:
-            for i, j in [
-                (1, 0),
-                (0, 1),
-                (-1, 0),
-                (0, -1),
-                (1, 1),
-                (-1, -1),
-                (1, -1),
-                (-1, 1),
-            ]:
-                prediction += add_peak_at_positions(
-                    np.zeros(self.image.shape),
-                    pos_x + i * self.nx,
-                    pos_y + j * self.ny,
-                    peak_local,
-                    windos_size,
-                )
-        return prediction
-
     def predict(self, params: dict = None, X: np.ndarray = None, Y: np.ndarray = None):
         if params is None:
             params = self.params
@@ -920,51 +852,69 @@ class ImageModelFitting:
             X = self.X
             Y = self.Y
         background = params.get("background", self.init_background)
-        pos_x = params["pos_x"]
-        pos_y = params["pos_y"]
-        height = params["height"]
+        pos_x = jnp.asarray(params["pos_x"])
+        pos_y = jnp.asarray(params["pos_y"])
+        height = jnp.asarray(params["height"])
         sigma = params.get("sigma")
         gamma = params.get("gamma")
         ratio = params.get("ratio")
+        
         if len(pos_x) < self.num_coordinates:
             mask = self.atoms_selected
         else:
             mask = np.ones(self.num_coordinates, dtype=bool)
 
         if self.same_width:
-            # broadcast the sigma, gamma and ratio according to the self.atom_types
             if self.model_type in {"gaussian", "voigt"} and sigma is not None:
-                sigma = sigma[self.atom_types[mask]]
-            # Check the model type and broadcast gamma and ratio as needed
+                sigma = jnp.asarray(sigma[self.atom_types[mask]])
             if self.model_type in {"voigt", "lorentzian"} and gamma is not None:
-                gamma = gamma[self.atom_types[mask]]
+                gamma = jnp.asarray(gamma[self.atom_types[mask]])
             if self.model_type == "voigt" and ratio is not None:
-                ratio = ratio[self.atom_types[mask]]
+                ratio = jnp.asarray(ratio[self.atom_types[mask]])
+
         if self.model_type == "gaussian":
-            def prediction_func(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
-                return gaussian_sum_parallel(X, Y, pos_x, pos_y, height, sigma, background)
+            if self.gpu_memory_limit:
+                # Calculate static window size based on maximum sigma
+                window_size = get_static_window_size(jnp.max(sigma))
+                prediction = self._gaussian_sum_local(
+                    pos_x,
+                    pos_y,
+                    height,
+                    sigma,
+                    background,
+                    window_size
+                )
+            else:
+                prediction = gaussian_sum_parallel(
+                    X, Y, pos_x, pos_y, height, sigma, background
+                )
         elif self.model_type == "voigt":
-            def prediction_func(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
-                return voigt_sum_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background)
+            prediction = voigt_sum_parallel(
+                X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background
+            )
         elif self.model_type == "lorentzian":
-            def prediction_func(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
-                return lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background)
+            prediction = lorentzian_sum_parallel(
+                X, Y, pos_x, pos_y, height, gamma, background
+            )
         else:
             raise ValueError("The model type is not valid.")
 
-        prediction = prediction_func(
-            X,
-            Y,
-            pos_x,
-            pos_y,
-            height,
-            sigma,
-            gamma,
-            ratio,
-            background,
-        )
         if self.pbc:
-            prediction = self.apply_pbc(prediction, prediction_func, params, X, Y)
+            if self.gpu_memory_limit:
+                # Reuse the same window size for periodic images
+                window_size = get_static_window_size(jnp.max(sigma))
+                for i, j in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                    prediction += self._gaussian_sum_local(
+                        pos_x + i * self.nx,
+                        pos_y + j * self.ny,
+                        height,
+                        sigma,
+                        0,  # No background for periodic images
+                        window_size
+                    )
+            else:
+                prediction = self.apply_pbc(prediction, gaussian_sum_parallel, params, X, Y)
+
         return prediction
 
     # fitting
@@ -984,11 +934,8 @@ class ImageModelFitting:
             width = sigma.mean()
         elif self.model_type in {"voigt", "lorentzian"}:
             gamma = params["gamma"]
-            if self.model_type == "voigt":
-                ratio = params["ratio"]
             if self.same_width:
                 gamma = gamma[self.atom_types]
-                ratio = ratio[self.atom_types]
             width = gamma.mean()
         else:
             raise ValueError("The model type is not valid.")
@@ -1297,8 +1244,8 @@ class ImageModelFitting:
                         )  # Explicitly raise an exception to use the fallback
                 except XlaRuntimeError:
                     self.gpu_memory_limit = True
-                    global_prediction = self.predict_local(params)
-                    local_prediction = self.predict_local(select_params, use_mask=True)
+                    global_prediction = self.predict(params, X, Y)
+                    local_prediction = self.predict(select_params, X, Y)
                 local_residual = global_prediction - local_prediction
                 local_target = image - local_residual
                 select_params = self.optimize(
@@ -1327,7 +1274,8 @@ class ImageModelFitting:
                     plt.imshow(image - global_prediction, cmap="gray")
                     plt.gca().set_aspect("equal", adjustable="box")
                     plt.show()
-            self.converged = self.convergence(params, pre_params, tol)
+                    plt.pause(1.0)
+        self.converged = self.convergence(params, pre_params, tol)
         params = self.linear_estimator(params)
         self.params = params
         self.model = self.predict(params, self.X, self.Y)

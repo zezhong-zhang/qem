@@ -4,6 +4,7 @@ import numpy as np
 from jax import jit
 from jax.scipy.signal import convolve2d
 from numba import jit as njit
+from functools import partial
 
 
 @njit(nopython=True)
@@ -44,7 +45,7 @@ def voigt_2d_numba(X, Y, pos_x, pos_y, height, sigma, gamma, ratio):
     return voigt
 
 
-@jit
+@jax.jit
 def gaussian_2d_jax(X, Y, pos_x, pos_y, height, width):
     # Unpack the parameters
     gauss = height * jnp.exp(
@@ -76,7 +77,7 @@ def add_peak_at_positions(total_sum, pos_x, pos_y, gaussian_local, windows_size)
     return total_sum
 
 
-@jit
+@jax.jit
 def gaussian_sum_parallel(X, Y, pos_x, pos_y, height, width, background):
     # Unpack the parameters
     total = (
@@ -96,7 +97,7 @@ def gaussian_sum_parallel(X, Y, pos_x, pos_y, height, width, background):
     return total
 
 
-@jit
+@jax.jit
 def gaussian_sum_batched(X, Y, pos_x, pos_y, height, width, background):
     """
     Computes the sum of Gaussian functions on a grid in batches to save memory.
@@ -150,7 +151,7 @@ def gaussian_sum_batched(X, Y, pos_x, pos_y, height, width, background):
     return gaussian_sum
 
 
-@jit
+@jax.jit
 def voigt_sum_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background):
     R2 = (X[:, :, None] - pos_x[None, None, :]) ** 2 + (
         Y[:, :, None] - pos_y[None, None, :]
@@ -170,7 +171,7 @@ def voigt_sum_parallel(X, Y, pos_x, pos_y, height, sigma, gamma, ratio, backgrou
     return total
 
 
-@jit
+@jax.jit
 def lorentzian_sum_parallel(X, Y, pos_x, pos_y, height, gamma, background):
     R2 = (X[:, :, None] - pos_x[None, None, :]) ** 2 + (
         Y[:, :, None] - pos_y[None, None, :]
@@ -253,3 +254,86 @@ def mask_grads(grads, keys_to_mask):
     # Update the state with masked gradients
 
     return masked_grads
+
+
+@jax.jit
+def get_window_size(width, threshold=1e-6):
+    """
+    Calculate the window size needed to capture most of the Gaussian's intensity.
+    
+    Args:
+        width (float): Width (sigma) of the Gaussian
+        threshold (float): Minimum relative intensity to consider (e.g., 1e-6 means 0.0001% of peak height)
+    
+    Returns:
+        int: Window size that captures the Gaussian intensity above the threshold
+    """
+    return jnp.ceil(width * jnp.sqrt(-2 * jnp.log(threshold))).astype(jnp.int32)
+
+
+@jax.jit
+def gaussian_2d_window(x, y, pos_x, pos_y, height, width):
+    """
+    Compute a single Gaussian contribution in a window.
+    """
+    return height * jnp.exp(-((x - pos_x) ** 2 + (y - pos_y) ** 2) / (2 * width ** 2))
+
+
+def get_static_window_size(width_max, threshold=1e-6):
+    """
+    Calculate a static window size that will work for all Gaussians.
+    
+    Args:
+        width_max: Maximum width (sigma) of all Gaussians
+        threshold: Minimum relative intensity to consider
+    """
+    return int(np.ceil(width_max * 5))  # 5 sigma covers >99.99% of the Gaussian
+
+
+@jax.jit
+def get_window_indices(pos_x, pos_y, window_size, ny, nx):
+    """
+    Calculate window indices for a Gaussian peak using static window size.
+    """
+    x_start = jnp.maximum(0, jnp.floor(pos_x - window_size)).astype(jnp.int32)
+    x_end = jnp.minimum(nx, jnp.ceil(pos_x + window_size + 1)).astype(jnp.int32)
+    y_start = jnp.maximum(0, jnp.floor(pos_y - window_size)).astype(jnp.int32)
+    y_end = jnp.minimum(ny, jnp.ceil(pos_y + window_size + 1)).astype(jnp.int32)
+    return x_start, x_end, y_start, y_end
+
+
+@jax.jit
+def add_gaussian_to_window(result, x_start, x_end, y_start, y_end, pos_x, pos_y, height, width):
+    """
+    Add a Gaussian contribution to a specific window in the result array.
+    """
+    y_coords = jnp.arange(y_start, y_end)[:, jnp.newaxis]
+    x_coords = jnp.arange(x_start, x_end)[jnp.newaxis, :]
+    window = gaussian_2d_window(x_coords, y_coords, pos_x, pos_y, height, width)
+    return result.at[y_start:y_end, x_start:x_end].add(window)
+
+
+def create_gaussian_sum_local(ny: int, nx: int):
+    """
+    Create a JIT-compiled function for specific image dimensions.
+    
+    Args:
+        ny, nx: Static image dimensions
+    Returns:
+        JIT-compiled function that takes (pos_x, pos_y, height, width, background, window_size)
+    """
+    @jax.jit
+    def gaussian_sum_local(pos_x, pos_y, height, width, background, window_size):
+        result = jnp.full((ny, nx), background)
+        
+        def scan_body(carry, x):
+            result, i = carry
+            p_x, p_y, h, w = pos_x[i], pos_y[i], height[i], width[i]
+            x_start, x_end, y_start, y_end = get_window_indices(p_x, p_y, window_size, ny, nx)
+            result = add_gaussian_to_window(result, x_start, x_end, y_start, y_end, p_x, p_y, h, w)
+            return (result, i + 1), None
+        
+        (result, _), _ = jax.lax.scan(scan_body, (result, 0), None, length=len(pos_x))
+        return result
+    
+    return gaussian_sum_local
