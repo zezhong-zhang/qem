@@ -50,9 +50,36 @@ def calculate_center_of_mass(arr):
 
 
 @jit(nopython=True)
-def gauss2d(xy_meshgrid, amplitude, x0, y0, sigma_x, sigma_y, theta, offset):
-    x, y = xy_meshgrid
-    gauss = (amplitude * np.exp(-((x-x0)*np.cos(theta) + (y-y0)*np.sin(theta))**2 / (2*sigma_x**2) - (-(x-x0)*np.sin(theta) + (y-y0)*np.cos(theta))**2 / (2*sigma_y**2)) + offset)
+def gauss2d(xy_meshgrid: np.ndarray, amplitude: float, x0: float, y0: float, 
+            sigma_x: float, sigma_y: float, theta: float, offset: float) -> np.ndarray:
+    """2D Gaussian function for fitting.
+    
+    Parameters
+    ----------
+    xy_meshgrid : tuple of np.ndarray
+        Tuple containing the X and Y meshgrids
+    amplitude : float
+        Peak amplitude
+    x0, y0 : float
+        Peak center coordinates
+    sigma_x, sigma_y : float
+        Standard deviations in x and y directions
+    theta : float
+        Rotation angle in radians
+    offset : float
+        Background offset
+        
+    Returns
+    -------
+    np.ndarray
+        2D Gaussian evaluated on the meshgrid
+    """
+    x, y = xy_meshgrid[0], xy_meshgrid[1]  # Explicitly get arrays from tuple
+    # Calculate rotated coordinates
+    x_rot = (x - x0) * np.cos(theta) + (y - y0) * np.sin(theta)
+    y_rot = -(x - x0) * np.sin(theta) + (y - y0) * np.cos(theta)
+    # Calculate Gaussian
+    gauss = amplitude * np.exp(-(x_rot**2 / (2*sigma_x**2) + y_rot**2 / (2*sigma_y**2))) + offset
     return gauss.ravel()
 
 
