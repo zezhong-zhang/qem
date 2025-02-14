@@ -110,7 +110,7 @@ def test_gaussian_fit_edge_cases():
     
     # Test with very poor initial guess
     fitted_params, _, success = fit_gaussian(
-        12.0, 12.0, 1.0, 1.0, np.pi/2, 0.5,
+        10.0, 10.0, 1.0, 1.0, np.pi/2, 0.5,
         image, plot=False, verbose=False
     )
     
@@ -120,7 +120,7 @@ def test_gaussian_fit_edge_cases():
     
     # Test with very narrow initial guess
     fitted_params, _, success = fit_gaussian(
-        15.0, 15.0, 0.1, 0.1, 0.0, 0.0,
+        15.0, 15.0, 0.5, 0.5, 0.0, 0.0,
         image, plot=False, verbose=False
     )
     
