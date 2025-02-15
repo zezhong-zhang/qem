@@ -21,6 +21,7 @@ setup(
         "numba",
         "shapely",
         "matscipy",
+        "scikit-learn",
         "ase",
         "hyperspy",
         "jaxopt",
