@@ -26,19 +26,8 @@ from tqdm import tqdm
 
 from qem.crystal_analyzer import CrystalAnalyzer
 from qem.gui_classes import GetAtomSelection, GetRegionSelection, InteractivePlot
-from qem.model import (
-    add_peak_at_positions,
-    butterworth_window,
-    gaussian_2d_numba,
-    gaussian_sum_parallel,
-    lorentzian_2d_numba,
-    lorentzian_sum_parallel,
-    mask_grads,
-    voigt_2d_numba,
-    voigt_sum_parallel,
-    get_static_window_size,
-    create_gaussian_sum_local
-)
+from qem.model import GaussianModel, LorentzianModel, VoigtModel
+from qem.processing import butterworth_window
 from qem.refine import calculate_center_of_mass
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import voronoi_integrate
@@ -47,90 +36,169 @@ logging.basicConfig(level=logging.INFO)
 
 
 class ImageModelFitting:
+    """Class for fitting image models to data."""
+
     def __init__(
         self,
         image: np.ndarray,
-        dx: float = 1.0,
-        units: str = "A",
-        elements: list[str] = None,  # type: ignore
         model_type: str = "gaussian",
         same_width: bool = True,
         pbc: bool = False,
         fit_background: bool = True,
-        gpu_memory_limit: bool = False,
+        gpu_memory_limit: bool = True,
+        dx: float = 1.0,
+        background: float = 0.0,
+        elements: list[str] = None,  # type: ignore
     ):
-        """
-        Initialize the Fitting class.
-
+        """Initialize the model fitting.
+        
         Args:
-            image (np.array): The input image as a numpy array.
-            dx (float, optional): The size of each pixel. Defaults to 1.
-            units (str, optional): The units of the image. Defaults to "A".
-            elements (list[str], optional): The elements in the image. Defaults to None. If None, the elements are ["Sr", "Ti", "O"].
-            model_type (str, optional): Type of model to use. Defaults to "gaussian".
-            same_width (bool, optional): Whether to use same width for all peaks. Defaults to True.
-            pbc (bool, optional): Whether to use periodic boundary conditions. Defaults to False.
-            fit_background (bool, optional): Whether to fit background. Defaults to True.
-            gpu_memory_limit (bool, optional): Whether to use memory-efficient GPU computation. Defaults to False.
+            image (numpy.ndarray): Image data to fit
+            model_type (str, optional): Type of model to use. Must be one of:
+                'gaussian', 'lorentzian', 'voigt'. Defaults to 'gaussian'.
+            same_width (bool, optional): Whether to use the same width for all peaks.
+                Defaults to True.
+            pbc (bool, optional): Whether to use periodic boundary conditions.
+                Defaults to False.
+            gpu_memory_limit (bool, optional): Whether to use local computation to avoid
+                GPU memory issues. Defaults to True.
+            dx (float, optional): Pixel size. Defaults to 1.0.
+            background (float, optional): Initial background level. Defaults to 0.0.
+            elements (list[str], optional): List of elements to model. Defaults to ["Sr", "Ti", "O"].
         """
         if elements is None:
             elements = ["Sr", "Ti", "O"]
-
-        if len(image.shape) == 2:
-            self.ny, self.nx = image.shape
-
-        self.device = "cuda"
-        self.image = image.astype(np.float32)
-        self.model = np.zeros(image.shape)
-        self._region_map = np.zeros(image.shape).astype(int)
-        init_region_path = Path(
-            [
-                (0, 0),
-                (0, self.image.shape[1] - 1),
-                (self.image.shape[0] - 1, self.image.shape[1] - 1),
-                (self.image.shape[0] - 1, 0),
-            ]
-        )
-
-        self.region_path_dict = {0: init_region_path}
-        self.region_crysal_analyzer = {}
-        self.region_atomic_column = {}
-        self.local_shape = image.shape
-
-        units_dict = {"A": 1, "nm": 10, "pm": 0.01, "um": 1e4}
-        assert units in units_dict.keys(), "The units should be in A, nm, pm or um."
-        scale_factor = units_dict[units]
-
-        self.dx = dx * scale_factor
-        self.units = "A"
-        self._atom_types = np.array([])
-        logging.info(
-            f"Elements: {elements}, the order is used for the atom types. Please initiate the correct elements in your system."
-        )
-        self.elements = elements
-        self.atoms_selected = np.array([])
-        self._coordinates = np.array([])
-        self.coordinates_history = dict()
-        self.coordinates_state = 0
-        
-        # Initialize model parameters
-        self.model_type = model_type
+            
+        self.data = image
+        self.ny, self.nx = image.shape
         self.same_width = same_width
         self.pbc = pbc
-        self.fit_background = fit_background
-        self.init_background = 0.0
         self.gpu_memory_limit = gpu_memory_limit
+        self.params = None
+        self.init_background = background
+        self.dx = dx
+        self.elements = elements
+        self._atom_types = np.array([])
+        self._coordinates = np.array([])
+        self.fit_background = fit_background
+        self.X = np.arange(self.nx)
+        self.Y = np.arange(self.ny)
+
+        # Initialize model based on type
+        model_classes = {
+            "gaussian": GaussianModel,
+            "lorentzian": LorentzianModel,
+            "voigt": VoigtModel,
+        }
+        if model_type not in model_classes:
+            raise ValueError(
+                f"Unknown model type: {model_type}. Must be one of: {list(model_classes.keys())}"
+            )
+        self.peak_model = model_classes[model_type](dx=dx, background=background)
+
+    def predict(self, params=None, use_numba=False, X=None, Y=None):
+        """Predict the image based on current parameters.
         
-        # Initialize coordinate system
-        x = np.arange(self.nx)
-        y = np.arange(self.ny)
-        self.X, self.Y = np.meshgrid(x, y, indexing="xy")
-        self.converged = False
-        self.params = dict()
+        Args:
+            params (dict, optional): Parameters to use for prediction. If None, uses self.params.
+            use_numba (bool, optional): Whether to use numba-accelerated computation. Defaults to False.
+            
+        Returns:
+            numpy.ndarray: Predicted image
+        """
+        if params is None:
+            if self.params is None:
+                self.init_params()
+            params = self.params
         
-        # Create JIT-compiled function for this image size if using GPU memory limit
-        if gpu_memory_limit:
-            self._gaussian_sum_local = create_gaussian_sum_local(self.ny, self.nx)
+        if X is None:
+            X = self.X
+        if Y is None:
+            Y = self.Y
+
+        # Validate parameters
+        if not all(k in params for k in ("pos_x", "pos_y", "height")):
+            raise ValueError("Missing required parameters in params dict")
+
+        # Ensure arrays have consistent shapes
+        n_peaks = len(params["pos_x"])
+        if len(params["pos_y"]) != n_peaks:
+            raise ValueError("pos_x and pos_y must have same length")
+        if len(params["height"]) != n_peaks:
+            raise ValueError("height must match number of peaks")
+
+        # Convert to float32 for GPU compatibility
+        pos_x = jnp.asarray(params["pos_x"], dtype=jnp.float32)
+        pos_y = jnp.asarray(params["pos_y"], dtype=jnp.float32)
+        height = jnp.asarray(params["height"], dtype=jnp.float32)
+
+        # Get parameters
+        width = params["width"]
+        
+        # Handle same width for different atom types
+        if self.same_width:
+            if "width" in params:
+                width = width[self.atom_types]
+            if "ratio" in params and isinstance(self.peak_model, VoigtModel):
+                params["ratio"] = params["ratio"][self.atom_types]
+        
+        # Update background in model
+        background = params.get("background", self.init_background)
+        self.peak_model.background = background
+
+        
+        # Prepare model arguments
+        model_args = [width]
+        if isinstance(self.peak_model, VoigtModel):
+            model_args.append(params["ratio"])
+        
+        if use_numba:
+            # Use numba version for faster computation
+            prediction = self.peak_model.sum_numba(X, Y, pos_x, pos_y, height, *model_args)
+        else:
+            if self.gpu_memory_limit:
+                # Get the local sum function for current dimensions
+                local_sum_fn = self.peak_model.sum_local(self.ny, self.nx)
+                
+                # Calculate window size based on width
+                window_size = int(5 * np.max(width))
+                
+                # Call with appropriate parameters
+                prediction = local_sum_fn(
+                    pos_x, pos_y, height, *model_args,
+                    background=background,
+                    window_size=window_size
+                )
+                
+                # Handle periodic boundary conditions
+                if self.pbc:
+                    for i, j in [(1, 0), (0, 1), (-1, 0), (0, -1), 
+                                (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                        prediction += local_sum_fn(
+                            pos_x + i * self.nx,
+                            pos_y + j * self.ny,
+                            height,
+                            *model_args,
+                            background=0.0,
+                            window_size=window_size
+                        )
+            else:
+                # Use the model's sum method directly
+                prediction = self.peak_model.sum(X, Y, pos_x, pos_y, height, *model_args)
+                
+                # Handle periodic boundary conditions
+                if self.pbc:
+                    for i, j in [(1, 0), (0, 1), (-1, 0), (0, -1), 
+                                (1, 1), (-1, -1), (1, -1), (-1, 1)]:
+                        prediction += self.peak_model.sum(
+                            X, Y,
+                            pos_x + i * self.nx,
+                            pos_y + j * self.ny,
+                            height,
+                            *model_args
+                        )
+
+        return prediction
 
     # Properties
 
@@ -148,75 +216,35 @@ class ImageModelFitting:
         if self.fit_local:
             return butterworth_window(self.local_shape, 0.5, 10)
         else:
-            return butterworth_window(self.image.shape, 0.5, 10)
+            return butterworth_window(self.data.shape, 0.5, 10)
 
     @property
     def volume(self):
+        """Calculate the volume of each peak in the model.
+        
+        Returns:
+            numpy.ndarray: Array of volumes for each peak.
+        """
+        if not self.params:
+            raise ValueError("Parameters not initialized. Call init_params first.")
+            
+        # Update the model's pixel size
+        self.peak_model.dx = self.dx
+        
+        # Create parameters dict for volume calculation
         params = self.params.copy()
         if self.same_width:
-            if self.model_type in {"gaussian", "voigt"}:
-                params["sigma"] = params["sigma"][self.atom_types]
-            elif self.model_type in {"lorentzian"}:
-                params["gamma"] = params["gamma"][self.atom_types]
-            elif self.model_type == "voigt":
-                params["ratio"] = params["ratio"][self.atom_types]
-        volume = np.zeros(self.num_coordinates)
-        if self.model_type == "gaussian":
-            volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
-        elif self.model_type == "lorentzian":
-            volume = params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
-        elif self.model_type == "voigt":
-            gaussian_contrib = (
-                params["height"] * params["sigma"] ** 2 * 2 * np.pi * self.dx**2
-            )
-            lorentzian_contrib = (
-                params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
-            )
-            volume = gaussian_contrib * params["ratio"] + lorentzian_contrib * (
-                1 - params["ratio"]
-            )
-        return volume
-
-    @property
-    def voronoi_volume(self):
-        if hasattr(self, "_voronoi_volume") and self._voronoi_volume is not None:
-            return self._voronoi_volume
-        else:
-            self.voronoi_integration()
+            # Expand width parameters for each peak if using same width
+            if "width" in params:
+                params["width"] = params["width"]
+            if "ratio" in params:
+                params["ratio"] = params["ratio"]
+                
+        return self.peak_model.volume(params)
 
     @property
     def num_coordinates(self):
         return self.coordinates.shape[0]
-
-    @property
-    def atom_types(self):
-        if len(self._atom_types) == 0 or self._atom_types is None:
-            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
-        return self._atom_types
-
-    @atom_types.setter
-    def atom_types(self, atom_types: np.ndarray):
-        self._atom_types = atom_types
-
-    @property
-    def region_column_labels(self):
-        return self.region_map[
-            self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
-        ]
-
-    @property
-    def region_map(self):
-        for key in self.region_path_dict.keys():
-            self._region_map[
-                self.region_path_dict[key]
-                .contains_points(np.array([self.X.ravel(), self.Y.ravel()]).T)
-                .reshape(self.X.shape)
-            ] = key
-        return self._region_map
-
-    @property
-    def num_atom_types(self):
-        return len(np.unique(self.atom_types))
 
     @property
     def coordinates(self):
@@ -230,16 +258,12 @@ class ImageModelFitting:
     def scalebar(self):
         scalebar = ScaleBar(
             self.dx,
-            units=self.units,
+            units="A",
             location="lower right",
             length_fraction=0.2,
             font_properties={"size": 20},
         )
         return scalebar
-
-    @property
-    def num_regions(self):
-        return len(np.unique(self.region_map))
 
     # voronoi integration
     def voronoi_integration(self, plot=False):
@@ -252,15 +276,15 @@ class ImageModelFitting:
         if self.params is None:
             raise ValueError("Please initialize the parameters first.")
         if self.fit_background:
-            s = Signal2D(self.image - self.params["background"])
+            s = Signal2D(self.data - self.params["background"])
         else:
-            s = Signal2D(self.image - self.init_background)
+            s = Signal2D(self.data - self.init_background)
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
         try:
-            max_radius = self.params["sigma"].max() * 5
+            max_radius = self.params["width"].max() * 5
         except KeyError:
-            max_radius = self.params["gamma"].max() * 5
+            max_radius = self.params["width"].max() * 5
         integrated_intensity, intensity_record, point_record = voronoi_integrate(
             s, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
         )
@@ -289,7 +313,7 @@ class ImageModelFitting:
             raise ValueError("No coordinates found for the given id.")
 
         rate, rate_max, n_filled, n = 1, 1, 0, 0
-        nx, ny = self.image.shape
+        nx, ny = self.data.shape
 
         while rate > 0.5 * rate_max:
             influence_map = np.zeros((nx, ny))
@@ -340,61 +364,71 @@ class ImageModelFitting:
         guess_radius: bool = False,
         init_background: float = 0.0,
     ):
+        """Initialize model parameters based on the current model type and settings.
+
+        Args:
+            atom_size (float, optional): Base size for atomic peaks. Defaults to 0.7.
+            guess_radius (bool, optional): Whether to estimate peak width from data. Defaults to False.
+            init_background (float, optional): Initial background value. Defaults to 0.0.
+        """
         self.coordinates_history = dict()
         self.coordinates_state = 0
+
+        # Get width parameter
         if guess_radius:
             width = self.guess_radius()[0]
         else:
             width = atom_size / self.dx
+
+        # Handle periodic boundary conditions
         if self.pbc:
             mask = (self.coordinates[:, 0] < self.nx - 1) & (
                 self.coordinates[:, 1] < self.ny - 1
             )
             self.coordinates = self.coordinates[mask]
-            if len(self.atom_types) != self.num_coordinates:
-                self.atom_types = self.atom_types[mask]
 
+        # Initialize position and height parameters
         pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
         pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
+        
+        # Initialize background
         if self.fit_background:
-            init_background = self.image.min()
+            init_background = self.data.min()
         else:
             self.init_background = init_background
+            
+        # Set background in model
+        self.peak_model.background = init_background
+        
+        # Initialize heights from image values
         height = (
-            self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
+            self.data[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
         )
-        # get the lowest 20% of the intensity as the background
+        height[height < 0] = 0  # Ensure non-negative heights
+
+        # Initialize width parameters based on model type
         if self.same_width:
-            width = np.tile(width, self.num_atom_types).astype(float)
-            ratio = np.tile(0.9, self.num_atom_types).astype(float)
+            width = np.tile(width, 1).astype(float)
         else:
             width = np.tile(width, self.num_coordinates).astype(float)
-            ratio = np.tile(0.9, self.num_coordinates).astype(float)
-        if self.model_type == "gaussian":
-            # Initialize the parameters
-            params = {
-                "pos_x": pos_x,  # x position
-                "pos_y": pos_y,  # y position
-                "height": height,  # height
-                "sigma": width,  # width
-            }
-        elif self.model_type == "voigt":
-            # Initialize the parameters
-            params = {
-                "pos_x": pos_x,  # x position
-                "pos_y": pos_y,  # y position
-                "height": height,  # height
-                "sigma": width,  # width
-                "gamma": width / np.sqrt(2 * np.log(2)),  # width
-                "ratio": ratio,  # ratio
-            }
-        elif self.model_type == "lorentzian":
-            params = {
-                "pos_x": pos_x,  # x position
-                "pos_y": pos_y,  # y position
-                "height": height,  # height
-                "gamma": width / np.sqrt(2 * np.log(2)),  # width
-            }
+
+        # Create parameter dictionary based on model type
+        params = {
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+            "height": height,
+        }
+
+        # Add model-specific parameters
+        params["width"] = width
+            
+        if isinstance(self.peak_model, VoigtModel):
+            if self.same_width:
+                ratio = np.tile(0.9, 1).astype(float)
+            else:
+                ratio = np.tile(0.9, self.num_coordinates).astype(float)
+            params["ratio"] = ratio
+
         if self.fit_background:
             params["background"] = init_background
 
@@ -445,12 +479,12 @@ class ImageModelFitting:
         region_mask = self.region_map == region_index
 
         crystal_analyzer = CrystalAnalyzer(
-            image=self.image,
+            image=self.data,
             dx=self.dx,
             peak_positions=self.coordinates[column_mask],
             atom_types=self.atom_types[column_mask],
             elements=elements,
-            units=self.units,
+            units="A",
             region_mask=region_mask,
         )
         if unit_cell is not None:
@@ -474,7 +508,7 @@ class ImageModelFitting:
         self, region_index: int = 0, invert_selection: bool = False
     ):
         atom_select = GetRegionSelection(
-            image=self.image,
+            image=self.data,
             invert_selection=invert_selection,
             region_map=self.region_map,
         )
@@ -498,7 +532,7 @@ class ImageModelFitting:
 
     def select_atoms(self, invert_selection: bool = False):
         atom_select = GetAtomSelection(
-            image=self.image,
+            image=self.data,
             atom_positions=self.coordinates,
             invert_selection=invert_selection,
         )
@@ -545,7 +579,7 @@ class ImageModelFitting:
             region_index in self.region_map
         ), "The region index is not in the region map."
         region_map = self.region_map == region_index
-        image_filtered = gaussian_filter(self.image, sigma)
+        image_filtered = gaussian_filter(self.data, sigma)
         peaks_locations = peak_local_max(
             image_filtered * region_map,
             min_distance=min_distance,
@@ -569,7 +603,7 @@ class ImageModelFitting:
             self.coordinates = peaks_locations[:, [1, 0]].astype(float)
             self.atom_types = np.zeros(peaks_locations.shape[0], dtype=int)
         if plot:
-            self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
+            self.add_or_remove_peaks(min_distance=min_distance, image=self.data)
         return self.coordinates
 
     def get_nearest_peak_distance(self, peak_position: np.ndarray):
@@ -612,7 +646,7 @@ class ImageModelFitting:
 
                 cetre_x, cetre_y = int(x) - left, int(y) - top
 
-                region = self.image[
+                region = self.data[
                     top:bottom,
                     left:right,
                 ]
@@ -667,7 +701,7 @@ class ImageModelFitting:
             left = max(int(y) - windows_size, 0)
             right = min(int(y) + windows_size + 1, self.ny)
             # calculate the mask for distance < r
-            region = self.image[left:right, top:bottom]
+            region = self.data[left:right, top:bottom]
             peaks_locations = peak_local_max(
                 region,
                 min_distance=int(min_distance / 4),
@@ -686,7 +720,7 @@ class ImageModelFitting:
             if plot:
                 plt.clf()
                 plt.subplot(1, 2, 1)
-                plt.imshow(self.image, cmap="gray")
+                plt.imshow(self.data, cmap="gray")
                 plt.scatter(
                     self.coordinates[:, 0],
                     self.coordinates[:, 1],
@@ -752,7 +786,7 @@ class ImageModelFitting:
 
     def add_or_remove_peaks(self, min_distance: int = 2, image=None):
         if image is None:
-            image = self.image
+            image = self.data
         peaks_locations = self.coordinates
         interactive_plot = InteractivePlot(
             image=image,
@@ -782,7 +816,7 @@ class ImageModelFitting:
 
     def loss(self, params: dict, image: np.ndarray, X: np.ndarray, Y: np.ndarray):
         # Compute the sum of the Gaussians
-        prediction = self.predict(params, X, Y)
+        prediction = self.predict(params, X=X, Y=Y)
         diff = image - prediction
         diff = diff * self.window
         # dammping the difference near the edge
@@ -792,7 +826,7 @@ class ImageModelFitting:
 
     def residual(self, params: dict, image: np.ndarray, X: np.ndarray, Y: np.ndarray):
         # Compute the sum of the Gaussians
-        prediction = self.predict(params, X, Y)
+        prediction = self.predict(params, X=X, Y=Y)
         diff = prediction - image
         return diff
 
@@ -838,227 +872,13 @@ class ImageModelFitting:
                 params["pos_x"] + i * self.nx,
                 params["pos_y"] + j * self.ny,
                 params["height"],
-                params.get("sigma"),
-                params.get("gamma"),
+                params.get("width"),
                 params.get("ratio"),
                 0,
             )
         return prediction
 
-    def predict(self, params: dict = None, X: np.ndarray = None, Y: np.ndarray = None):
-        if params is None:
-            params = self.params
-        if X is None or Y is None:
-            X = self.X
-            Y = self.Y
-        background = params.get("background", self.init_background)
-        pos_x = jnp.asarray(params["pos_x"])
-        pos_y = jnp.asarray(params["pos_y"])
-        height = jnp.asarray(params["height"])
-        sigma = params.get("sigma")
-        gamma = params.get("gamma")
-        ratio = params.get("ratio")
-        
-        if len(pos_x) < self.num_coordinates:
-            mask = self.atoms_selected
-        else:
-            mask = np.ones(self.num_coordinates, dtype=bool)
-
-        if self.same_width:
-            if self.model_type in {"gaussian", "voigt"} and sigma is not None:
-                sigma = jnp.asarray(sigma[self.atom_types[mask]])
-            if self.model_type in {"voigt", "lorentzian"} and gamma is not None:
-                gamma = jnp.asarray(gamma[self.atom_types[mask]])
-            if self.model_type == "voigt" and ratio is not None:
-                ratio = jnp.asarray(ratio[self.atom_types[mask]])
-
-        if self.model_type == "gaussian":
-            if self.gpu_memory_limit:
-                # Calculate static window size based on maximum sigma
-                window_size = get_static_window_size(jnp.max(sigma))
-                prediction = self._gaussian_sum_local(
-                    pos_x,
-                    pos_y,
-                    height,
-                    sigma,
-                    background,
-                    window_size
-                )
-            else:
-                prediction = gaussian_sum_parallel(
-                    X, Y, pos_x, pos_y, height, sigma, background
-                )
-        elif self.model_type == "voigt":
-            prediction = voigt_sum_parallel(
-                X, Y, pos_x, pos_y, height, sigma, gamma, ratio, background
-            )
-        elif self.model_type == "lorentzian":
-            prediction = lorentzian_sum_parallel(
-                X, Y, pos_x, pos_y, height, gamma, background
-            )
-        else:
-            raise ValueError("The model type is not valid.")
-
-        if self.pbc:
-            if self.gpu_memory_limit:
-                # Reuse the same window size for periodic images
-                window_size = get_static_window_size(jnp.max(sigma))
-                for i, j in [(1, 0), (0, 1), (-1, 0), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)]:
-                    prediction += self._gaussian_sum_local(
-                        pos_x + i * self.nx,
-                        pos_y + j * self.ny,
-                        height,
-                        sigma,
-                        0,  # No background for periodic images
-                        window_size
-                    )
-            else:
-                prediction = self.apply_pbc(prediction, gaussian_sum_parallel, params, X, Y)
-
-        return prediction
-
     # fitting
-
-    def linear_estimator(self, params: dict = None, non_negative=False):
-        if params is None:
-            if self.params is None:
-                self.init_params()
-            params = self.params
-        # create the design matrix as array of gaussian peaks + background
-        pos_x = params["pos_x"]
-        pos_y = params["pos_y"]
-        if self.model_type in {"gaussian", "voigt"}:
-            sigma = params["sigma"]
-            if self.same_width:
-                sigma = sigma[self.atom_types]
-            width = sigma.mean()
-        elif self.model_type in {"voigt", "lorentzian"}:
-            gamma = params["gamma"]
-            if self.same_width:
-                gamma = gamma[self.atom_types]
-            width = gamma.mean()
-        else:
-            raise ValueError("The model type is not valid.")
-        height = params["height"]
-        if (height < 0).any():
-            logging.warning(
-                "The height has negative values, the linear estimator is not valid, I will make it to zero but be careful with the results."
-            )
-            height[height < 0] = 0
-
-        rows = []
-        cols = []
-        data = []
-        window_size = int(width * 5)
-        x = np.arange(-window_size, window_size + 1, 1)
-        y = np.arange(-window_size, window_size + 1, 1)
-        local_X, local_Y = np.meshgrid(x, y, indexing="xy")
-        if self.model_type == "gaussian":
-            peak_local = gaussian_2d_numba(
-                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma
-            )
-        elif self.model_type == "lorentzian":
-            peak_local = lorentzian_2d_numba(
-                local_X, local_Y, pos_x % 1, pos_y % 1, height, gamma
-            )
-        elif self.model_type == "voigt":
-            peak_local = voigt_2d_numba(
-                local_X, local_Y, pos_x % 1, pos_y % 1, height, sigma, gamma, ratio
-            )
-        else:
-            raise ValueError("The model type is not valid.")
-
-        for atomic_column_index in range(self.num_coordinates):
-            global_X = local_X + pos_x[atomic_column_index].astype(int)
-            global_Y = local_Y + pos_y[atomic_column_index].astype(int)
-            mask = (
-                (global_X >= 0)
-                & (global_X < self.nx)
-                & (global_Y >= 0)
-                & (global_Y < self.ny)
-            )
-            flat_index = global_Y[mask].flatten() * self.nx + global_X[mask].flatten()
-            rows.extend(flat_index)
-            cols.extend(np.tile(atomic_column_index, flat_index.shape[0]))
-            data.extend(peak_local[:, :, atomic_column_index][mask].ravel())
-        if self.fit_background:
-            rows.extend(self.Y.flatten() * self.nx + self.X.flatten())
-            cols.extend(np.tile(self.num_coordinates, self.nx * self.ny))
-            data.extend(np.ones(self.nx * self.ny))
-            design_matrix = coo_matrix(
-                (data, (rows, cols)),
-                shape=(self.nx * self.ny, self.num_coordinates + 1),
-            )
-        else:
-            design_matrix = coo_matrix(
-                (data, (rows, cols)), shape=(self.nx * self.ny, self.num_coordinates)
-            )
-        # create the target as the image
-        b = self.image.ravel()
-        if not self.fit_background:
-            b = b - self.init_background
-        # solve the linear equation
-        try:
-            # Attempt to solve the linear system
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                if non_negative:
-                    design_matrix_csr = design_matrix.tocsr()
-                    result = lsq_linear(design_matrix_csr, b, bounds=(0, np.inf))
-                    solution = result.x
-                else:
-                    solution = spsolve(
-                        design_matrix.T @ design_matrix, design_matrix.T @ b
-                    )
-                    # Check if any of the caught warnings are related to a singular matrix
-                    if w and any(
-                        "singular matrix" in str(warning.message) for warning in w
-                    ):
-                        logging.warning(
-                            "Warning: Singular matrix encountered. Please refine the peak positions better before linear estimation. The parameters are not updated."
-                        )
-                        return params
-
-        except np.linalg.LinAlgError as e:
-            if "Singular matrix" in str(e):
-                logging.warning("Error: Singular matrix encountered.")
-            else:
-                raise
-
-        # solution = cg(design_matrix.T @ design_matrix, design_matrix.T @ b)[0]
-        # update the background and height
-
-        if self.fit_background:
-            params["background"] = (
-                solution[-1] if solution[-1] > 0 else self.init_background
-            )
-            height_scale = solution[:-1]
-        else:
-            height_scale = solution
-        if np.NaN in height_scale:
-            logging.warning(
-                "The height_scale has NaN, the linear estimator is not valid, parameters are not updated"
-            )
-            return params
-        if (height_scale > 2).any():
-            logging.warning(
-                "The height_scale has values larger than 2, the linear estimator is probably not accurate. I will limit it to 2 but be careful with the results."
-            )
-            height_scale[height_scale > 2] = 2
-        if (height_scale < 0.5).any():
-            logging.warning(
-                "The height_scale has values smaller than 0.5, the linear estimator is probably not accurate. I will limit it to 0.5 but be careful with the results."
-            )
-            height_scale[height_scale < 0.5] = 0.5
-        params["height"] = height_scale * params["height"]
-        mask_negative_height = params["height"] < 0
-        if mask_negative_height.any():
-            logging.warning(
-                "The height has negative values, the linear estimator is not valid. I will make it to zero but be careful with the results."
-            )
-        params["height"][mask_negative_height] = 0
-        self.params = params
-        return params
 
     def optimize(
         self,
@@ -1164,7 +984,7 @@ class ImageModelFitting:
         res = minimize(
             fun=objective_fn,
             x0=params_flat,  # type: ignore
-            args=(param_shapes, param_keys, self.image, self.X, self.Y),
+            args=(param_shapes, param_keys, self.data, np.arange(self.nx), np.arange(self.ny)),
             method=method,
             tol=tol,
         )
@@ -1179,7 +999,7 @@ class ImageModelFitting:
             start = end
         # params = self.same_width_on_atom_type(optimized_params)
         self.params = optimized_params
-        self.model = self.predict(optimized_params, self.X, self.Y)
+        self.model = self.predict(optimized_params)
         return optimized_params
 
     def fit_global(
@@ -1194,11 +1014,11 @@ class ImageModelFitting:
             params = self.params if self.params is not None else self.init_params()
         self.fit_local = False
         params = self.optimize(
-            self.image, params, self.X, self.Y, maxiter, tol, step_size, verbose
+            self.data, params, np.arange(self.nx), np.arange(self.ny), maxiter, tol, step_size, verbose
         )
         # params = self.same_width_on_atom_type(params)
         self.params = params
-        self.model = self.predict(params, self.X, self.Y)
+        self.model = self.predict(params)
         return params
 
     def fit_random_batch(
@@ -1217,7 +1037,7 @@ class ImageModelFitting:
 
         self.fit_local = False
         self.converged = False
-        params = self.linear_estimator(params)
+        params = self.linear_estimator(params["pos_x"], params["pos_y"])
         while self.converged is False and num_epoch > 0:
             # params = self.linear_estimator(params)
             pre_params = copy.deepcopy(params)
@@ -1225,9 +1045,8 @@ class ImageModelFitting:
             random_batches = get_random_indices_in_batches(
                 self.num_coordinates, batch_size
             )
-            image = self.image
-            X = self.X
-            Y = self.Y
+            image = self.data
+
 
             for index in tqdm(random_batches, desc="Fitting random batch"):
                 mask = np.zeros(self.num_coordinates, dtype=bool)
@@ -1236,20 +1055,20 @@ class ImageModelFitting:
                 select_params = self.select_params(params, mask)
                 try:
                     if not self.gpu_memory_limit:
-                        global_prediction = self.predict(params, X, Y)
-                        local_prediction = self.predict(select_params, X, Y)
+                        global_prediction = self.predict(params, use_numba=False)
+                        local_prediction = self.predict(select_params,use_numba=False)
                     else:
                         raise XlaRuntimeError(
                             "GPU memory limit exceeded, using the fallback of local prediction."
                         )  # Explicitly raise an exception to use the fallback
                 except XlaRuntimeError:
                     self.gpu_memory_limit = True
-                    global_prediction = self.predict(params, X, Y)
-                    local_prediction = self.predict(select_params, X, Y)
+                    global_prediction = self.predict(params,use_numba=False)
+                    local_prediction = self.predict(select_params,use_numba=False)
                 local_residual = global_prediction - local_prediction
                 local_target = image - local_residual
                 select_params = self.optimize(
-                    local_target, select_params, X, Y, maxiter, tol, step_size, verbose
+                    local_target, select_params, self.X, self.Y, maxiter, tol, step_size, verbose
                 )
                 select_params = self.project_params(select_params)
                 params = self.update_from_local_params(params, select_params, mask)
@@ -1276,9 +1095,9 @@ class ImageModelFitting:
                     plt.show()
                     plt.pause(1.0)
         self.converged = self.convergence(params, pre_params, tol)
-        params = self.linear_estimator(params)
+        params = self.linear_estimator(params["pos_x"], params["pos_y"])
         self.params = params
-        self.model = self.predict(params, self.X, self.Y)
+        self.model = self.predict(params)
         return params
 
     def fit_region(
@@ -1302,7 +1121,7 @@ class ImageModelFitting:
         # get the region of the image based on the patch_size and buffer_size
         # the buffer_size is on both sides of the patch
 
-        image_region = self.image[top:bottom, left:right]
+        image_region = self.data[top:bottom, left:right]
         self.local_shape = image_region.shape
 
         # get the region of the coordinates
@@ -1325,26 +1144,19 @@ class ImageModelFitting:
 
         # get the buffer atoms as the difference between the region_atoms and the central_atoms
         local_X, local_Y = (
-            self.X[top:bottom, left:right],
-            self.Y[top:bottom, left:right],
+            np.arange(left, right),
+            np.arange(top, bottom),
         )
         if mask_center.sum() == 0:
             return params, None
         local_params = self.select_params(params, mask_region)
         self.atoms_selected = mask_region
-        global_prediction = self.predict(params, self.X, self.Y)
-        local_prediction = self.predict(local_params, local_X, local_Y)
+        global_prediction = self.predict(params)
+        local_prediction = self.predict(local_params,X=local_X, Y=local_Y)
         local_residual = global_prediction[top:bottom, left:right] - local_prediction
         local_target = image_region - local_residual
         local_params = self.optimize(
-            local_target,
-            local_params,
-            local_X,
-            local_Y,
-            maxiter,
-            tol,
-            step_size,
-            verbose,
+            local_target, local_params, local_X, local_Y, maxiter, tol, step_size, verbose
         )
         params = self.update_from_local_params(
             params, local_params, mask_center, index_center_in_region
@@ -1436,7 +1248,7 @@ class ImageModelFitting:
             jj = np.random.randint(
                 half_patch, max(self.ny - half_patch, patch_size), num_random_patches
             )
-        params = self.linear_estimator(params)
+        params = self.linear_estimator(params["pos_x"], params["pos_y"])
         for index in tqdm(range(len(ii))):
             i, j = ii[index], jj[index]
             left = max(i - half_patch - buffer_size, 0)
@@ -1477,9 +1289,9 @@ class ImageModelFitting:
 
         # have a linear estimator of the background and height of the gaussian peaks
         # self.same_width_on_atom_type(params)
-        params = self.linear_estimator(params)
+        params = self.linear_estimator(params["pos_x"], params["pos_y"])
         self.params = params
-        self.model = self.predict(params, self.X, self.Y)
+        self.model = self.predict(params)
         return params
 
     # parameters updates and convergence
@@ -1490,8 +1302,7 @@ class ImageModelFitting:
         This function iterates over each parameter in `params` and its corresponding
         value in `pre_params` to determine if the change (update) is within a specified
         tolerance level, `tol`. For position parameters ('pos_x', 'pos_y'), it checks if
-        the absolute update exceeds 1. For other parameters ('height', 'sigma', 'gamma',
-        'ratio', 'background'), it checks if the relative update exceeds `tol`.
+        the absolute update exceeds 1. For other parameters ('height', 'width', 'ratio', 'background'), it checks if the relative update exceeds `tol`.
 
         Parameters:
             params (dict): Current values of the parameters.
@@ -1533,11 +1344,9 @@ class ImageModelFitting:
         if self.fit_background:
             select_params["background"] = params["background"]
         if self.same_width:
-            if self.model_type in {"gaussian", "voigt"}:
-                select_params["sigma"] = params["sigma"]
-            if self.model_type in {"voigt", "lorentzian"}:
-                select_params["gamma"] = params["gamma"]
-            if self.model_type == "voigt":
+            if "width" in params:
+                select_params["width"] = params["width"]
+            if "ratio" in params:
                 select_params["ratio"] = params["ratio"]
             for key in ["pos_x", "pos_y", "height"]:
                 select_params[key] = params[key][mask]
@@ -1554,7 +1363,7 @@ class ImageModelFitting:
             value = np.array(value)
             shared_value_list = ["background"]
             if self.same_width:
-                shared_value_list += ["sigma", "gamma", "ratio"]
+                shared_value_list += ["width", "ratio"]
             if key not in shared_value_list:
                 if mask_local is None:
                     params[key][mask] = value
@@ -1575,7 +1384,7 @@ class ImageModelFitting:
                 mask = mask.squeeze()
                 for key, value in params.items():
                     is_jax_traced = isinstance(params[key], jax.numpy.ndarray)
-                    if key in ["sigma", "gamma", "ratio"]:
+                    if key in ["width", "ratio"]:
                         if is_jax_traced:
                             # Calculate the mean only for the masked values using JAX
                             mean_value = jnp.mean(value[mask])
@@ -1594,15 +1403,13 @@ class ImageModelFitting:
             elif key == "pos_y":
                 params[key] = jnp.clip(value, 0, self.ny - 1)
             elif key == "height":
-                params[key] = jnp.clip(value, 0, np.sum(self.image))
-            elif key == "sigma":
-                params[key] = jnp.clip(value, 1, min(self.nx, self.ny) / 2)
-            elif key == "gamma":
+                params[key] = jnp.clip(value, 0, np.sum(self.data))
+            elif key == "width":
                 params[key] = jnp.clip(value, 1, min(self.nx, self.ny) / 2)
             elif key == "ratio":
                 params[key] = jnp.clip(value, 0, 1)
             elif key == "background":
-                params[key] = jnp.clip(value, 0, np.max(self.image))
+                params[key] = jnp.clip(value, 0, np.max(self.data))
         return params
 
     def update_coordinates(self):
@@ -1628,12 +1435,12 @@ class ImageModelFitting:
         column_mask = self.region_column_labels == region_index
         region_mask = self.region_map == region_index
         crystal_analyzer = CrystalAnalyzer(
-            image=self.image,
+            image=self.data,
             dx=self.dx,
             peak_positions=self.coordinates[column_mask],
             atom_types=self.atom_types[column_mask],
             elements=self.elements,
-            units=self.units,
+            units="A",
             region_mask=region_mask,
         )
         if unit_cell is not None:
@@ -1647,16 +1454,16 @@ class ImageModelFitting:
         dx_a = a / np.linalg.norm(vec_a_pixel)
         dx_b = b / np.linalg.norm(vec_b_pixel)
         self.dx = (dx_a + dx_b) / 2
-        logging.info(f"Calibrated pixel size: {self.dx} {self.units}")
+        logging.info(f"Calibrated pixel size: {self.dx} A")
 
     def plot(self, vmin=None, vmax=None):
         if vmin is None:
             # get the bottom 5% of the image
-            vmin = np.percentile(self.image, 5)
+            vmin = np.percentile(self.data, 5)
 
         plt.figure(figsize=(10, 5))
         plt.subplot(1, 2, 1)
-        im = plt.imshow(self.image, cmap="gray", vmin=vmin, vmax=vmax)
+        im = plt.imshow(self.data, cmap="gray", vmin=vmin, vmax=vmax)
         plt.axis("off")
         scalebar = self.scalebar
         plt.gca().add_artist(scalebar)
@@ -1667,7 +1474,7 @@ class ImageModelFitting:
         plt.title("Image")
 
         plt.subplot(1, 2, 2)
-        plt.hist(self.image.ravel(), bins=256)
+        plt.hist(self.data.ravel(), bins=256)
         plt.xlabel("Intensity")
         plt.ylabel("Counts")
         plt.title("Intensity Histogram")
@@ -1682,7 +1489,7 @@ class ImageModelFitting:
             s (int, optional): The size of the atomic columns. Defaults to 1.
         """
         plt.figure()
-        plt.imshow(self.image, cmap="gray")
+        plt.imshow(self.data, cmap="gray")
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
             elements = self.elements[atom_type]
@@ -1696,10 +1503,10 @@ class ImageModelFitting:
 
     def plot_fitting(self):
         plt.figure(figsize=(15, 5))
-        vmin = self.image.min()
-        vmax = self.image.max()
+        vmin = self.data.min()
+        vmax = self.data.max()
         plt.subplot(1, 3, 1)
-        im = plt.imshow(self.image, cmap="gray", vmin=vmin, vmax=vmax)
+        im = plt.imshow(self.data, cmap="gray", vmin=vmin, vmax=vmax)
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Original Image")
@@ -1711,7 +1518,7 @@ class ImageModelFitting:
         plt.title("Model")
         plt.tight_layout()
         plt.subplot(1, 3, 3)
-        im = plt.imshow(self.image - self.model, cmap="gray")
+        im = plt.imshow(self.data - self.model, cmap="gray")
         plt.colorbar(im, fraction=0.046, pad=0.04)
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Residual")
@@ -1732,7 +1539,7 @@ class ImageModelFitting:
                 row += len(np.unique(self.atom_types)) - 1
         plt.figure(figsize=figsize)
         plt.subplot(row, col, 1)
-        plt.imshow(self.image, cmap="gray")
+        plt.imshow(self.data, cmap="gray")
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
             element = self.elements[int(atom_type)]
@@ -1782,14 +1589,13 @@ class ImageModelFitting:
                 # plt.axis("off")
                 plt.xlim(0, self.nx * self.dx)
                 plt.ylim(0, self.ny * self.dx)
-                plt.xlabel(r"X ($\AA$)")
-                plt.ylabel(r"Y ($\AA$)")
-                plt.title(f"{element}")
+                plt.xlabel(r"X (A)")
+                plt.ylabel(r"Y (A)")
                 plt.gca().invert_yaxis()
-                # add title to the colorbar
+                plt.title(f"{element}")
                 if atom_type == self.atom_types.max():
                     if has_units:
-                        cbar.set_label(r"SCS ($\AA^2$)")
+                        cbar.set_label(r"SCS (A^2)")
                     else:
                         cbar.set_label("Integrated intensities")
                 plt.tight_layout()
@@ -1800,12 +1606,12 @@ class ImageModelFitting:
             # plt.axis("off")
             plt.xlim(0, self.nx * self.dx)
             plt.ylim(0, self.ny * self.dx)
-            plt.xlabel(r"X ($\AA$)")
-            plt.ylabel(r"Y ($\AA$)")
+            plt.xlabel(r"X (A)")
+            plt.ylabel(r"Y (A)")
             plt.gca().invert_yaxis()
             plt.gca().set_aspect("equal", adjustable="box")
             if has_units:
-                cbar.set_label(r"SCS ($\AA^2$)")
+                cbar.set_label(r"SCS (A^2)")
             else:
                 cbar.set_label("Integrated intensities")
             plt.tight_layout()
@@ -1820,7 +1626,7 @@ class ImageModelFitting:
             col += len(np.unique(self.atom_types)) - 1
             plt.figure(figsize=figsize)
             plt.subplot(row, col, 1)
-            plt.imshow(self.image, cmap="gray")
+            plt.imshow(self.data, cmap="gray")
             for atom_type in np.unique(self.atom_types):
                 mask = self.atom_types == atom_type
                 element = self.elements[atom_type]
@@ -1856,13 +1662,13 @@ class ImageModelFitting:
                 # plt.axis("off")
                 plt.xlim(0, self.nx * self.dx)
                 plt.ylim(0, self.ny * self.dx)
-                plt.xlabel(r"X ($\AA$)")
-                plt.ylabel(r"Y ($\AA$)")
+                plt.xlabel(r"X (A)")
+                plt.ylabel(r"Y (A)")
                 plt.gca().invert_yaxis()
                 plt.title(f"{element}")
                 if atom_type == self.atom_types.max():
                     if has_units:
-                        cbar.set_label(r"Voronoi SCS ($\AA^2$)")
+                        cbar.set_label(r"Voronoi SCS (A^2)")
                     else:
                         cbar.set_label("Voronoi integrated intensities")
                 plot_idx += 1
@@ -1870,7 +1676,7 @@ class ImageModelFitting:
             row, col = (1, 2) if layout == "horizontal" else (2, 1)
             plt.figure()
             plt.subplot(row, col, 1)
-            plt.imshow(self.image, cmap="gray")
+            plt.imshow(self.data, cmap="gray")
             for atom_type in np.unique(self.atom_types):
                 mask = self.atom_types == atom_type
                 element = self.elements[atom_type]
@@ -1883,6 +1689,7 @@ class ImageModelFitting:
             plt.legend()
             plt.gca().set_aspect("equal", adjustable="box")
             plt.title("Image")
+
             plt.subplot(row, col, 2)
             pos_x = self.params["pos_x"] * self.dx
             pos_y = self.params["pos_y"] * self.dx
@@ -1892,7 +1699,7 @@ class ImageModelFitting:
             plt.gca().set_aspect("equal", adjustable="box")
             plt.colorbar(im, fraction=0.046, pad=0.04)
             if has_units:
-                plt.title(r"Voronoi scs ($\AA^2$)")
+                plt.title(r"Voronoi scs (A^2)")
             else:
                 plt.title("Voronoi integrated intensities")
         plt.tight_layout()
@@ -1909,7 +1716,7 @@ class ImageModelFitting:
             plt.hist(self.volume[mask], bins=100, alpha=0.5, label=element)
         plt.legend()
         if has_units:
-            plt.xlabel(r"Refined SCS ($\AA^2$)")
+            plt.xlabel(r"Refined SCS (A^2)")
         else:
             plt.xlabel("Integrated intensities")
         plt.ylabel("Frequency")
@@ -1922,7 +1729,7 @@ class ImageModelFitting:
         plt.figure()
         # cmap = color_iter('Set3', self.num_regions)
         # cmap = plt.get_cmap("tab10", self.num_regions)
-        plt.imshow(self.image, cmap="gray")
+        plt.imshow(self.data, cmap="gray")
         plt.imshow(self.region_map, alpha=0.5)
         scalebar = self.scalebar
         plt.gca().add_artist(scalebar)
@@ -1930,3 +1737,174 @@ class ImageModelFitting:
         cbar = plt.colorbar()
         cbar.set_ticks(np.arange(self.num_regions))  # type: ignore
         plt.title("Region Map")
+
+    @property
+    def atom_types(self):
+        if len(self._atom_types) == 0 or self._atom_types is None:
+            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        return self._atom_types
+
+    @atom_types.setter
+    def atom_types(self, atom_types: np.ndarray):
+        self._atom_types = atom_types
+
+    @property
+    def coordinates(self):
+        return self._coordinates
+
+    @coordinates.setter
+    def coordinates(self, coordinates: np.ndarray):
+        self._coordinates = coordinates
+
+    @property
+    def num_coordinates(self):
+        return self.coordinates.shape[0]
+
+    @property
+    def num_atom_types(self):
+        return len(np.unique(self.atom_types))
+
+    def linear_estimator(self, params: dict = None, non_negative=False):
+        """Estimate peak heights and background using linear least squares.
+        
+        Uses local peak computation and sparse matrices for efficient estimation.
+        """
+        if params is None:
+            if self.params is None:
+                self.init_params()
+            params = self.params
+
+        # Get parameters
+        pos_x = params["pos_x"]
+        pos_y = params["pos_y"]
+        height = params["height"]
+        
+        # Get width parameter
+        width = params["width"]
+        if self.same_width:
+            width = width[self.atom_types]
+        width = float(width.mean())
+
+        # Calculate local windows
+        window_size = int(width * 5)
+        x = jnp.arange(-window_size, window_size + 1, 1)
+        y = jnp.arange(-window_size, window_size + 1, 1)
+        local_X, local_Y = jnp.meshgrid(x, y, indexing="xy")
+
+        # Build sparse matrix components
+        rows = []
+        cols = []
+        data = []
+
+        # Vectorized peak computation
+        def compute_peak(i):
+            frac_x = pos_x[i] % 1
+            frac_y = pos_y[i] % 1
+            
+            # Handle different model types
+            if isinstance(self.peak_model, VoigtModel):
+                ratio = params.get("ratio", jnp.array([0.5]))[i]
+                return self.peak_model.model_fn(
+                    local_X, local_Y, frac_x, frac_y, height[i], width, ratio
+                )
+            else:
+                return self.peak_model.model_fn(
+                    local_X, local_Y, frac_x, frac_y, height[i], width
+                )
+
+        # Compute all peaks in parallel
+        peak_locals = jax.vmap(compute_peak)(jnp.arange(self.num_coordinates))
+        peak_locals = jax.device_get(peak_locals)
+
+        # Compute contributions for each peak
+        for i in range(self.num_coordinates):
+            # Convert to numpy and add to global coordinates
+            peak_local = peak_locals[i]
+            global_X = local_X + pos_x[i].astype(int)
+            global_Y = local_Y + pos_y[i].astype(int)
+            
+            # Create mask for valid pixels
+            mask = (
+                (global_X >= 0)
+                & (global_X < self.nx)
+                & (global_Y >= 0)
+                & (global_Y < self.ny)
+            )
+            
+            # Only add peak if it has some contribution to the image
+            if np.any(mask):
+                # Add to sparse matrix components
+                flat_index = global_Y[mask].flatten() * self.nx + global_X[mask].flatten()
+                rows.extend(flat_index)
+                cols.extend(np.full(flat_index.shape[0], i))
+                data.extend(peak_local[mask].ravel())
+
+        # Add background term if needed
+        if self.fit_background:
+            rows.extend(np.arange(self.nx * self.ny))
+            cols.extend(np.full(self.nx * self.ny, self.num_coordinates))
+            data.extend(np.ones(self.nx * self.ny))
+            design_matrix = coo_matrix(
+                (data, (rows, cols)),
+                shape=(self.nx * self.ny, self.num_coordinates + 1),
+            )
+        else:
+            design_matrix = coo_matrix(
+                (data, (rows, cols)), 
+                shape=(self.nx * self.ny, self.num_coordinates)
+            )
+
+        # Prepare target vector
+        b = self.data.ravel()
+        if not self.fit_background:
+            b = b - self.init_background
+
+        # Solve linear system
+        try:
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                if non_negative:
+                    design_matrix_csr = design_matrix.tocsr()
+                    result = lsq_linear(design_matrix_csr, b, bounds=(0, np.inf))
+                    solution = result.x
+                else:
+                    solution = spsolve(design_matrix.T @ design_matrix, design_matrix.T @ b)
+                    if w and any("singular matrix" in str(warning.message) for warning in w):
+                        logging.warning(
+                            "Warning: Singular matrix encountered. Please refine the peak positions "
+                            "better before linear estimation. The parameters are not updated."
+                        )
+                        return params
+
+        except np.linalg.LinAlgError as e:
+            if "Singular matrix" in str(e):
+                logging.warning("Error: Singular matrix encountered.")
+            else:
+                raise
+
+        # Update parameters
+        if self.fit_background:
+            params["background"] = max(solution[-1], 0) if solution[-1] > 0 else self.init_background
+            height_scale = solution[:-1]
+        else:
+            height_scale = solution
+
+        # Validate height scale
+        if np.any(np.isnan(height_scale)):
+            logging.warning("Height scale contains NaN values. Parameters not updated.")
+            return params
+
+        # Clip height scale to reasonable values
+        height_scale = np.clip(height_scale, 0.5, 2.0)
+        if np.any(height_scale > 1.9) or np.any(height_scale < 0.6):
+            logging.warning(
+                "Some height_scale values were clipped to [0.5, 2.0]. "
+                "The linear estimator might not be accurate."
+            )
+
+        # Update heights
+        params["height"] = height_scale * height
+        params["height"] = np.maximum(params["height"], 0)
+
+        self.params = params
+        return params
