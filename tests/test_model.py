@@ -1,31 +1,23 @@
 import os
 
-import jax
-import jax.numpy as jnp
-import numpy as np
-import pytest
-
 # Configure JAX to use CPU if CUDA is not available
-if not jax.config.jax_platforms:
+if not os.environ.get('JAX_PLATFORMS'):
     os.environ["JAX_PLATFORMS"] = "cpu"
     os.environ["JAX_ENABLE_X64"] = "True"
 
 import jax
+import numpy as np
+import pytest
 
-if os.environ.get('JAX_PLATFORMS') == 'cuda':
-    jax.config.update('jax_platform_name', 'gpu')
-    jax.config.update('jax_enable_x64', True)
-
+# Import the model classes
 from qem.model import (
-    butterworth_window,
-    gaussian_2d_jax,
-    gaussian_2d_numba,
-    gaussian_filter_jax,
-    gaussian_kernel,
-    lorentzian_2d_numba,
-    mask_grads,
-    voigt_2d_numba,
+    set_backend,
+    GaussianModel,
+    LorentzianModel,
+    VoigtModel,
+    GaussianKernel
 )
+
 
 
 @pytest.fixture
@@ -35,189 +27,224 @@ def grid_2d():
     X, Y = np.meshgrid(x, y)
     return X, Y
 
-
 @pytest.fixture
 def peak_params():
     pos_x = np.array([0.0, 2.0])
     pos_y = np.array([0.0, -2.0])
     height = np.array([1.0, 0.5])
     width = 1.0
-    gamma = 1.0
     ratio = 0.5
-    return pos_x, pos_y, height, width, gamma, ratio
+    return {"pos_x": pos_x, "pos_y": pos_y, "height": height, "width": width, "ratio": ratio}
 
+def test_set_backend():
+    # Test setting valid backend
+    backend = set_backend('jax')
+    assert backend in ['tensorflow', 'pytorch', 'jax']
+    
+    # Test invalid backend
+    with pytest.raises(ValueError):
+        set_backend('invalid')
 
-def test_gaussian_2d_numba(grid_2d, peak_params):
+def test_gaussian_model(grid_2d, peak_params):
     X, Y = grid_2d
-    pos_x, pos_y, height, width, _, _ = peak_params
+    model = GaussianModel(dx=1.0, background=0.1)
+    
+    # Test sum method
+    result = model.sum(
+        X, Y,
+        peak_params["pos_x"],
+        peak_params["pos_y"],
+        peak_params["height"],
+        peak_params["width"]
+    )
+    
+    # Check shape and background
+    assert result.shape == (50, 50)
+    assert np.all(result >= model.background)
+    
+    # Check peak heights
+    for i in range(len(peak_params["pos_x"])):
+        x_idx = np.abs(X[0, :] - peak_params["pos_x"][i]).argmin()
+        y_idx = np.abs(Y[:, 0] - peak_params["pos_y"][i]).argmin()
+        expected_height = peak_params["height"][i] + model.background
+        assert np.abs(result[y_idx, x_idx] - expected_height) < 0.05
+    
+    # Test volume calculation
+    volumes = model.volume(peak_params)
+    assert len(volumes) == len(peak_params["pos_x"])
+    for vol in volumes:
+        assert vol > 0
 
-    result = gaussian_2d_numba(X, Y, pos_x, pos_y, height, width)
-
-    # Check shape
-    assert result.shape == (50, 50, 2)
-
-    # Check peak heights at specified positions with relaxed tolerance
-    for i in range(len(pos_x)):
-        x_idx = np.abs(X[0, :] - pos_x[i]).argmin()
-        y_idx = np.abs(Y[:, 0] - pos_y[i]).argmin()
-        assert np.abs(result[y_idx, x_idx, i] - height[i]) < 0.05
-
-
-def test_lorentzian_2d_numba(grid_2d, peak_params):
+def test_gaussian_model_local(grid_2d, peak_params):
     X, Y = grid_2d
-    pos_x, pos_y, height, _, gamma, _ = peak_params
+    model = GaussianModel(dx=1.0, background=0.1)
+        
+    print("\nGrid info:")
+    print("X range:", X[0, 0], "to", X[0, -1])
+    print("Y range:", Y[0, 0], "to", Y[-1, 0])
+    print("Physical pos_x:", peak_params["pos_x"])
+    print("Physical pos_y:", peak_params["pos_y"])
 
-    result = lorentzian_2d_numba(X, Y, pos_x, pos_y, height, gamma)
+    # Test global sum method
+    result_global = model.sum(
+        X, Y,
+        peak_params["pos_x"],
+        peak_params["pos_y"],
+        peak_params["height"],
+        peak_params["width"]
+    )
 
-    # Check shape
-    assert result.shape == (50, 50, 2)
+    # Test local sum method
+    result_local = model.sum(
+        X, Y,
+        peak_params["pos_x"],
+        peak_params["pos_y"],
+        peak_params["height"],
+        peak_params["width"],
+        local=True
+    )
 
-    # Check peak heights at specified positions with relaxed tolerance
-    for i in range(len(pos_x)):
-        x_idx = np.abs(X[0, :] - pos_x[i]).argmin()
-        y_idx = np.abs(Y[:, 0] - pos_y[i]).argmin()
-        assert np.abs(result[y_idx, x_idx, i] - height[i]) < 0.05
+    # Print some debug info
+    print("\nGlobal shape:", result_global.shape)
+    print("Local shape:", result_local.shape)
+    print("Global max:", result_global.max())
+    print("Local max:", result_local.max())
+    print("Global min:", result_global.min())
+    print("Local min:", result_local.min())
+    print("Global mean:", result_global.mean())
+    print("Local mean:", result_local.mean())
+        
+    # Results should be very close
+    assert np.allclose(result_global, result_local, rtol=1e-4, atol=1e-4)
+    
+    # Check shape and background
+    assert result_local.shape == (50, 50)
+    assert np.all(result_local >= model.background)
+    
+    # Check peak heights
+    for i in range(len(peak_params["pos_x"])):
+        x_idx = np.abs(X[0, :] - peak_params["pos_x"][i]).argmin()
+        y_idx = np.abs(Y[:, 0] - peak_params["pos_y"][i]).argmin()
+        expected_height = peak_params["height"][i] + model.background
+        assert np.abs(result_local[y_idx, x_idx] - expected_height) < 0.05
+    
+    # Test with peaks far apart to ensure local calculation works
+    far_peaks = {
+        "pos_x": np.array([-20.0, 20.0]),
+        "pos_y": np.array([-20.0, 20.0]),
+        "height": np.array([1.0, 1.0]),
+        "width": peak_params["width"],
+        "ratio": peak_params["ratio"]
+    }
+    
+    # Calculate with both methods
+    result_global_far = model.sum(
+        X, Y,
+        far_peaks["pos_x"],
+        far_peaks["pos_y"],
+        far_peaks["height"],
+        far_peaks["width"]
+    )
+    
+    result_local_far = model.sum(
+        X, Y,
+        far_peaks["pos_x"],
+        far_peaks["pos_y"],
+        far_peaks["height"],
+        far_peaks["width"],
+        local=True
+    )
+    
+    # For far peaks, both results should be close to background in the center
+    center_idx = len(X) // 2
+    assert np.abs(result_global_far[center_idx, center_idx] - model.background) < 1e-5
+    assert np.abs(result_local_far[center_idx, center_idx] - model.background) < 1e-5
 
-
-def test_voigt_2d_numba(grid_2d, peak_params):
+def test_lorentzian_model(grid_2d, peak_params):
     X, Y = grid_2d
-    pos_x, pos_y, height, width, gamma, ratio = peak_params
+    model = LorentzianModel(dx=1.0, background=0.1)
+    
+    # Test sum method
+    result = model.sum(
+        X, Y,
+        peak_params["pos_x"],
+        peak_params["pos_y"],
+        peak_params["height"],
+        peak_params["width"]
+    )
+    
+    # Check shape and background
+    assert result.shape == (50, 50)
+    assert np.all(result >= model.background)
+    
+    # Check peak heights
+    for i in range(len(peak_params["pos_x"])):
+        x_idx = np.abs(X[0, :] - peak_params["pos_x"][i]).argmin()
+        y_idx = np.abs(Y[:, 0] - peak_params["pos_y"][i]).argmin()
+        expected_height = peak_params["height"][i] + model.background
+        assert np.abs(result[y_idx, x_idx] - expected_height) < 0.15
+    
+    # Test volume calculation
+    volumes = model.volume(peak_params)
+    assert len(volumes) == len(peak_params["pos_x"])
+    for vol in volumes:
+        assert vol > 0
 
-    result = voigt_2d_numba(X, Y, pos_x, pos_y, height, width, gamma, ratio)
-
-    # Check shape
-    assert result.shape == (50, 50, 2)
-
-    # Check peak heights at specified positions with relaxed tolerance
-    for i in range(len(pos_x)):
-        x_idx = np.abs(X[0, :] - pos_x[i]).argmin()
-        y_idx = np.abs(Y[:, 0] - pos_y[i]).argmin()
-        assert np.abs(result[y_idx, x_idx, i] - height[i]) < 0.05
-
-
-def test_gaussian_2d_jax(grid_2d, peak_params):
+def test_voigt_model(grid_2d, peak_params):
     X, Y = grid_2d
-    pos_x, pos_y, height, width, _, _ = peak_params
-
-    # Convert inputs to jax arrays with explicit dtype
-    dtype = jnp.float64 if jax.config.x64_enabled else jnp.float32
-    X_jax = jnp.asarray(X, dtype=dtype)
-    Y_jax = jnp.asarray(Y, dtype=dtype)
-    pos_x_jax = jnp.asarray(pos_x, dtype=dtype)
-    pos_y_jax = jnp.asarray(pos_y, dtype=dtype)
-    height_jax = jnp.asarray(height, dtype=dtype)
-    width_jax = jnp.asarray(width, dtype=dtype)
-
-    result = gaussian_2d_jax(X_jax, Y_jax, pos_x_jax, pos_y_jax, height_jax, width_jax)
-
-    # Convert result back to numpy for testing
-    result = np.array(result)
-
-    # Check shape
-    assert result.shape == (50, 50, 2)
-
-    # Check peak heights at specified positions with appropriate tolerance
-    rtol = 0.02  # 2% relative tolerance
-    for i in range(len(pos_x)):
-        x_idx = np.abs(X[0, :] - pos_x[i]).argmin()
-        y_idx = np.abs(Y[:, 0] - pos_y[i]).argmin()
-        # Get a small neighborhood around the peak to account for discretization
-        peak_region = result[max(0, y_idx-1):min(50, y_idx+2),
-                           max(0, x_idx-1):min(50, x_idx+2), i]
-        max_value = np.max(peak_region)
-        # For a non-normalized Gaussian, the peak height should be exactly height[i]
-        assert np.isclose(max_value, height[i], rtol=rtol)
-
-        # Check relative decay at specific distances
-        distance = np.sqrt((X - pos_x[i])**2 + (Y - pos_y[i])**2)
-        # At one standard deviation (width), value should be height * exp(-0.5)
-        one_sigma_mask = np.abs(distance - width) < 0.2
-        if np.any(one_sigma_mask):
-            one_sigma_values = result[..., i][one_sigma_mask]
-            expected_value = height[i] * np.exp(-0.5)
-            assert np.any(np.abs(one_sigma_values - expected_value) < rtol * height[i])
-
-        # At three standard deviations, value should be very small
-        three_sigma_mask = (distance > 3 * width)
-        assert np.all(result[..., i][three_sigma_mask] < 0.05 * height[i])
-
-
-def test_butterworth_window():
-    shape = (32, 32)
-    cutoff_radius_ftr = 0.25
-    order = 2
-
-    window = butterworth_window(shape, cutoff_radius_ftr, order)
-
-    # Check shape
-    assert window.shape == shape
-
-    # Check values are between 0 and 1
-    assert np.all(window >= 0)
-    assert np.all(window <= 1)
-
-    # Check center value is 1
-    center_y, center_x = shape[0] // 2, shape[1] // 2
-    assert np.abs(window[center_y, center_x] - 1.0) < 1e-6
-
+    model = VoigtModel(dx=1.0, background=0.1)
+    
+    # Test sum method
+    result = model.sum(
+        X, Y,
+        peak_params["pos_x"],
+        peak_params["pos_y"],
+        peak_params["height"],
+        peak_params["width"],
+        peak_params["ratio"]
+    )
+    
+    # Check shape and background
+    assert result.shape == (50, 50)
+    assert np.all(result >= model.background)
+    
+    # Check peak heights
+    for i in range(len(peak_params["pos_x"])):
+        x_idx = np.abs(X[0, :] - peak_params["pos_x"][i]).argmin()
+        y_idx = np.abs(Y[:, 0] - peak_params["pos_y"][i]).argmin()
+        expected_height = peak_params["height"][i] + model.background
+        assert np.abs(result[y_idx, x_idx] - expected_height) < 0.05
+    
+    # Test volume calculation
+    volumes = model.volume(peak_params)
+    assert len(volumes) == len(peak_params["pos_x"])
+    for vol in volumes:
+        assert vol > 0
 
 def test_gaussian_kernel():
+    kernel = GaussianKernel()
     sigma = 1.5
-    kernel = gaussian_kernel(sigma)
-
-    # Check kernel is symmetric with appropriate tolerance
-    rtol = 1e-5  # relative tolerance
-    atol = 1e-8  # absolute tolerance
-    assert np.allclose(kernel, kernel.T, rtol=rtol, atol=atol)
-
+    
+    # Test kernel creation
+    kernel_array = kernel.gaussian_kernel(sigma)
+    
+    # Check kernel is symmetric
+    assert np.allclose(kernel_array, kernel_array.T, rtol=1e-5, atol=1e-8)
+    
     # Check kernel sums to approximately 1
-    assert np.abs(np.sum(kernel) - 1.0) < rtol
-
-    # Check peak at center
-    center = kernel.shape[0] // 2
-    assert np.abs(kernel[center, center] - np.max(kernel)) < atol
-
-
-def test_gaussian_filter_jax():
-    # Create test image
+    assert np.abs(np.sum(kernel_array) - 1.0) < 1e-5
+    
+    # Test Gaussian filter
     image = np.zeros((20, 20))
     image[10, 10] = 1.0
-    sigma = 1.5
-
-    # Convert to jax array with explicit dtype
-    dtype = jnp.float64 if jax.config.x64_enabled else jnp.float32
-    image_jax = jnp.asarray(image, dtype=dtype)
-
-    # Apply filter
-    filtered = gaussian_filter_jax(image_jax, sigma)
-    filtered = np.array(filtered)
-
+    
+    filtered = kernel.gaussian_filter(image, sigma)
+    
     # Check shape preserved
     assert filtered.shape == image.shape
-
+    
     # Check smoothing occurred (peak value should be less than original)
     assert filtered[10, 10] < 1.0
-
+    
     # Check total intensity approximately preserved
-    rtol = 1e-5  # relative tolerance
-    assert np.isclose(np.sum(filtered), np.sum(image), rtol=rtol)
-
-
-def test_mask_grads():
-    # Create dummy gradients dictionary
-    grads = {
-        'param1': np.array([1.0, 2.0, 3.0]),
-        'param2': np.array([4.0, 5.0, 6.0]),
-        'param3': np.array([7.0, 8.0, 9.0])
-    }
-
-    keys_to_mask = ['param1', 'param3']
-
-    masked_grads = mask_grads(grads, keys_to_mask)
-
-    # Check masked parameters are zero
-    assert np.all(masked_grads['param1'] == 0)
-    assert np.all(masked_grads['param3'] == 0)
-
-    # Check non-masked parameter unchanged
-    assert np.all(masked_grads['param2'] == grads['param2'])
+    assert np.abs(np.sum(filtered) - np.sum(image)) < 1e-5

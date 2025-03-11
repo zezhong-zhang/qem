@@ -95,20 +95,116 @@ class ImageModel(ABC):
         """Calculate the volume of each peak."""
         pass
 
-    def sum(self, X, Y, pos_x, pos_y, height, width, *args):
-        """Calculate sum of peaks using Keras."""
-        total = (
-            self.ops.sum(
-                self.model_fn(
-                    X[:, :, None], Y[:, :, None],
-                    pos_x[None, None, :], pos_y[None, None, :],
-                    height, width, *args
-                ),
-                axis=2,
+    def _sum(self, X, Y, pos_x, pos_y, height, width, *kargs, local=False):
+        """Calculate all peaks either globally or locally.
+        
+        Args:
+            X (array): X coordinates mesh
+            Y (array): Y coordinates mesh
+            pos_x (array): X positions of peaks in the same coordinate space as X
+            pos_y (array): Y positions of peaks in the same coordinate space as Y
+            height (array): Heights of peaks
+            width (array): Widths of peaks
+            *args: Additional arguments for specific peak models
+            local (bool, optional): If True, calculate peaks locally within a fixed window. Defaults to False.
+            
+        Returns:
+            array: Sum of all peaks plus background
+        """
+        if not local:
+            # Calculate all peaks at once and sum them
+            peaks = self.model_fn(
+                X[:, :, None], Y[:, :, None],
+                pos_x[None, None, :], pos_y[None, None, :],
+                height, width, *kargs
             )
-            + self.background
-        )
-        return total
+            return self.ops.sum(peaks, axis=-1) + self.background
+        else:
+            # Local calculation with parallel processing
+            width_max = width.max() if isinstance(width, (list, tuple, np.ndarray)) else width            
+            # Window size in pixels
+            window_size = int(5 * width_max)  # Fixed window size of 5*width in grid units
+            if window_size % 2 == 0:
+                window_size += 1  # Ensure odd window size for centered peak
+            
+            half_size = window_size // 2
+            
+            # Create fixed-size local window coordinates
+            window_x = self.ops.arange(-half_size, half_size + 1)
+            window_y = self.ops.arange(-half_size, half_size + 1)
+            window_X, window_Y = self.ops.meshgrid(window_x, window_y)
+            
+            # Calculate all local peaks in parallel
+            # Reshape window coordinates to (window_size^2, 2) for broadcasting
+            window_coords = self.ops.stack([window_X.flatten(), window_Y.flatten()], axis=-1)
+            
+            # Calculate global indices for each peak
+            x_indices = self.ops.cast(
+                self.ops.round((pos_x - X[0, 0])),
+                dtype='int32'
+            )
+            y_indices = self.ops.cast(
+                self.ops.round((pos_y - Y[0, 0])),
+                dtype='int32'
+            )
+            
+            # Calculate actual coordinates for each window point relative to peak centers
+            peak_coords = self.ops.stack([x_indices, y_indices], axis=-1)  # Shape: (n_peaks, 2)
+            window_offsets = window_coords[None, :, :]  # Shape: (1, window_size^2, 2)
+            peak_centers = peak_coords[:, None, :]  # Shape: (n_peaks, 1, 2)
+            
+            # Global coordinates for all window points for all peaks
+            # Shape: (n_peaks, window_size^2, 2)
+            global_coords = peak_centers + window_offsets
+            
+            # Calculate valid mask for points within image bounds
+            valid_x = (global_coords[..., 0] >= 0) & (global_coords[..., 0] < X.shape[1])
+            valid_y = (global_coords[..., 1] >= 0) & (global_coords[..., 1] < X.shape[0])
+            valid_mask = valid_x & valid_y
+            
+            # Calculate local peaks using model_fn on window coordinates
+            local_peaks = self.model_fn(
+                window_X[None, :, :],  # Shape: (1, window_size, window_size)
+                window_Y[None, :, :],  # Shape: (1, window_size, window_size)
+                self.ops.zeros_like(pos_x)[:, None, None],  # Center each peak at (0,0)
+                self.ops.zeros_like(pos_y)[:, None, None],
+                height[:, None, None],
+                width if isinstance(width, (float, int)) else width[:, None, None],
+                *[arg if isinstance(arg, (float, int)) else arg[:, None, None] for arg in kargs]
+            )
+            
+            # Initialize output array with background
+            total = self.ops.zeros_like(X) + self.background
+            
+            # Add each peak's contribution to the total at the correct positions
+            local_peaks_flat = local_peaks.reshape(len(pos_x), -1)  # Flatten window dimensions
+            for i in range(len(pos_x)):
+                valid_points = valid_mask[i]
+                valid_coords = global_coords[i][valid_points]
+                valid_values = local_peaks_flat[i][valid_points]
+                
+                # Use scatter_add to accumulate values at valid coordinates
+                total = total.at[valid_coords[:, 1], valid_coords[:, 0]].add(valid_values)
+            
+            return total
+
+    def sum(self, X, Y, pos_x, pos_y, height, width, *kargs, local=False):
+        """Calculate sum of peaks using Keras.
+        
+        Args:
+            X (array): X coordinates mesh
+            Y (array): Y coordinates mesh
+            pos_x (array): X positions of peaks
+            pos_y (array): Y positions of peaks
+            height (array): Heights of peaks
+            width (array): Widths of peaks
+            *args: Additional arguments for specific peak models
+            local (bool, optional): If True, calculate peaks locally within a fixed window. Defaults to False.
+            
+        Returns:
+            array: Sum of all peaks plus background
+        """
+        return self._sum(X, Y, pos_x, pos_y, height, width, *kargs, local=local)
 
     @staticmethod
     @njit(nopython=True)
@@ -223,6 +319,24 @@ class VoigtModel(ImageModel):
         # Return weighted sum
         return height * (ratio * gaussian_part + (1 - ratio) * lorentzian_part)
 
+    def sum(self, X, Y, pos_x, pos_y, height, width, ratio, local=False):
+        """Calculate sum of peaks using Keras.
+        
+        Args:
+            X (array): X coordinates mesh
+            Y (array): Y coordinates mesh
+            pos_x (array): X positions of peaks
+            pos_y (array): Y positions of peaks
+            height (array): Heights of peaks
+            width (array): Widths of peaks
+            ratio (array): Ratios of peaks
+            local (bool, optional): If True, calculate peaks locally within a fixed window. Defaults to False.
+        
+        Returns:
+            array: Sum of all peaks plus background
+        """
+        return self._sum(X, Y, pos_x, pos_y, height, width, ratio, local=local)
+
 
 class GaussianKernel:
     """Gaussian kernel implementation."""
@@ -250,45 +364,11 @@ class GaussianKernel:
 
     def gaussian_filter(self, image, sigma):
         """Applies Gaussian filter to a 2D image."""
+        # Ensure both image and kernel are float32
+        image = self.ops.cast(image, 'float32')
         kernel = self.gaussian_kernel(sigma)
-        kernel = self.ops.reshape(kernel, (kernel.shape[0], kernel.shape[1], 1, 1))
-        image = self.ops.expand_dims(self.ops.expand_dims(image, 0), -1)
-        filtered = self.K.conv2d(image, kernel, padding='same')
-        return self.ops.squeeze(filtered, 0)
-
-
-@jax.jit
-def get_window_indices(pos_x, pos_y, window_size, ny, nx):
-    """
-    Calculate window indices for a Gaussian peak using static window size.
-    """
-    x_start = jnp.maximum(0, jnp.floor(pos_x - window_size)).astype(jnp.int32)
-    x_end = jnp.minimum(nx, jnp.ceil(pos_x + window_size + 1)).astype(jnp.int32)
-    y_start = jnp.maximum(0, jnp.floor(pos_y - window_size)).astype(jnp.int32)
-    y_end = jnp.minimum(ny, jnp.ceil(pos_y + window_size + 1)).astype(jnp.int32)
-    return x_start, x_end, y_start, y_end
-
-def model_sum_local(model_fn, ny: int, nx: int):
-    """Create a JIT-compiled function for local window-based computation."""    
-    @jax.jit
-    def add_to_window(result, x_start, x_end, y_start, y_end, pos_x, pos_y, height, width, *args):
-        """Add a model's contribution to a window in the result array."""
-        y_coords = jnp.arange(y_start, y_end)[:, jnp.newaxis]
-        x_coords = jnp.arange(x_start, x_end)[jnp.newaxis, :]
-        window = model_fn(x_coords, y_coords, pos_x, pos_y, height, width, *args)
-        return result.at[y_start:y_end, x_start:x_end].add(window)
-
-    @jax.jit
-    def sum_local(pos_x, pos_y, height, width, *args, background=0.0, window_size=None):
-        # Initialize result with explicit float32 dtype
-        result = jnp.full((ny, nx), background, dtype=jnp.float32)
-        
-        def scan_body(carry, x):
-            result, i = carry
-            p_x, p_y, h, w = pos_x[i], pos_y[i], height[i], width[i]
-            x_start, x_end, y_start, y_end = get_window_indices(p_x, p_y, window_size, ny, nx)
-            result = add_to_window(result, x_start, x_end, y_start, y_end, p_x, p_y, h, w)
-            return (result, i + 1), None
-        
-        (result, _), _ = jax.lax.scan(scan_body, (result, 0), None, length=len(pos_x))
-        return result
+        # Add channel dimensions for input and kernel
+        image = self.ops.expand_dims(self.ops.expand_dims(image, 0), -1)  # [1, H, W, 1]
+        kernel = self.ops.expand_dims(self.ops.expand_dims(kernel, -1), -1)  # [H, W, 1, 1]
+        filtered = self.ops.conv(image, kernel, padding='same')
+        return self.ops.squeeze(filtered)  # Remove extra dimensions
