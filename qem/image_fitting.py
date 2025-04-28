@@ -66,7 +66,7 @@ class ImageModelFitting:
             image (np.array): The input image as a numpy array.
             dx (float, optional): The size of each pixel. Defaults to 1.
             units (str, optional): The units of the image. Defaults to "A".
-            elements (list[str], optional): The elements in the image. Defaults to None. If None, the elements are ["Sr", "Ti", "O"].
+            elements (list[str], optional): The elements in the image. Defaults to None. If None, the elements are ["A", "B", "C"].
             model_type (str, optional): Type of model to use. Defaults to "gaussian".
             same_width (bool, optional): Whether to use same width for all peaks. Defaults to True.
             pbc (bool, optional): Whether to use periodic boundary conditions. Defaults to False.
@@ -74,7 +74,7 @@ class ImageModelFitting:
             gpu_memory_limit (bool, optional): Whether to use memory-efficient GPU computation. Defaults to False.
         """
         if elements is None:
-            elements = ["Sr", "Ti", "O"]
+            elements = ["A", "B", "C"]
 
         if len(image.shape) == 2:
             self.ny, self.nx = image.shape
@@ -1619,6 +1619,13 @@ class ImageModelFitting:
             self.coordinates_state += 1
             logging.info(f"The coordinates have been updated. Current state: {self.coordinates_state}")
         return self.coordinates
+
+    def update_region_crysal_analyzer(self):
+        if self.region_crysal_analyzer is not None:
+            for region_label, region_analyzer in self.region_crysal_analyzer.items():
+                region_analyzer.peak_positions = self.coordinates[self.region_column_labels == region_label]
+                region_analyzer.atom_types = self.atom_types[self.region_column_labels == region_label]
+                logging.info(f"Updated region {region_label} coordinates for crystal analyzer.")
 
     # plot functions
     def calibrate(self, cif_file: str = None, a: float = None, b: float = None, region_index: int = 0, unit_cell: list = None):
