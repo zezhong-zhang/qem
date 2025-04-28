@@ -300,7 +300,7 @@ class InteractivePlot:
             xlim = self.scatter_plot.get_xlim()
             ylim = self.scatter_plot.get_ylim()
         plt.clf()
-        plt.imshow(self.image, cmap="gray")
+        plt.imshow(self.image, cmap="gray",vmin = np.percentile(self.image,5),vmax = np.percentile(self.image, 95))
         scalebar = self.scalebar
         plt.gca().add_artist(scalebar)
         plt.title(title)
