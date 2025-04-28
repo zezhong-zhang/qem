@@ -735,6 +735,254 @@ class CrystalAnalyzer:
             plt.savefig("strain_map.png", dpi=300)
             plt.savefig("strain_map.svg")
 
+    def measure_polarization(self, a_element: str, b_element: str, cutoff_radius: float = 5.0, num_neighbors: int = 2) -> dict:
+        """Measure the polarization of B atoms relative to the center of surrounding A atoms.
+
+        Args:
+            a_element (str): Element for A atoms (e.g., 'Sr')
+            b_element (str): Element for B atoms (e.g., 'Ti')
+            cutoff_radius (float, optional): Radius to search for surrounding A atoms. Defaults to 5.0.
+            num_neighbors (int, optional): Number of surrounding A atoms to consider. Defaults to 2.
+
+        Returns:
+            dict: Dictionary containing:
+                - 'positions': Array of B atom positions
+                - 'polarization': Array of polarization vectors for each B atom
+                - 'magnitude': Array of polarization magnitudes
+        """
+        # Get positions of A and B atoms
+        # index the atom types
+        a_mask = self.atom_types == self.elements.index(a_element)
+        b_mask = self.atom_types == self.elements.index(b_element)
+        a_positions = self.peak_positions[a_mask]
+        b_positions = self.peak_positions[b_mask]
+
+        # Initialize arrays for results
+        polarization = np.zeros((len(b_positions), 2))
+        magnitude = np.zeros(len(b_positions))
+
+        # Calculate polarization for each B atom
+        for i, b_pos in enumerate(b_positions):
+            # Find A atoms within cutoff radius
+            distances = np.linalg.norm(a_positions - b_pos, axis=1)
+            nearby_mask = distances < cutoff_radius/self.dx
+            nearby_a = a_positions[nearby_mask]
+
+            # If not enough surrounding A atoms, assign NaN
+            if len(nearby_a) < num_neighbors:  # Require at least 2 surrounding A atoms
+                polarization[i] = np.nan
+                magnitude[i] = np.nan
+                continue
+
+            # Calculate center of surrounding A atoms
+            a_center = np.mean(nearby_a, axis=0)
+
+            # Calculate polarization vector (B position relative to A center)
+            polarization[i] = b_pos - a_center
+            magnitude[i] = np.linalg.norm(polarization[i])
+
+        return {
+            'positions': b_positions,
+            'polarization': polarization,
+            'magnitude': magnitude
+        }
+
+    def plot_polarization(self, a_element: str, b_element: str, cutoff_radius: float = 5.0, save: bool = False, exclude_border: bool = False, border_pixel: int = 10, vector_scale: float = 10.0):
+        """Plot the polarization vectors and magnitudes.
+
+        Args:
+            a_element (str): Element for A atoms (e.g., 'Sr')
+            b_element (str): Element for B atoms (e.g., 'Ti')
+            cutoff_radius (float, optional): Radius to search for surrounding A atoms. Defaults to 5.0.
+            save (bool, optional): Whether to save the plot. Defaults to False.
+        """
+        # Calculate polarization
+        pol_data = self.measure_polarization(a_element, b_element, cutoff_radius)
+
+        if exclude_border:
+            border_mask = (pol_data['positions'][:, 0] < border_pixel) | (pol_data['positions'][:, 0] > self.image.shape[1] - border_pixel) | (pol_data['positions'][:, 1] < border_pixel) | (pol_data['positions'][:, 1] > self.image.shape[0] - border_pixel) # mask the border within border_pixel
+            pol_data['positions'] = pol_data['positions'][~border_mask]
+            pol_data['polarization'] = pol_data['polarization'][~border_mask]
+            pol_data['magnitude'] = pol_data['magnitude'][~border_mask]
+
+        
+        # Create figure with two subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+
+        # Plot 1: Vector field
+        ax1.imshow(self.image, cmap='gray')
+        # Plot A atoms
+        a_mask = self.atom_types == self.elements.index(a_element)
+        ax1.scatter(self.peak_positions[a_mask, 0],
+                   self.peak_positions[a_mask, 1],
+                   c='blue', alpha=0.5, label=f'{a_element}')
+
+        # Plot polarization vectors
+        valid_mask = ~np.isnan(pol_data['magnitude'])
+        ax1.quiver(pol_data['positions'][valid_mask, 0],
+                  pol_data['positions'][valid_mask, 1],
+                  pol_data['polarization'][valid_mask, 0] *vector_scale,
+                  pol_data['polarization'][valid_mask, 1] *vector_scale,
+                  scale=2, scale_units='xy',
+                  color='red', label=f'{b_element} polarization')
+
+        ax1.set_title('Polarization Vectors')
+        ax1.legend()
+        ax1.add_artist(self.scalebar)
+
+        # Plot 2: Magnitude map
+        ax2.imshow(self.image, cmap='gray')
+        scatter = ax2.scatter(pol_data['positions'][:, 0],
+                            pol_data['positions'][:, 1],
+                            c=pol_data['magnitude'] * self.dx,
+                            cmap='plasma',
+                            label=f'{b_element}')
+        plt.colorbar(scatter, ax=ax2, label='Polarization magnitude (Å)')
+        ax2.set_title('Polarization Magnitude')
+        ax2.legend()
+        ax2.add_artist(self.scalebar)
+
+        plt.tight_layout()
+
+        if save:
+            plt.savefig('polarization_map.png', dpi=300, bbox_inches='tight')
+            plt.savefig('polarization_map.svg', bbox_inches='tight')
+
+    def measure_oxygen_tilt(self, a_type: str, o_type: str, cutoff_radius: float = 5.0) -> dict:
+        """Measure the tilt of oxygen atoms based on their coordinates and nearby A site atoms.
+        
+        The tilt is calculated as the angle between two nearby oxygen atoms and the line formed by two A site atoms.
+        
+        Args:
+            a_type (str): Atom type label for A site atoms (e.g., 'Sr')
+            o_type (str): Atom type label for oxygen atoms (e.g., 'O')
+            cutoff_radius (float, optional): Radius to search for nearby atoms. Defaults to 5.0.
+            
+        Returns:
+            dict: Dictionary containing:
+                - 'positions': Array of oxygen atom positions
+                - 'tilt_angles': Array of tilt angles in degrees for each oxygen atom
+                - 'tilt_vectors': Array of unit vectors representing the tilt direction
+        """
+        # Get positions of A site and oxygen atoms
+        a_mask = self.atom_types == a_type
+        o_mask = self.atom_types == o_type
+        a_positions = self.peak_positions[a_mask]
+        o_positions = self.peak_positions[o_mask]
+        
+        # Initialize arrays for results
+        tilt_angles = np.zeros(len(o_positions))
+        tilt_vectors = np.zeros((len(o_positions), 2))
+        
+        # Calculate tilt for each oxygen atom
+        for i, o_pos in enumerate(o_positions):
+            # Find A atoms within cutoff radius
+            a_distances = np.linalg.norm(a_positions - o_pos, axis=1)
+            nearby_a_mask = a_distances < cutoff_radius
+            nearby_a = a_positions[nearby_a_mask]
+            
+            # Find other oxygen atoms within cutoff radius
+            o_distances = np.linalg.norm(o_positions - o_pos, axis=1)
+            # Exclude the current oxygen atom (which would have distance 0)
+            nearby_o_mask = (o_distances < cutoff_radius) & (o_distances > 1e-6)
+            nearby_o = o_positions[nearby_o_mask]
+            
+            # If not enough nearby atoms, assign NaN
+            if len(nearby_a) < 2 or len(nearby_o) < 1:
+                tilt_angles[i] = np.nan
+                tilt_vectors[i] = np.array([np.nan, np.nan])
+                continue
+            
+            # Find the two closest A atoms
+            sorted_indices = np.argsort(a_distances[nearby_a_mask])
+            closest_a1 = nearby_a[sorted_indices[0]]
+            closest_a2 = nearby_a[sorted_indices[1]]
+            
+            # Find the closest oxygen atom
+            closest_o = nearby_o[np.argmin(o_distances[nearby_o_mask])]
+            
+            # Calculate the A-A line vector
+            a_a_vector = closest_a2 - closest_a1
+            a_a_unit = a_a_vector / np.linalg.norm(a_a_vector)
+            
+            # Calculate the O-O line vector
+            o_o_vector = closest_o - o_pos
+            o_o_unit = o_o_vector / np.linalg.norm(o_o_vector)
+            
+            # Calculate the angle between the two lines
+            dot_product = np.clip(np.dot(a_a_unit, o_o_unit), -1.0, 1.0)
+            angle_rad = np.arccos(dot_product)
+            angle_deg = np.degrees(angle_rad)
+            
+            # Determine if the angle should be > 90 or < 90 degrees
+            # We want the smaller angle between the lines
+            if angle_deg > 90:
+                angle_deg = 180 - angle_deg
+                o_o_unit = -o_o_unit
+            
+            tilt_angles[i] = angle_deg
+            tilt_vectors[i] = o_o_unit
+        
+        return {
+            'positions': o_positions,
+            'tilt_angles': tilt_angles,
+            'tilt_vectors': tilt_vectors
+        }
+        
+    def plot_oxygen_tilt(self, a_type: str, o_type: str, cutoff_radius: float = 5.0, save: bool = False):
+        """Plot the oxygen tilt angles and directions.
+        
+        Args:
+            a_type (str): Atom type label for A site atoms
+            o_type (str): Atom type label for oxygen atoms
+            cutoff_radius (float, optional): Radius to search for nearby atoms. Defaults to 5.0.
+            save (bool, optional): Whether to save the plot. Defaults to False.
+        """
+        # Calculate tilt
+        tilt_data = self.measure_oxygen_tilt(a_type, o_type, cutoff_radius)
+        
+        # Create figure with two subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Plot 1: Tilt direction vectors
+        ax1.imshow(self.image, cmap='gray')
+        # Plot A atoms
+        a_mask = self.atom_types == a_type
+        ax1.scatter(self.peak_positions[a_mask, 0],
+                   self.peak_positions[a_mask, 1],
+                   c='blue', alpha=0.5, label=f'{a_type} atoms')
+        
+        # Plot tilt vectors
+        valid_mask = ~np.isnan(tilt_data['tilt_angles'])
+        ax1.quiver(tilt_data['positions'][valid_mask, 0],
+                  tilt_data['positions'][valid_mask, 1],
+                  tilt_data['tilt_vectors'][valid_mask, 0],
+                  tilt_data['tilt_vectors'][valid_mask, 1],
+                  scale=10, scale_units='xy',
+                  color='red', label=f'{o_type} tilt direction')
+        
+        ax1.set_title('Oxygen Tilt Directions')
+        ax1.legend()
+        ax1.add_artist(self.scalebar)
+        
+        # Plot 2: Tilt angle map
+        ax2.imshow(self.image, cmap='gray')
+        scatter = ax2.scatter(tilt_data['positions'][:, 0],
+                            tilt_data['positions'][:, 1],
+                            c=tilt_data['tilt_angles'],
+                            cmap='viridis',
+                            label=f'{o_type} atoms')
+        plt.colorbar(scatter, ax=ax2, label='Tilt angle (degrees)')
+        ax2.set_title('Oxygen Tilt Angles')
+        ax2.legend()
+        ax2.add_artist(self.scalebar)
+        
+        plt.tight_layout()
+        
+        if save:
+            plt.savefig('oxygen_tilt_map.png', dpi=300, bbox_inches='tight')
+            plt.savefig('oxygen_tilt_map.svg', bbox_inches='tight')
+
     # properties #######
     @property
     def nx(self):
