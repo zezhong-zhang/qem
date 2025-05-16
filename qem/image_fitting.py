@@ -82,20 +82,7 @@ class ImageModelFitting:
         self.device = "cuda"
         self.image = image.astype(np.float32)
         self.model = np.zeros(image.shape)
-        self._region_map = np.zeros(image.shape).astype(int)
-        init_region_path = Path(
-            [
-                (0, 0),
-                (0, self.image.shape[1] - 1),
-                (self.image.shape[0] - 1, self.image.shape[1] - 1),
-                (self.image.shape[0] - 1, 0),
-            ]
-        )
-
-        self.region_path_dict = {0: init_region_path}
-        self.region_crysal_analyzer = {}
-        self.region_atomic_column = {}
-        self.local_shape = image.shape
+        self.init_region()
 
         units_dict = {"A": 1, "nm": 10, "pm": 0.01, "um": 1e4}
         assert units in units_dict.keys(), "The units should be in A, nm, pm or um."
@@ -113,6 +100,10 @@ class ImageModelFitting:
         self.coordinates_history = dict()
         self.coordinates_state = 0
         
+
+        # define the fitting region shape
+        self.local_shape = self.image.shape # the shape of the image
+
         # Initialize model parameters
         self.model_type = model_type
         self.same_width = same_width
@@ -131,6 +122,26 @@ class ImageModelFitting:
         # Create JIT-compiled function for this image size if using GPU memory limit
         if gpu_memory_limit:
             self._gaussian_sum_local = create_gaussian_sum_local(self.ny, self.nx)
+
+    def init_region(self):
+        """
+        Initialize the region map. Allocate the image pixels to different regions indicated by int, 0 is the default region for the whole image
+        """
+
+        self._region_map = np.zeros(self.image.shape).astype(int) 
+        init_region_path = Path(
+            [
+                (0, 0),
+                (0, self.image.shape[1] - 1),
+                (self.image.shape[0] - 1, self.image.shape[1] - 1),
+                (self.image.shape[0] - 1, 0),
+            ]
+        )
+        self.region_path_dict = {0: init_region_path}
+        self.region_crysal_analyzer = {}
+        self.region_atomic_column = {}
+        
+
 
     # Properties
 
@@ -206,9 +217,9 @@ class ImageModelFitting:
 
     @property
     def region_map(self):
-        for key in self.region_path_dict.keys():
+        for key, region_path in self.region_path_dict.items():
             self._region_map[
-                self.region_path_dict[key]
+                region_path
                 .contains_points(np.array([self.X.ravel(), self.Y.ravel()]).T)
                 .reshape(self.X.shape)
             ] = key
