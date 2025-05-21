@@ -30,6 +30,7 @@ from qem.model import (
     add_peak_at_positions,
     butterworth_window,
     gaussian_2d_numba,
+    gaussian_2d_single,
     gaussian_sum_parallel,
     lorentzian_2d_numba,
     lorentzian_sum_parallel,
@@ -605,6 +606,48 @@ class ImageModelFitting:
         distances = np.linalg.norm(other_peaks - peak_position, axis=1).min()
         return distances
 
+
+    def _refine_one_center(self, i, point_record, plot):
+        mask = point_record == (i + 1)
+        if not np.any(mask):
+            return None, i
+
+        cell_img = self.image * mask
+        ys, xs = np.where(mask)
+        y0, y1 = ys.min(), ys.max() + 1
+        x0, x1 = xs.min(), xs.max() + 1
+        cropped_img = cell_img[y0:y1, x0:x1]
+        cropped_mask = mask[y0:y1, x0:x1]
+
+        # Subtract local min (only over masked region)
+        local_min = cropped_img[cropped_mask].min()
+        cropped_img = cropped_img - local_min
+        cropped_img[~cropped_mask] = 0
+
+        # Normalize for center of mass
+        if cropped_img[cropped_mask].max() > 0:
+            norm_img = (cropped_img - cropped_img[cropped_mask].min()) / (cropped_img[cropped_mask].max() - cropped_img[cropped_mask].min())
+        else:
+            norm_img = cropped_img
+        norm_img[~cropped_mask] = 0
+
+        # Compute center of mass in the cropped region
+        local_y, local_x = calculate_center_of_mass(norm_img)
+        assert isinstance(local_x, float), "local_x is not a float"
+        assert isinstance(local_y, float), "local_y is not a float"
+        result = np.array([
+            x0 + local_x,
+            y0 + local_y,
+        ], dtype=float)
+
+        if plot:
+            plt.clf()
+            plt.imshow(norm_img, cmap="gray")
+            plt.scatter(local_x, local_y, color="red", s=2, label="refined")
+            plt.legend()
+            plt.pause(1.0)
+        return result, i
+
     def refine_center_of_mass(self, params = None, plot=False):
         # Refine center of mass for each Voronoi cell
         pre_coordinates = self.coordinates.copy()
@@ -621,46 +664,20 @@ class ImageModelFitting:
             max_radius = params["sigma"].max() * 5
             point_record = fast_voronoi_point_record(self.image, coords, max_radius)
 
-            for i in tqdm(range(self.num_coordinates), desc="Refining center of mass"):
-                mask = point_record == (i + 1)
-                if not np.any(mask):
-                    continue
+           
 
-                cell_img = self.image * mask
-                ys, xs = np.where(mask)
-                y0, y1 = ys.min(), ys.max() + 1
-                x0, x1 = xs.min(), xs.max() + 1
-                cropped_img = cell_img[y0:y1, x0:x1]
-                cropped_mask = mask[y0:y1, x0:x1]
+            # In refine_center_of_mass, replace the for-loop with:
+            with ThreadPoolExecutor() as executor:
+                futures = [
+                    executor.submit(self._refine_one_center, i, point_record, plot)
+                    for i in range(self.num_coordinates)
+                ]
+                for future in tqdm(as_completed(futures), total=self.num_coordinates, desc="Refining center of mass"):
+                    result, i = future.result()
+                    if result is not None:
+                        current_coordinates[i] = result
 
-                # Subtract local min (only over masked region)
-                local_min = cropped_img[cropped_mask].min()
-                cropped_img = cropped_img - local_min
-                cropped_img[~cropped_mask] = 0
-
-                # Normalize for center of mass
-                if cropped_img[cropped_mask].max() > 0:
-                    norm_img = (cropped_img - cropped_img[cropped_mask].min()) / (cropped_img[cropped_mask].max() - cropped_img[cropped_mask].min())
-                else:
-                    norm_img = cropped_img
-                norm_img[~cropped_mask] = 0
-
-                # Compute center of mass in the cropped region
-                local_y, local_x = calculate_center_of_mass(norm_img)
-                assert isinstance(local_x, float), "local_x is not a float"
-                assert isinstance(local_y, float), "local_y is not a float"
-                current_coordinates[i] = np.array([
-                    x0 + local_x,
-                    y0 + local_y,
-                ], dtype=float)
-
-                if plot:
-                    plt.clf()
-                    plt.imshow(norm_img, cmap="gray")
-                    plt.scatter(local_x, local_y, color="red", s=2, label="refined")
-                    plt.legend()
-                    plt.pause(1.0)
-            converged = np.abs(current_coordinates - pre_coordinates).max() < 1
+            converged = np.abs(current_coordinates - pre_coordinates).mean() < 1
             pre_coordinates = current_coordinates.copy()
         params["pos_x"] = current_coordinates[:, 0]
         params["pos_y"] = current_coordinates[:, 1]
@@ -1513,7 +1530,13 @@ class ImageModelFitting:
         The local minimum is subtracted from each cell before fitting.
         """
         if params is None:
-            params = self.params if self.params is not None else self.init_params()
+            if self.params is not None:
+                if 'pos_x' in self.params and 'pos_y' in self.params and self.params["pos_x"].size > 0:
+                    params = self.params
+                else:
+                    params = self.init_params()
+            else:
+                params = self.init_params()
 
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
@@ -1526,7 +1549,7 @@ class ImageModelFitting:
         point_record = fast_voronoi_point_record(self.image,coords, max_radius)
 
         # Prepare per-cell fitting function
-        def fit_cell(index):
+        def fit_cell(index, params):
             mask = point_record == index + 1
             if not np.any(mask):
                 return None  # No pixels in this cell
@@ -1564,19 +1587,24 @@ class ImageModelFitting:
                 local_param['pos_x'][0],
                 local_param['pos_y'][0],
                 local_param['height'],
-                local_param['sigma'],
+                local_param['sigma'][self.atom_types[index]],
                 local_param['background'][0],
             ]
             try:
                 popt, _ = curve_fit(
-                    gaussian_2d_numba,
+                    gaussian_2d_single,
                     (Xc, Yc),
-                    cropped_img,
+                    cropped_img.ravel(),
                     p0=p0,
                     maxfev=2000
                 )
             except Exception as e:
                 popt = p0  # fallback if fit fails
+
+            if popt[0] < 0 or popt[1] < 0:
+                popt = p0
+            if popt[0] > Xc.shape[1] or popt[1] > Yc.shape[0]:
+                popt = p0
 
             optimized_param = {
                 'pos_x': np.array([popt[0]]),
@@ -1585,33 +1613,22 @@ class ImageModelFitting:
                 'sigma': popt[3],
                 'background': np.array([popt[4]])
             }
-            # gaussian fitting use scipy
-
-
-
-            # # Optimize using self.optimize
-            # optimized_param = self.optimize(
-            #     cropped_img,
-            #     local_param,
-            #     Xc,
-            #     Yc,
-            #     maxiter,
-            #     tol,
-            #     step_size,
-            #     verbose,
-            # )
-            return optimized_param
+            return optimized_param, index
 
         # Parallel execution (using jax.vmap or plain Python for now)
         converged = False
+        pre_params = copy.deepcopy(self.params)
+        current_params = copy.deepcopy(self.params)
         while not converged:
-            pre_params = copy.deepcopy(self.params)
-            for i in tqdm(range(pos_x.size), desc="Fitting cells"):
-                optimized_param = fit_cell(i)
-                # update self.params/model
-                self.params['pos_x'][i] = optimized_param['pos_x'][0]
-                self.params['pos_y'][i] = optimized_param['pos_y'][0]
-            converged = self.convergence(self.params, pre_params, tol)
+            with ThreadPoolExecutor() as executor:
+                futures = [executor.submit(fit_cell, i, current_params) for i in range(pos_x.size)]
+                for future in tqdm(as_completed(futures), total=pos_x.size, desc="Fitting cells"):
+                    optimized_param, index = future.result()
+                    current_params['pos_x'][index] = optimized_param['pos_x'][0]
+                    current_params['pos_y'][index] = optimized_param['pos_y'][0]
+            converged = self.convergence(current_params, pre_params, tol)
+            pre_params = current_params
+        self.params = current_params
         # self.model = self.predict(self.params, self.X, self.Y)
         return self.params
 
