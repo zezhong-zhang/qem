@@ -75,14 +75,18 @@ class AtomicColumns:
         _, mask = np.unique(lattice_2d.positions[:, :2], axis=0, return_index=True)
         lattice_2d = lattice_2d[mask]
         i, j = neighbour_list('ij', lattice_2d, cutoff)
-        local_displacements = (
-            self.get_column_displacement(units)
-            -
-            np.array([
-                np.mean(self.get_column_displacement(units)[j[i == idx]], axis=0)
-                for idx in range(len(i))
-            ])
-        )
+        displacements = self.get_column_displacement(units)
+
+        # Sum the neighbor displacements for each column
+        sum_disp = np.zeros_like(displacements)
+        np.add.at(sum_disp, i, displacements[j])
+        # Count the number of neighbors for each column
+        counts = np.bincount(i, minlength=displacements.shape[0]).reshape(-1, 1)
+        # Avoid division by zero
+        counts[counts == 0] = 1
+        means = sum_disp / counts
+
+        local_displacements = displacements - means
         return local_displacements
 
     def get_column_displacement(self, units='pixel') -> np.ndarray:
