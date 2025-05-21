@@ -20,6 +20,12 @@ def gaussian_2d_numba(X, Y, pos_x, pos_y, height, width):
     return gauss
 
 
+def gaussian_2d_single(XY, pos_x, pos_y, height, width, background):
+    X, Y = XY
+    return (height * np.exp(
+        -((X - pos_x) ** 2 + (Y - pos_y) ** 2) / (2 * width ** 2)
+    ) + background).ravel()
+
 @njit(nopython=True)
 def lorentzian_2d_numba(X, Y, pos_x, pos_y, height, gamma):
     # Unpack the parameters
