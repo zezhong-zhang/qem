@@ -20,6 +20,7 @@ from qem.atomic_column import AtomicColumns
 from qem.color import get_unique_colors
 from qem.gui_classes import GetAtomSelection, InteractivePlot
 from qem.image_fitting import gaussian_filter
+from matplotlib.collections import LineCollection
 
 logging.basicConfig(level=logging.INFO)
 
@@ -812,10 +813,10 @@ class CrystalAnalyzer:
         # Plot 1: Vector field
         ax1.imshow(self.image, cmap='gray')
         # Plot A atoms
-        a_mask = self.atom_types == self.elements.index(a_element)
-        ax1.scatter(self.peak_positions[a_mask, 0],
-                   self.peak_positions[a_mask, 1],
-                   c='blue', alpha=0.5, label=f'{a_element}')
+        # a_mask = self.atom_types == self.elements.index(a_element)
+        # ax1.scatter(self.peak_positions[a_mask, 0],
+        #            self.peak_positions[a_mask, 1],
+        #            c='blue', alpha=0.5, label=f'{a_element}')
 
         # Plot polarization vectors
         valid_mask = ~np.isnan(pol_data['magnitude'])
@@ -982,6 +983,182 @@ class CrystalAnalyzer:
         if save:
             plt.savefig('oxygen_tilt_map.png', dpi=300, bbox_inches='tight')
             plt.savefig('oxygen_tilt_map.svg', bbox_inches='tight')
+
+    def plot_lattice_parameter_unitcell(self, units='A', show_lattice:bool=False):
+        """
+        Plot local lattice parameters using adaptive cell origins.
+        The lattice parameter is defined as the distance between neighboring origins in a and b directions.
+        """
+        adaptive_cells = self.get_origin_offset("adaptive")
+        origins = np.array(list(adaptive_cells.values()))  # shape (N, 2)
+        dx = self.dx
+
+        # Get direction unit vectors
+        a_vec = self.a_vector['perfect']
+        b_vec = self.b_vector['perfect']
+        a_hat = a_vec / np.linalg.norm(a_vec)
+        b_hat = b_vec / np.linalg.norm(b_vec)
+
+        lines_a = []
+        values_a = []
+        lines_b = []
+        values_b = []
+        for i, origin in enumerate(origins):
+            rel = origins - origin
+            # Project onto a and b directions
+            proj_a = rel @ a_hat
+            proj_b = rel @ b_hat
+            # Find the closest neighbor in +a direction (exclude self
+            mask_a = (proj_a > 0.1) & (np.abs(rel @ b_hat) < np.linalg.norm(b_vec)/2)
+            if np.any(mask_a):
+                j = np.argmin(np.where(mask_a, proj_a, np.inf))
+                lines_a.append([origin, origins[j]])
+                values_a.append(np.linalg.norm(origins[j] - origin) * dx)
+            # Find the closest neighbor in +b direction (exclude self)
+            mask_b = (proj_b > 0.1) & (np.abs(rel @ a_hat) < np.linalg.norm(a_vec)/2)
+            if np.any(mask_b):
+                j = np.argmin(np.where(mask_b, proj_b, np.inf))
+                lines_b.append([origin, origins[j]])
+                values_b.append(np.linalg.norm(origins[j] - origin) * dx)
+
+        # Atom coloring by type
+        x = self.atomic_columns.x
+        y = self.atomic_columns.y
+        atom_types = self.atomic_columns.atom_types
+        unique_types = np.unique(atom_types)
+        color_map = {atype: color for atype, color in zip(unique_types, get_unique_colors())}
+        atom_colors = [color_map[atype] for atype in atom_types]
+
+        plt.subplot(1, 2, 1)
+        plt.imshow(self.image, cmap="gray")
+        lc_a = LineCollection(lines_a, array=np.array(values_a), cmap='Blues', linewidths=2)
+        plt.gca().add_collection(lc_a)
+        if show_lattice:
+            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
+        cbar_a = plt.colorbar(lc_a)
+        cbar_a.set_label(f'Lattice parameter a ({units})')
+        plt.axis('off')
+        if hasattr(self, 'scalebar'):
+            plt.gca().add_artist(self.scalebar)
+        plt.title('Lattice parameter a map')
+        # set the plot to the view of the image
+        plt.xlim(0, self.image.shape[1])
+        plt.ylim(0, self.image.shape[0])
+
+        plt.subplot(1, 2, 2)
+        plt.imshow(self.image, cmap="gray")
+        lc_b = LineCollection(lines_b, array=np.array(values_b), cmap='Greens', linewidths=2)
+        plt.gca().add_collection(lc_b)
+        if show_lattice:
+            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
+        cbar_b = plt.colorbar(lc_b)
+        cbar_b.set_label(f'Lattice parameter b ({units})')
+        plt.axis('off')
+        if hasattr(self, 'scalebar'):
+            plt.gca().add_artist(self.scalebar)
+        plt.title('Lattice parameter b map')
+        # set the plot to the view of the image
+        plt.xlim(0, self.image.shape[1])
+        plt.ylim(0, self.image.shape[0])
+        plt.show()
+
+    def plot_lattice_parameter_nearest(self, units='A', show_lattice:bool=False, angle_thresh:float=0.95, dist_min:float=1, dist_max_a:float=3, dist_max_b:float=3,boundary_thresh:int=20):
+        """
+        Plot local lattice parameters using all nearest neighbors in the a and b directions
+        within an angular and distance cutoff.
+
+        Args:
+            units (str, optional): Unit of the lattice parameter. Defaults to 'A'.
+            show_lattice (bool, optional): Whether to show the lattice. Defaults to False.
+            angle_thresh (float, optional): Angular cutoff. Defaults to 0.95.
+            dist_min (float, optional): Minimum distance in A. Defaults to 1.
+            dist_max_a (float, optional): Maximum distance in a direction in A. Defaults to 3.
+            dist_max_b (float, optional): Maximum distance in b direction in A. Defaults to 3.
+            boundary_thresh (int, optional): Boundary threshold in pixels. Defaults to 20.
+        """
+        dx = self.dx
+        a_vec = self.a_vector['perfect']
+        b_vec = self.b_vector['perfect']
+        a_hat = a_vec / np.linalg.norm(a_vec)
+        b_hat = b_vec / np.linalg.norm(b_vec)
+
+        if dist_max_a is None:
+            # Guess a reasonable maximum distance (e.g., 1.5 × norm of a_vec)
+            dist_max_a  = 1.3 * np.linalg.norm(a_vec) * dx
+        if dist_max_b is None:
+            # Guess a reasonable maximum distance (e.g., 1.5 × norm of b_vec)
+            dist_max_b  = 1.3 * np.linalg.norm(b_vec) * dx
+
+        lines_a, values_a = [], []
+        lines_b, values_b = [], []
+
+        for i, coord in enumerate(self.peak_positions):
+            x,y = coord
+            if (
+                (x < boundary_thresh) or (x > self.image.shape[1] - boundary_thresh) or
+                (y < boundary_thresh) or (y > self.image.shape[0] - boundary_thresh)
+            ):
+                continue  # Skip if near boundary
+            rel = self.peak_positions - coord
+            dists = np.linalg.norm(rel, axis=1) * dx
+            # Exclude self
+            valid_a  = (dists > dist_min) & (dists < dist_max_a)
+            valid_b = (dists > dist_min) & (dists < dist_max_b)
+
+            # For a direction
+            cos_a = np.abs((rel @ a_hat) / (np.linalg.norm(rel, axis=1) + 1e-12))
+            mask_a = valid_a & (cos_a > angle_thresh)
+            for j in np.where(mask_a)[0]:
+                lines_a.append([coord, self.peak_positions[j]])
+                values_a.append(dists[j])
+
+            # For b direction
+            cos_b = np.abs((rel @ b_hat) / (np.linalg.norm(rel, axis=1) + 1e-12))
+            mask_b = valid_b & (cos_b > angle_thresh)
+            for j in np.where(mask_b)[0]:
+                lines_b.append([coord, self.peak_positions[j]])
+                values_b.append(dists[j])
+
+        # Atom coloring by type
+        x = self.atomic_columns.x
+        y = self.atomic_columns.y
+        atom_types = self.atomic_columns.atom_types
+        unique_types = np.unique(atom_types)
+        color_map = {atype: color for atype, color in zip(unique_types, get_unique_colors())}
+        atom_colors = [color_map[atype] for atype in atom_types]
+
+        plt.subplot(1, 2, 1)
+        plt.imshow(self.image, cmap="gray")
+        lc_a = LineCollection(lines_a, array=np.array(values_a), cmap='Blues', linewidths=2)
+        plt.gca().add_collection(lc_a)
+        if show_lattice:
+            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
+        cbar_a = plt.colorbar(lc_a)
+        cbar_a.set_label(f'Lattice parameter a (nearest, {units})')
+        plt.axis('off')
+        if hasattr(self, 'scalebar'):
+            plt.gca().add_artist(self.scalebar)
+        plt.title('Lattice parameter a (nearest) map')
+        plt.xlim(0, self.image.shape[1])
+        plt.ylim(0, self.image.shape[0])
+
+        plt.subplot(1, 2, 2)
+        plt.imshow(self.image, cmap="gray")
+        lc_b = LineCollection(lines_b, array=np.array(values_b), cmap='Greens', linewidths=2)
+        plt.gca().add_collection(lc_b)
+        if show_lattice:
+            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
+        cbar_b = plt.colorbar(lc_b)
+        cbar_b.set_label(f'Lattice parameter b (nearest, {units})')
+        plt.axis('off')
+        if hasattr(self, 'scalebar'):
+            plt.gca().add_artist(self.scalebar)
+        plt.title('Lattice parameter b (nearest) map')
+        plt.xlim(0, self.image.shape[1])
+        plt.ylim(0, self.image.shape[0])
+        plt.show()
+
+
 
     # properties #######
     @property
