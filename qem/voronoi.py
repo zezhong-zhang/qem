@@ -3,6 +3,7 @@ import numpy as np
 from hyperspy.signals import BaseSignal, Signal2D
 from skimage.segmentation import watershed
 from tqdm import tqdm as progressbar
+from scipy.spatial import cKDTree
 
 
 def voronoi_integrate(
@@ -159,6 +160,50 @@ def voronoi_integrate(
         )
     return integrated_intensity, intensity_record, point_record
 
+def fast_voronoi_point_record(image, points, max_radius, pbc=False, box=None):
+    """
+    Fast Voronoi cell assignment using cKDTree.
+
+    Parameters
+    ----------
+    image : 2D array or shape tuple
+        The image (or its shape) to create the Voronoi map for.
+    points : array-like, shape (2, N)
+        Coordinates of the points (y, x).
+    max_radius : float
+        Maximum radius for Voronoi cell assignment.
+    pbc : bool, optional
+        Whether to use periodic boundary conditions.
+    box : tuple or None
+        Box size for PBC, e.g., (height, width). Required if pbc=True.
+
+    Returns
+    -------
+    point_record : 2D numpy array
+        Voronoi array where equal values belong to the same Voronoi cell.
+    """
+    shape = image.shape if hasattr(image, "shape") else image
+    points = np.asarray(points)
+    if points.shape[0] != 2:
+        raise ValueError("points should have shape (2, N)")
+    points_xy = np.column_stack((points[0], points[1]))
+
+    # Setup KDTree (with PBC if requested)
+    if pbc:
+        if box is None:
+            box = shape
+        tree = cKDTree(points_xy, boxsize=box)
+    else:
+        tree = cKDTree(points_xy)
+
+    grid_y, grid_x = np.indices(shape)
+    grid_points = np.column_stack((grid_y.ravel(), grid_x.ravel()))
+
+    dist, idx = tree.query(grid_points, distance_upper_bound=max_radius)
+    idx[dist >= max_radius] = -1  # Mark as outside any cell
+
+    point_record = idx.reshape(shape) + 1  # To match calculate_point_record (0 = background)
+    return point_record
 
 def calculate_point_record(image, points, max_radius, pbc=False):
     """
@@ -183,13 +228,13 @@ def calculate_point_record(image, points, max_radius, pbc=False):
         total=np.prod(point_record.shape),
         leave=False,
     ):
-        minIndex, distMin = find_smallest_distance(
+        min_index, dist_min = find_smallest_distance(
             i, j, points, image_shape=image.shape, pbc=pbc
         )
-        if distMin >= max_radius:
+        if dist_min >= max_radius:
             point_record[i][j] = 0
         else:
-            point_record[i][j] = minIndex + 1
+            point_record[i][j] = min_index + 1
     return point_record
 
 
