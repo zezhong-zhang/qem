@@ -984,7 +984,7 @@ class CrystalAnalyzer:
             plt.savefig('oxygen_tilt_map.png', dpi=300, bbox_inches='tight')
             plt.savefig('oxygen_tilt_map.svg', bbox_inches='tight')
 
-    def plot_lattice_parameter_unitcell(self, units='A', show_lattice:bool=False):
+    def plot_lattice_parameter_unitcell(self, units='A', show_lattice:bool=False,boundary_thresh:int=20):
         """
         Plot local lattice parameters using adaptive cell origins.
         The lattice parameter is defined as the distance between neighboring origins in a and b directions.
@@ -1003,7 +1003,14 @@ class CrystalAnalyzer:
         values_a = []
         lines_b = []
         values_b = []
-        for i, origin in enumerate(origins):
+        for origin in origins:
+            # skip the boundary
+            x, y = origin
+            if (
+                (x < boundary_thresh) or (x > self.image.shape[1] - boundary_thresh) or
+                (y < boundary_thresh) or (y > self.image.shape[0] - boundary_thresh)
+            ):
+                continue  # Skip if near boundary
             rel = origins - origin
             # Project onto a and b directions
             proj_a = rel @ a_hat
@@ -1092,7 +1099,7 @@ class CrystalAnalyzer:
         lines_a, values_a = [], []
         lines_b, values_b = [], []
 
-        for i, coord in enumerate(self.peak_positions):
+        for coord in self.peak_positions:
             x,y = coord
             if (
                 (x < boundary_thresh) or (x > self.image.shape[1] - boundary_thresh) or
