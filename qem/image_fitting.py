@@ -43,6 +43,7 @@ from qem.model import (
 from qem.refine import calculate_center_of_mass
 from qem.utils import get_random_indices_in_batches, remove_close_coordinates
 from qem.voronoi import voronoi_integrate, calculate_point_record, fast_voronoi_point_record
+from qem.region import Region, Regions
 
 from scipy.optimize import curve_fit
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -61,7 +62,7 @@ class ImageModelFitting:
         same_width: bool = True,
         pbc: bool = False,
         fit_background: bool = True,
-        gpu_memory_limit: bool = False,
+        gpu_memory_limit: bool = True,
     ):
         """
         Initialize the Fitting class.
@@ -75,7 +76,7 @@ class ImageModelFitting:
             same_width (bool, optional): Whether to use same width for all peaks. Defaults to True.
             pbc (bool, optional): Whether to use periodic boundary conditions. Defaults to False.
             fit_background (bool, optional): Whether to fit background. Defaults to True.
-            gpu_memory_limit (bool, optional): Whether to use memory-efficient GPU computation. Defaults to False.
+            gpu_memory_limit (bool, optional): Whether to use memory-efficient GPU computation. Defaults to True.
         """
         if elements is None:
             elements = ["A", "B", "C"]
@@ -86,7 +87,7 @@ class ImageModelFitting:
         self.device = "cuda"
         self.image = image.astype(np.float32)
         self.model = np.zeros(image.shape)
-        self.init_region()
+        self.regions = Regions(image)
 
         units_dict = {"A": 1, "nm": 10, "pm": 0.01, "um": 1e4}
         assert units in units_dict.keys(), "The units should be in A, nm, pm or um."
@@ -104,8 +105,6 @@ class ImageModelFitting:
         self.coordinates_history = dict()
         self.coordinates_state = 0
         
-
-        # define the fitting region shape
         self.local_shape = self.image.shape # the shape of the image
 
         # Initialize model parameters
@@ -126,169 +125,6 @@ class ImageModelFitting:
         # Create JIT-compiled function for this image size if using GPU memory limit
         if gpu_memory_limit:
             self._gaussian_sum_local = create_gaussian_sum_local(self.ny, self.nx)
-
-    def init_region(self):
-        """
-        Initialize the region map. Allocate the image pixels to different regions indicated by int, 0 is the default region for the whole image
-        """
-
-        self._region_map = np.zeros(self.image.shape).astype(int) 
-        init_region_path = Path(
-            [
-                (0, 0),
-                (0, self.image.shape[1] - 1),
-                (self.image.shape[0] - 1, self.image.shape[1] - 1),
-                (self.image.shape[0] - 1, 0),
-            ]
-        )
-        self.region_path_dict = {0: init_region_path}
-        self.region_crysal_analyzer = {}
-        self.region_atomic_column = {}
-        self.fit_local = False
-        self.skip_window = False
-        
-
-
-    # Properties
-
-    @property
-    def window(self):
-        """
-        Returns the window used for fitting.
-
-        If `fit_local` is True, a Butterworth window is created with the shape of `local_shape`.
-        If `fit_local` is False, a Butterworth window is created with the shape of `image.shape`.
-
-        Returns:
-            numpy.ndarray: The Butterworth window used for fitting.
-        """
-        if self.fit_local:
-            return butterworth_window(self.local_shape, 0.5, 10)
-        else:
-            return butterworth_window(self.image.shape, 0.5, 10)
-
-    @property
-    def volume(self):
-        params = self.params.copy()
-        if self.same_width:
-            if self.model_type in {"gaussian", "voigt"}:
-                params["sigma"] = params["sigma"][self.atom_types]
-            elif self.model_type in {"lorentzian"}:
-                params["gamma"] = params["gamma"][self.atom_types]
-            elif self.model_type == "voigt":
-                params["ratio"] = params["ratio"][self.atom_types]
-        volume = np.zeros(self.num_coordinates)
-        if self.model_type == "gaussian":
-            volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
-        elif self.model_type == "lorentzian":
-            volume = params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
-        elif self.model_type == "voigt":
-            gaussian_contrib = (
-                params["height"] * params["sigma"] ** 2 * 2 * np.pi * self.dx**2
-            )
-            lorentzian_contrib = (
-                params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
-            )
-            volume = gaussian_contrib * params["ratio"] + lorentzian_contrib * (
-                1 - params["ratio"]
-            )
-        return volume
-
-    @property
-    def voronoi_volume(self):
-        if hasattr(self, "_voronoi_volume") and self._voronoi_volume is not None:
-            return self._voronoi_volume
-        else:
-            self.voronoi_integration()
-
-    @property
-    def num_coordinates(self):
-        return self.coordinates.shape[0]
-
-    @property
-    def atom_types(self):
-        if len(self._atom_types) == 0 or self._atom_types is None:
-            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
-        return self._atom_types
-
-    @atom_types.setter
-    def atom_types(self, atom_types: np.ndarray):
-        self._atom_types = atom_types
-
-    @property
-    def region_column_labels(self):
-        return self.region_map[
-            self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
-        ]
-
-    @property
-    def region_map(self):
-        for key, region_path in self.region_path_dict.items():
-            self._region_map[
-                region_path
-                .contains_points(np.array([self.X.ravel(), self.Y.ravel()]).T)
-                .reshape(self.X.shape)
-            ] = key
-        return self._region_map
-
-    @property
-    def num_atom_types(self):
-        return len(np.unique(self.atom_types))
-
-    @property
-    def coordinates(self):
-        return self._coordinates
-
-    @coordinates.setter
-    def coordinates(self, coordinates: np.ndarray):
-        self._coordinates = coordinates
-
-    @property
-    def scalebar(self):
-        scalebar = ScaleBar(
-            self.dx,
-            units=self.units,
-            location="lower right",
-            length_fraction=0.2,
-            font_properties={"size": 20},
-        )
-        return scalebar
-
-    @property
-    def num_regions(self):
-        return len(np.unique(self.region_map))
-
-    # voronoi integration
-    def voronoi_integration(self, plot=False):
-        """
-        Compute the Voronoi integration of the atomic columns.
-
-        Returns:
-            np.array: The Voronoi integration of the atomic columns.
-        """
-        if self.params is None:
-            raise ValueError("Please initialize the parameters first.")
-        if self.fit_background:
-            s = Signal2D(self.image - self.params["background"])
-        else:
-            s = Signal2D(self.image - self.init_background)
-        pos_x = self.params["pos_x"]
-        pos_y = self.params["pos_y"]
-        try:
-            max_radius = self.params["sigma"].max() * 5
-        except KeyError:
-            max_radius = self.params["gamma"].max() * 5
-        integrated_intensity, intensity_record, point_record = voronoi_integrate(
-            s, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
-        )
-        integrated_intensity = integrated_intensity * self.dx**2
-        intensity_record = intensity_record * self.dx**2
-        self._voronoi_volume = integrated_intensity
-        self._voronoi_map = intensity_record
-        self._voronoi_cell = point_record
-        if plot:
-            intensity_record.plot(cmap="viridis")
-        return integrated_intensity, intensity_record, point_record
 
     # init peaks and parameters
     def guess_radius(self):
@@ -412,6 +248,8 @@ class ImageModelFitting:
                 "height": height,  # height
                 "gamma": width / np.sqrt(2 * np.log(2)),  # width
             }
+        else:
+            raise ValueError(f"Invalid model type: {self.model_type}")
         if self.fit_background:
             params["background"] = init_background
 
@@ -421,120 +259,6 @@ class ImageModelFitting:
     # find atomic columns
     def import_coordinates(self, coordinates: np.ndarray):
         self.coordinates = coordinates
-
-    def total_lattice(self):
-        # combine all the regional atomic columns
-        for region_index in self.region_atomic_column.keys():
-            atomic_column = self.region_atomic_column[region_index]
-            lattice = atomic_column.lattice
-            if region_index == 0:
-                lattice_total = lattice
-            else:
-                lattice_total += lattice
-        return lattice_total
-
-    def view_3d(self, region_index: int = None):
-        if region_index is None:
-            view(self.total_lattice())
-        else:
-            assert region_index in self.region_atomic_column.keys(), "The region index is not in the region_atomic_column."
-            view(self.region_atomic_column[region_index].lattice)
-
-    def map_lattice(
-        self,
-        elements: list[str],
-        cif_file: str = None,  # type: ignore
-        unit_cell: Atoms = None,  # type: ignore
-        reciprocal: bool = False,
-        region_index: int = 0,
-        sigma: float = 0.8,
-    ):
-        """
-        Find the peaks in the image based on the CIF file.
-
-        Args:
-            cif_file (str): The path to the CIF file.
-            min_distance (int, optional): The minimum distance between the peaks. Defaults to 10.
-            threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
-            exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
-        """
-        column_mask = self.region_column_labels == region_index
-        region_mask = self.region_map == region_index
-
-        crystal_analyzer = CrystalAnalyzer(
-            image=self.image,
-            dx=self.dx,
-            peak_positions=self.coordinates[column_mask],
-            atom_types=self.atom_types[column_mask],
-            elements=elements,
-            units=self.units,
-            region_mask=region_mask,
-        )
-        if unit_cell is not None:
-            crystal_analyzer.unit_cell = unit_cell
-        if cif_file is not None:
-            crystal_analyzer.read_cif(cif_file)
-        atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal, sigma=sigma)
-        # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
-        coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
-        coordinates = np.vstack([coordinates, atomic_column_list.positions_pixel])
-        self.coordinates = coordinates
-        atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
-        atom_types = np.append(atom_types, atomic_column_list.atom_types)
-        self.atom_types = atom_types
-        crystal_analyzer.plot_unitcell()
-        self.region_crysal_analyzer[region_index] = crystal_analyzer
-        self.region_atomic_column[region_index] = atomic_column_list
-        return atomic_column_list
-
-    def assign_region_label(
-        self, region_index: int = 0, invert_selection: bool = False
-    ):
-        atom_select = GetRegionSelection(
-            image=self.image,
-            invert_selection=invert_selection,
-            region_map=self.region_map,
-        )
-        try:
-            atom_select.poly.verts = self.region_path_dict[region_index].vertices  # type: ignore
-            atom_select.path = self.region_path_dict[region_index]
-        except KeyError:
-            pass
-        while plt.fignum_exists(atom_select.fig.number):  # type: ignore
-            plt.pause(0.1)
-
-        region_mask = atom_select.get_region_mask()
-        self.region_map[region_mask] = region_index
-        try:
-            self.region_path_dict[region_index] = atom_select.path
-        except AttributeError:
-            pass
-        logging.info(
-            f"Assigned label {region_index} with {region_mask.sum()} pixels to the region map."
-        )
-
-    def select_atoms(self, invert_selection: bool = False):
-        atom_select = GetAtomSelection(
-            image=self.image,
-            atom_positions=self.coordinates,
-            invert_selection=invert_selection,
-        )
-        while plt.fignum_exists(atom_select.fig.number):  # type: ignore
-            plt.pause(0.1)
-        peak_positions_selected = np.array(atom_select.atom_positions_selected)
-        selection_mask = atom_select.selection_mask
-
-        if peak_positions_selected.shape[0] == 0:
-            logging.info("No atoms selected.")
-            return None
-        else:
-            logging.info(
-                f"Selected {peak_positions_selected.shape[0]} atoms out of {self.num_coordinates} atoms."
-            )
-
-            self.atom_types = self.atom_types[selection_mask]
-            self.coordinates = peak_positions_selected
-        return selection_mask
 
     def find_peaks(
         self,
@@ -559,9 +283,9 @@ class ImageModelFitting:
             np.array: The coordinates of the peaks.
         """
         assert (
-            region_index in self.region_map
-        ), "The region index is not in the region map."
-        region_map = self.region_map == region_index
+            region_index in self.regions.keys
+        ), "The region index is not in the regions."
+        region_map = self.regions.region_map == region_index
         image_filtered = gaussian_filter(self.image, sigma)
         peaks_locations = peak_local_max(
             image_filtered * region_map,
@@ -589,6 +313,90 @@ class ImageModelFitting:
             self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
         return self.coordinates
 
+    def total_lattice(self, region_index: int = None):
+        return self.regions.lattice(region_index)
+
+    def view_3d(self, region_index: int = None):
+        self.regions.view_3d(region_index)
+
+    def map_lattice(
+        self,
+        cif_file: str,
+        elements: list[str] = None,
+        reciprocal: bool = False,
+        region_index: int = 0,
+        sigma: float = 0.8,
+    ):
+        """
+        Map the atomic columns in the CIF file to the peaks found in the image.
+
+        Args:
+            cif_file (str): The path to the CIF file.
+            elements (list[str]): The elements in the CIF file.
+            unit_cell (Atoms, optional): The unit cell of the crystal. Defaults to None.
+            reciprocal (bool, optional): Whether to use reciprocal space. Defaults to False.
+            region_index (int, optional): The index of the region. Defaults to 0.
+            sigma (float, optional): The sigma of the Gaussian filter. Defaults to 0.8.
+
+        Returns:
+            AtomicColumns: The atomic columns mapped from the CIF file.
+        """
+        column_mask = self.region_column_labels == region_index
+        region_mask = self.regions.region_map == region_index
+
+        if elements is None:
+            elements = self.elements
+
+        crystal_analyzer = CrystalAnalyzer(
+            image=self.image,
+            dx=self.dx,
+            peak_positions=self.coordinates[column_mask],
+            atom_types=self.atom_types[column_mask],
+            elements=elements,
+            units=self.units,
+            region_mask=region_mask,
+        )
+        # if unit_cell is not None:
+        #     crystal_analyzer.unit_cell = unit_cell
+        if cif_file is not None:
+            crystal_analyzer.read_cif(cif_file)
+        atomic_column_list = crystal_analyzer.get_atomic_columns(reciprocal=reciprocal, sigma=sigma)
+        # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
+        coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
+        coordinates = np.vstack([coordinates, atomic_column_list.positions_pixel])
+        self.coordinates = coordinates
+        atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
+        atom_types = np.append(atom_types, atomic_column_list.atom_types)
+        self.atom_types = atom_types
+        crystal_analyzer.plot_unitcell()
+        self.regions[region_index].analyzer = crystal_analyzer
+        self.regions[region_index].columns = atomic_column_list
+        return atomic_column_list
+
+
+    def select_atoms(self, invert_selection: bool = False):
+        atom_select = GetAtomSelection(
+            image=self.image,
+            atom_positions=self.coordinates,
+            invert_selection=invert_selection,
+        )
+        while plt.fignum_exists(atom_select.fig.number):  # type: ignore
+            plt.pause(0.1)
+        peak_positions_selected = np.array(atom_select.atom_positions_selected)
+        selection_mask = atom_select.selection_mask
+
+        if peak_positions_selected.shape[0] == 0:
+            logging.info("No atoms selected.")
+            return None
+        else:
+            logging.info(
+                f"Selected {peak_positions_selected.shape[0]} atoms out of {self.num_coordinates} atoms."
+            )
+
+            self.atom_types = self.atom_types[selection_mask]
+            self.coordinates = peak_positions_selected
+        return selection_mask
+
     def get_nearest_peak_distance(self, peak_position: np.ndarray):
         """
         Get the distance of the nearest peak for each peak.
@@ -606,8 +414,7 @@ class ImageModelFitting:
         distances = np.linalg.norm(other_peaks - peak_position, axis=1).min()
         return distances
 
-
-    def _refine_one_center(self, i, point_record, plot):
+    def _refine_one_center(self, i: int, point_record: np.ndarray, plot: bool = False):
         mask = point_record == (i + 1)
         if not np.any(mask):
             return None, i
@@ -973,6 +780,10 @@ class ImageModelFitting:
             if self.same_width:
                 gamma = gamma[self.atom_types]
             width = gamma.mean()
+        if self.model_type == "voigt":
+            ratio = params["ratio"]
+            if self.same_width:
+                ratio = ratio[self.atom_types]
         else:
             raise ValueError("The model type is not valid.")
         height = params["height"]
@@ -1523,6 +1334,7 @@ class ImageModelFitting:
             params: dict = None,  # initial params, optional
             max_radius: int = None,  # optional, for Voronoi cell size
             tol: float = 1e-3,
+            border: int = 0,  # optional, exclude border pixels
             ):
         """
         Fit a Gaussian model to each Voronoi cell defined by the current coordinates.
@@ -1545,7 +1357,7 @@ class ImageModelFitting:
 
         # Generate Voronoi cell map
         if max_radius is None:
-            max_radius = self.params["sigma"].max() * 5
+            max_radius = self.params["sigma"].max() * 3
         point_record = fast_voronoi_point_record(self.image,coords, max_radius)
 
         # Prepare per-cell fitting function
@@ -1578,7 +1390,7 @@ class ImageModelFitting:
             local_param['sigma'] = params['sigma']
             local_param['background'] = np.array([0.0])
             self.fit_background = False
-            
+
             atoms_selected = np.zeros(self.num_coordinates, dtype=bool)
             atoms_selected[index] = True
             self.atoms_selected = atoms_selected
@@ -1590,16 +1402,20 @@ class ImageModelFitting:
                 local_param['sigma'][self.atom_types[index]],
                 local_param['background'][0],
             ]
-            try:
-                popt, _ = curve_fit(
-                    gaussian_2d_single,
-                    (Xc, Yc),
-                    cropped_img.ravel(),
-                    p0=p0,
-                    maxfev=2000
-                )
-            except Exception as e:
-                popt = p0  # fallback if fit fails
+            if border > 0:
+                if pos_x.min() < border or pos_x.max() > self.nx - border or pos_y.min() < border or pos_y.max() > self.ny - border:
+                    popt = p0                    
+            else:
+                try:
+                    popt, _ = curve_fit(
+                        gaussian_2d_single,
+                        (Xc, Yc),
+                        cropped_img.ravel(),
+                        p0=p0,
+                        maxfev=2000
+                    )
+                except Exception as e:
+                    popt = p0  # fallback if fit fails
 
             if popt[0] < 0 or popt[1] < 0:
                 popt = p0
@@ -1617,6 +1433,7 @@ class ImageModelFitting:
 
         # Parallel execution (using jax.vmap or plain Python for now)
         converged = False
+        
         pre_params = copy.deepcopy(self.params)
         current_params = copy.deepcopy(self.params)
         while not converged:
@@ -1631,6 +1448,37 @@ class ImageModelFitting:
         self.params = current_params
         # self.model = self.predict(self.params, self.X, self.Y)
         return self.params
+
+    def voronoi_integration(self, plot=False):
+        """
+        Compute the Voronoi integration of the atomic columns.
+
+        Returns:
+            np.array: The Voronoi integration of the atomic columns.
+        """
+        if self.params is None:
+            raise ValueError("Please initialize the parameters first.")
+        if self.fit_background:
+            s = Signal2D(self.image - self.params["background"])
+        else:
+            s = Signal2D(self.image - self.init_background)
+        pos_x = self.params["pos_x"]
+        pos_y = self.params["pos_y"]
+        try:
+            max_radius = self.params["sigma"].max() * 5
+        except KeyError:
+            max_radius = self.params["gamma"].max() * 5
+        integrated_intensity, intensity_record, point_record = voronoi_integrate(
+            s, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
+        )
+        integrated_intensity = integrated_intensity * self.dx**2
+        intensity_record = intensity_record * self.dx**2
+        self._voronoi_volume = integrated_intensity
+        self._voronoi_map = intensity_record
+        self._voronoi_cell = point_record
+        if plot:
+            intensity_record.plot(cmap="viridis")
+        return integrated_intensity, intensity_record, point_record
 
     # parameters updates and convergence
     def convergence(self, params: dict, pre_params: dict, tol: float = 1e-2):
@@ -1770,18 +1618,20 @@ class ImageModelFitting:
             logging.info(f"The coordinates have been updated. Current state: {self.coordinates_state}")
         return self.coordinates
 
-    def update_region_crysal_analyzer(self):
-        if self.region_crysal_analyzer is not None:
-            for region_label, region_analyzer in self.region_crysal_analyzer.items():
-                region_analyzer.peak_positions = self.coordinates[self.region_column_labels == region_label]
-                region_analyzer.atom_types = self.atom_types[self.region_column_labels == region_label]
-                logging.info(f"Updated region {region_label} coordinates for crystal analyzer.")
+    def update_region_analyzers(self):
+        for index, region in self.regions.items:
+            region.analyzer.peak_positions = self.coordinates[self.region_column_labels == index]
+            region.analyzer.atom_types = self.atom_types[self.region_column_labels == index]
+            logging.info(f"Updated region {index} coordinates for crystal analyzer.")
 
     # plot functions
     def calibrate(self, cif_file: str = None, a: float = None, b: float = None, region_index: int = 0, unit_cell: list = None):
         """
         Calibrate the pixel size based on the FFT of the lattice.
         """
+        if self.coordinates.size == 0:
+            logging.warning("No coordinates found. Please run find_peaks first.")
+            self.find_peaks()
         column_mask = self.region_column_labels == region_index
         region_mask = self.region_map == region_index
         crystal_analyzer = CrystalAnalyzer(
@@ -2087,3 +1937,105 @@ class ImageModelFitting:
         cbar = plt.colorbar()
         cbar.set_ticks(np.arange(self.num_regions))  # type: ignore
         plt.title("Region Map")
+
+    # Properties
+
+    @property
+    def window(self):
+        """
+        Returns the window used for fitting.
+
+        If `fit_local` is True, a Butterworth window is created with the shape of `local_shape`.
+        If `fit_local` is False, a Butterworth window is created with the shape of `image.shape`.
+
+        Returns:
+            numpy.ndarray: The Butterworth window used for fitting.
+        """
+        if self.fit_local:
+            return butterworth_window(self.local_shape, 0.5, 10)
+        else:
+            return butterworth_window(self.image.shape, 0.5, 10)
+
+    @property
+    def volume(self):
+        params = self.params.copy()
+        if self.same_width:
+            if self.model_type in {"gaussian", "voigt"}:
+                params["sigma"] = params["sigma"][self.atom_types]
+            elif self.model_type in {"lorentzian"}:
+                params["gamma"] = params["gamma"][self.atom_types]
+            elif self.model_type == "voigt":
+                params["ratio"] = params["ratio"][self.atom_types]
+        volume = np.zeros(self.num_coordinates)
+        if self.model_type == "gaussian":
+            volume = params["height"] * params["sigma"] ** 2 * np.pi * 2 * self.dx**2
+        elif self.model_type == "lorentzian":
+            volume = params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
+        elif self.model_type == "voigt":
+            gaussian_contrib = (
+                params["height"] * params["sigma"] ** 2 * 2 * np.pi * self.dx**2
+            )
+            lorentzian_contrib = (
+                params["height"] * params["gamma"] ** 2 * np.pi * self.dx**2
+            )
+            volume = gaussian_contrib * params["ratio"] + lorentzian_contrib * (
+                1 - params["ratio"]
+            )
+        return volume
+
+    @property
+    def voronoi_volume(self):
+        if not hasattr(self, "_voronoi_volume") or self._voronoi_volume is None:
+            self.voronoi_integration()
+        return self._voronoi_volume
+
+    @property
+    def num_coordinates(self):
+        return self.coordinates.shape[0]
+
+    @property
+    def atom_types(self):
+        if len(self._atom_types) == 0 or self._atom_types is None:
+            self._atom_types = np.zeros(self.num_coordinates, dtype=int)
+        return self._atom_types
+
+    @atom_types.setter
+    def atom_types(self, atom_types: np.ndarray):
+        self._atom_types = atom_types
+
+    @property
+    def region_column_labels(self):
+        return self.regions.region_map[
+            self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
+        ]
+
+    @property
+    def region_map(self):
+        return self.regions.region_map
+
+    @property
+    def num_atom_types(self):
+        return len(np.unique(self.atom_types))
+
+    @property
+    def coordinates(self):
+        return self._coordinates
+
+    @coordinates.setter
+    def coordinates(self, coordinates: np.ndarray):
+        self._coordinates = coordinates
+
+    @property
+    def scalebar(self):
+        scalebar = ScaleBar(
+            self.dx,
+            units=self.units,
+            location="lower right",
+            length_fraction=0.2,
+            font_properties={"size": 20},
+        )
+        return scalebar
+
+    @property
+    def num_regions(self):
+        return self.regions.num_regions

@@ -10,6 +10,7 @@ import numpy as np
 from ase import Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
+from matplotlib.collections import LineCollection
 from matplotlib_scalebar.scalebar import ScaleBar
 from scipy.spatial import ConvexHull
 from shapely.geometry import Point, Polygon
@@ -20,7 +21,6 @@ from qem.atomic_column import AtomicColumns
 from qem.color import get_unique_colors
 from qem.gui_classes import GetAtomSelection, InteractivePlot
 from qem.image_fitting import gaussian_filter
-from matplotlib.collections import LineCollection
 
 logging.basicConfig(level=logging.INFO)
 
@@ -42,7 +42,7 @@ class CrystalAnalyzer:
         self.peak_positions = peak_positions
         self.atom_types = atom_types
         self.elements = elements
-        self.unit_cell = Atoms
+        self.unit_cell: Atoms = None
         self.origin = np.array([0, 0])
         self.a_vector = {"perfect": np.array([1, 0]), "affine": np.array([1, 0])}
         self.b_vector = {"perfect": np.array([1, 0]), "affine": np.array([1, 0])}
@@ -55,9 +55,48 @@ class CrystalAnalyzer:
         self.affine_matrix = None
         self.unit_cell_transformed = {"perfect": None, "affine": None}
         self._origin_offsets = {"perfect": {}, "affine": {}, "adaptive": {}}
-        self.lattice = Atoms
-        self.lattice_ref = Atoms
+        self.lattice: Atoms = None
+        self.lattice_ref: Atoms = None
 
+    #region operations################
+
+
+    def region_of_interest(self, sigma: float = 0.8):
+        # use the current coordinates to filter the peak_positions
+        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
+        region_of_interest = np.zeros(self.image.shape, dtype=bool)
+        for i in range(len(self.peak_positions)):
+            x, y = self.peak_positions[i]
+            region_of_interest[
+                int(max(y - 3 * sigma/self.dx, 0)): int(min(y + 3 * sigma/self.dx, self.ny)),
+                int(max(x - 3 * sigma/self.dx, 0)): int(min(x + 3 * sigma/self.dx, self.nx)),
+            ] = True
+        return region_of_interest
+
+    def select_region(self, peak_positions: np.ndarray, atom_types: np.ndarray):
+        """
+        Select a region of interest from the image.
+
+        Args:
+            peak_positions (np.ndarray): Array of peak positions.
+            atom_types (np.ndarray): Array of atom types.
+
+        Returns:
+            tuple: Tuple containing peak positions, atom types, and region mask.
+        """
+        atom_select = GetAtomSelection(
+            image=self.image, atom_positions=peak_positions, invert_selection=False
+        )
+        # hold on until the atom_positions_selected is not empty
+        while atom_select.atom_positions_selected.size == 0:
+            plt.pause(0.1)
+        peak_positions_selected = np.array(atom_select.atom_positions_selected)
+        is_peak_selected = np.isin(peak_positions, peak_positions_selected).all(axis=1)
+        atom_types_selected = atom_types[is_peak_selected]
+        region_mask = atom_select.region_mask
+        return peak_positions_selected, atom_types_selected, region_mask
+    
+    
     # I/O ################
     def read_cif(self, cif_file_path: str):
         atoms = read(cif_file_path)
@@ -215,18 +254,6 @@ class CrystalAnalyzer:
         if plot:
             self.plot_unitcell(mode=mode)
         return shifted_unit_cell
-
-    def region_of_interest(self, sigma: float = 0.8):
-        # use the current coordinates to filter the peak_positions
-        # create a mask for the current coordinates with the size of input image, area within 3 sigma of the current coordinates are masked to true
-        region_of_interest = np.zeros(self.image.shape, dtype=bool)
-        for i in range(len(self.peak_positions)):
-            x, y = self.peak_positions[i]
-            region_of_interest[
-                int(max(y - 3 * sigma/self.dx, 0)): int(min(y + 3 * sigma/self.dx, self.ny)),
-                int(max(x - 3 * sigma/self.dx, 0)): int(min(x + 3 * sigma/self.dx, self.nx)),
-            ] = True
-        return region_of_interest
 
     def get_lattice_3d(self, sigma: float = 0.8):
         """
@@ -461,22 +488,6 @@ class CrystalAnalyzer:
         - The strain of the atomic columns.
         """
         return self.atomic_columns.get_strain(float(cut_off))
-        # return self.atomic_columns.get_strain(cut_off)
-
-    # select region and lattice vectors #######
-
-    def select_region(self, peak_positions: np.ndarray, atom_types: np.ndarray):
-        atom_select = GetAtomSelection(
-            image=self.image, atom_positions=peak_positions, invert_selection=False
-        )
-        # hold on until the atom_positions_selected is not empty
-        while atom_select.atom_positions_selected.size == 0:
-            plt.pause(0.1)
-        peak_positions_selected = np.array(atom_select.atom_positions_selected)
-        is_peak_selected = np.isin(peak_positions, peak_positions_selected).all(axis=1)
-        atom_types_selected = atom_types[is_peak_selected]
-        region_mask = atom_select.region_mask
-        return peak_positions_selected, atom_types_selected, region_mask
 
     def select_lattice_vectors(self, tolerance: int = 10, reciprocal: bool = False):
         """
@@ -500,6 +511,10 @@ class CrystalAnalyzer:
 
         if reciprocal:
             image_filtered = gaussian_filter(self.image, 1)
+            hanning_window = np.outer(
+                np.hanning(self.image.shape[0]), np.hanning(self.image.shape[1])
+            )
+            image_filtered *= hanning_window
             fft_image = np.abs(np.fft.fftshift(np.fft.fft2(image_filtered)))
             fft_log = np.log(fft_image)
             fft_dx = 1 / (self.dx * self.image.shape[1])
@@ -532,13 +547,12 @@ class CrystalAnalyzer:
                 units=f"1/{self.units}",
                 dimension="si-length-reciprocal",
                 zoom=zoom,
-                scale_y=scale_y,
             )
             _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=min(fft_tolerance_x, fft_tolerance_y) * zoom)  # type: ignore
             # normalize the fft vectors
-
-            fft_a = fft_a_pixel * fft_dx
-            fft_b = fft_b_pixel * fft_dx
+            fft_pixel_size = np.min([fft_dx, fft_dy])
+            fft_a = fft_a_pixel * fft_pixel_size 
+            fft_b = fft_b_pixel * fft_pixel_size
             # get the matrix in real space
             vec_a = fft_a / np.linalg.norm(fft_a) ** 2
             vec_b = fft_b / np.linalg.norm(fft_b) ** 2
@@ -742,7 +756,7 @@ class CrystalAnalyzer:
         Args:
             a_element (str): Element for A atoms (e.g., 'Sr')
             b_element (str): Element for B atoms (e.g., 'Ti')
-            cutoff_radius (float, optional): Radius to search for surrounding A atoms. Defaults to 5.0.
+            cutoff_radius (float, optional): Radius to search for surrounding A atoms. Defaults to 5.0, unit: Å.
             num_neighbors (int, optional): Number of surrounding A atoms to consider. Defaults to 2.
 
         Returns:
@@ -794,7 +808,7 @@ class CrystalAnalyzer:
         Args:
             a_element (str): Element for A atoms (e.g., 'Sr')
             b_element (str): Element for B atoms (e.g., 'Ti')
-            cutoff_radius (float, optional): Radius to search for surrounding A atoms. Defaults to 5.0.
+            cutoff_radius (float, optional): Radius to search for surrounding A atoms. Defaults to 5.0, unit: Å.
             save (bool, optional): Whether to save the plot. Defaults to False.
         """
         # Calculate polarization
@@ -816,7 +830,7 @@ class CrystalAnalyzer:
         # a_mask = self.atom_types == self.elements.index(a_element)
         # ax1.scatter(self.peak_positions[a_mask, 0],
         #            self.peak_positions[a_mask, 1],
-        #            c='blue', alpha=0.5, label=f'{a_element}')
+        #            c='blue', alpha=0.5, label='A sites')
 
         # Plot polarization vectors
         valid_mask = ~np.isnan(pol_data['magnitude'])
@@ -825,7 +839,7 @@ class CrystalAnalyzer:
                   pol_data['polarization'][valid_mask, 0] *vector_scale,
                   pol_data['polarization'][valid_mask, 1] *vector_scale,
                   scale=2, scale_units='xy',
-                  color='red', label=f'{b_element} polarization')
+                  color='red', label='B sites polarization')
 
         ax1.set_title('Polarization Vectors')
         ax1.legend()
@@ -837,7 +851,7 @@ class CrystalAnalyzer:
                             pol_data['positions'][:, 1],
                             c=pol_data['magnitude'] * self.dx,
                             cmap='plasma',
-                            label=f'{b_element}')
+                            label='B sites')
         plt.colorbar(scatter, ax=ax2, label='Polarization magnitude (Å)')
         ax2.set_title('Polarization Magnitude')
         ax2.legend()
@@ -849,14 +863,14 @@ class CrystalAnalyzer:
             plt.savefig('polarization_map.png', dpi=300, bbox_inches='tight')
             plt.savefig('polarization_map.svg', bbox_inches='tight')
 
-    def measure_oxygen_tilt(self, a_type: str, o_type: str, cutoff_radius: float = 5.0) -> dict:
+    def measure_oxygen_tilt(self, a_type: int, o_type: int, cutoff_radius: float = 5.0) -> dict:
         """Measure the tilt of oxygen atoms based on their coordinates and nearby A site atoms.
         
         The tilt is calculated as the angle between two nearby oxygen atoms and the line formed by two A site atoms.
         
         Args:
-            a_type (str): Atom type label for A site atoms (e.g., 'Sr')
-            o_type (str): Atom type label for oxygen atoms (e.g., 'O')
+            a_type (int): Atom type label for A site atoms (e.g., 0)
+            o_type (int): Atom type label for oxygen atoms (e.g., 2)
             cutoff_radius (float, optional): Radius to search for nearby atoms. Defaults to 5.0.
             
         Returns:
@@ -874,24 +888,26 @@ class CrystalAnalyzer:
         # Initialize arrays for results
         tilt_angles = np.zeros(len(o_positions))
         tilt_vectors = np.zeros((len(o_positions), 2))
+        oo_pairs = []
         
         # Calculate tilt for each oxygen atom
         for i, o_pos in enumerate(o_positions):
             # Find A atoms within cutoff radius
             a_distances = np.linalg.norm(a_positions - o_pos, axis=1)
-            nearby_a_mask = a_distances < cutoff_radius
+            nearby_a_mask = a_distances < cutoff_radius/self.dx
             nearby_a = a_positions[nearby_a_mask]
             
             # Find other oxygen atoms within cutoff radius
             o_distances = np.linalg.norm(o_positions - o_pos, axis=1)
             # Exclude the current oxygen atom (which would have distance 0)
-            nearby_o_mask = (o_distances < cutoff_radius) & (o_distances > 1e-6)
+            nearby_o_mask = (o_distances < cutoff_radius/self.dx) & (o_distances > 1e-6)
             nearby_o = o_positions[nearby_o_mask]
             
             # If not enough nearby atoms, assign NaN
             if len(nearby_a) < 2 or len(nearby_o) < 1:
                 tilt_angles[i] = np.nan
                 tilt_vectors[i] = np.array([np.nan, np.nan])
+                oo_pairs.append([[np.nan, np.nan], [np.nan, np.nan]])
                 continue
             
             # Find the two closest A atoms
@@ -923,50 +939,51 @@ class CrystalAnalyzer:
             
             tilt_angles[i] = angle_deg
             tilt_vectors[i] = o_o_unit
+            oo_pairs.append([o_pos, closest_o])
         
         return {
             'positions': o_positions,
             'tilt_angles': tilt_angles,
-            'tilt_vectors': tilt_vectors
+            'tilt_vectors': tilt_vectors,
+            'oo_pairs': np.array(oo_pairs)
         }
-        
-    def plot_oxygen_tilt(self, a_type: str, o_type: str, cutoff_radius: float = 5.0, save: bool = False):
+
+    def plot_oxygen_tilt(self, a_type: int, o_type: int, cutoff_radius: float = 5.0, save: bool = False):
         """Plot the oxygen tilt angles and directions.
         
         Args:
-            a_type (str): Atom type label for A site atoms
-            o_type (str): Atom type label for oxygen atoms
+            a_type (int): Atom type label for A site atoms
+            o_type (int): Atom type label for oxygen atoms
             cutoff_radius (float, optional): Radius to search for nearby atoms. Defaults to 5.0.
             save (bool, optional): Whether to save the plot. Defaults to False.
         """
         # Calculate tilt
         tilt_data = self.measure_oxygen_tilt(a_type, o_type, cutoff_radius)
         
-        # Create figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        # Create figure with three subplots
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(21, 6))
         
-        # Plot 1: Tilt direction vectors
+        # Plot 1: O-O tilt lines colored by angle
         ax1.imshow(self.image, cmap='gray')
-        # Plot A atoms
         a_mask = self.atom_types == a_type
         ax1.scatter(self.peak_positions[a_mask, 0],
-                   self.peak_positions[a_mask, 1],
-                   c='blue', alpha=0.5, label=f'{a_type} atoms')
-        
-        # Plot tilt vectors
+                self.peak_positions[a_mask, 1],
+                c='blue', alpha=0.5, label=f'{a_type} atoms')
         valid_mask = ~np.isnan(tilt_data['tilt_angles'])
-        ax1.quiver(tilt_data['positions'][valid_mask, 0],
-                  tilt_data['positions'][valid_mask, 1],
-                  tilt_data['tilt_vectors'][valid_mask, 0],
-                  tilt_data['tilt_vectors'][valid_mask, 1],
-                  scale=10, scale_units='xy',
-                  color='red', label=f'{o_type} tilt direction')
-        
-        ax1.set_title('Oxygen Tilt Directions')
+        oo_pairs = tilt_data['oo_pairs'][valid_mask]
+        angles = tilt_data['tilt_angles'][valid_mask]
+        from matplotlib.collections import LineCollection
+        if len(oo_pairs) > 0:
+            lines = oo_pairs
+            line_colors = angles
+            lc = LineCollection(lines, cmap='viridis', array=line_colors, linewidths=2)
+            ax1.add_collection(lc)
+            plt.colorbar(lc, ax=ax1, label='Tilt angle (degrees)')
+        ax1.set_title('Oxygen Tilt Lines')
         ax1.legend()
         ax1.add_artist(self.scalebar)
         
-        # Plot 2: Tilt angle map
+        # Plot 2: Tilt angle map (as before)
         ax2.imshow(self.image, cmap='gray')
         scatter = ax2.scatter(tilt_data['positions'][:, 0],
                             tilt_data['positions'][:, 1],
@@ -977,6 +994,12 @@ class CrystalAnalyzer:
         ax2.set_title('Oxygen Tilt Angles')
         ax2.legend()
         ax2.add_artist(self.scalebar)
+        
+        # Plot 3: Histogram of tilt angles
+        ax3.hist(angles, bins=30, color='gray', edgecolor='black')
+        ax3.set_xlabel('Tilt angle (degrees)')
+        ax3.set_ylabel('Count')
+        ax3.set_title('Tilt Angle Distribution')
         
         plt.tight_layout()
         
