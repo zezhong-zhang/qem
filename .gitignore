@@ -32,3 +32,5 @@ flake8_autofix/
 examples/dev.ipynb
 data/SRO-CTO/
 examples/superlattice_adf.h5
+examples/crystal_analyzer.ipynb
+examples/CTO-SRO.ipynb
