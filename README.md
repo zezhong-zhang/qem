@@ -13,7 +13,7 @@
 <br />
 <div align="center">
   <a href="https://github.com/zezhong-zhang/qem">
-    <img src="QEM.png" alt="Logo" width="80" height="80">
+    <img src="QEM.png" alt="Logo" width="200" height="200">
   </a>
 
   <h3 align="center">QEM</h3>
