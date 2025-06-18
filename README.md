@@ -54,7 +54,7 @@
 ## About The Project
 
 <!-- [![Product Name Screen Shot][product-screenshot]](https://github.com/zezhong-zhang/qem) -->
-QEM is a python version of [StatSTEM](https://github.com/quantitativeTEM/StatSTEM), aiming to provide robust, fast and user-friendly quantification for advanced microscopy. The main usage of QEM is to refine scattering cross-sections, atomic positions and number of atoms for each atomic columns. The computation is accerlated with GPU parallel computing via [JAX](https://jax.readthedocs.io/en/latest/index.html).
+QEM is inspired by [StatSTEM](https://github.com/quantitativeTEM/StatSTEM), aiming to provide robust, fast and user-friendly quantification for advanced microscopy. The main usage of QEM is to refine scattering cross-sections, atomic positions and number of atoms for each atomic columns. By building accurate atomic models, we can link the workflow between electron microscopy and computational materials science. The computation is accelerated with GPU parallel computing via [JAX](https://jax.readthedocs.io/en/latest/index.html).
 
 This repo is currently under heavy development. 
 
