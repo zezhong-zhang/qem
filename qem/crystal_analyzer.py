@@ -576,18 +576,22 @@ class CrystalAnalyzer:
 
     # plot #######
     def plot(self):
-        plt.imshow(self.image, cmap="gray")
+        vmin = np.percentile(self.image, 5)
+        vmax = np.percentile(self.image, 95)
+        plt.imshow(self.image, cmap="gray", vmin=vmin, vmax=vmax)
         color_iterator = get_unique_colors()
         for atom_type in np.unique(self.atom_types):
             mask = self.atom_types == atom_type
             element = self.elements[atom_type]
             plt.scatter(
-                self.lattice.positions[mask, 0] / self.dx,
-                self.lattice.positions[mask, 1] / self.dx,
+                self.peak_positions[mask, 0],
+                self.peak_positions[mask, 1],
                 label=element,
                 color=next(color_iterator),
             )
-        # plt.gca().invert_yaxis()
+        plt.xlim(0, self.image.shape[1])
+        plt.ylim(0, self.image.shape[0])
+        plt.gca().invert_yaxis()
         plt.legend()
         plt.show()
 
@@ -950,7 +954,7 @@ class CrystalAnalyzer:
 
     def plot_oxygen_tilt(self, a_type: int, o_type: int, cutoff_radius: float = 5.0, save: bool = False):
         """Plot the oxygen tilt angles and directions.
-        
+
         Args:
             a_type (int): Atom type label for A site atoms
             o_type (int): Atom type label for oxygen atoms
@@ -959,10 +963,10 @@ class CrystalAnalyzer:
         """
         # Calculate tilt
         tilt_data = self.measure_oxygen_tilt(a_type, o_type, cutoff_radius)
-        
+
         # Create figure with three subplots
         fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(21, 6))
-        
+
         # Plot 1: O-O tilt lines colored by angle
         ax1.imshow(self.image, cmap='gray')
         a_mask = self.atom_types == a_type
@@ -982,7 +986,7 @@ class CrystalAnalyzer:
         ax1.set_title('Oxygen Tilt Lines')
         ax1.legend()
         ax1.add_artist(self.scalebar)
-        
+
         # Plot 2: Tilt angle map (as before)
         ax2.imshow(self.image, cmap='gray')
         scatter = ax2.scatter(tilt_data['positions'][:, 0],
@@ -994,27 +998,29 @@ class CrystalAnalyzer:
         ax2.set_title('Oxygen Tilt Angles')
         ax2.legend()
         ax2.add_artist(self.scalebar)
-        
+
         # Plot 3: Histogram of tilt angles
         ax3.hist(angles, bins=30, color='gray', edgecolor='black')
         ax3.set_xlabel('Tilt angle (degrees)')
         ax3.set_ylabel('Count')
         ax3.set_title('Tilt Angle Distribution')
-        
+
         plt.tight_layout()
-        
         if save:
             plt.savefig('oxygen_tilt_map.png', dpi=300, bbox_inches='tight')
             plt.savefig('oxygen_tilt_map.svg', bbox_inches='tight')
 
-    def plot_lattice_parameter_unitcell(self, units='A', show_lattice:bool=False,boundary_thresh:int=20):
+    def plot_lattice_parameter_unitcell(
+        self, units='A', min_dist:float=0.1, show_lattice:bool=False,
+        boundary_thresh:int=20, line_plot_direction:str=None,
+        line_plot_averaging_window:float=None, line_plot_style:str='confidence_interval'
+    ):
         """
         Plot local lattice parameters using adaptive cell origins.
         The lattice parameter is defined as the distance between neighboring origins in a and b directions.
         """
         adaptive_cells = self.get_origin_offset("adaptive")
         origins = np.array(list(adaptive_cells.values()))  # shape (N, 2)
-        dx = self.dx
 
         # Get direction unit vectors
         a_vec = self.a_vector['perfect']
@@ -1026,30 +1032,155 @@ class CrystalAnalyzer:
         values_a = []
         lines_b = []
         values_b = []
+
+        mask = np.ones(len(origins), dtype=bool)
+        mask[origins[:,0] < boundary_thresh] = False
+        mask[origins[:,0] > self.image.shape[1] - boundary_thresh] = False
+        mask[origins[:,1] < boundary_thresh] = False
+        mask[origins[:,1] > self.image.shape[0] - boundary_thresh] = False
+        origins = origins[mask]
+
         for origin in origins:
             # skip the boundary
             x, y = origin
-            if (
-                (x < boundary_thresh) or (x > self.image.shape[1] - boundary_thresh) or
-                (y < boundary_thresh) or (y > self.image.shape[0] - boundary_thresh)
-            ):
-                continue  # Skip if near boundary
             rel = origins - origin
             # Project onto a and b directions
             proj_a = rel @ a_hat
             proj_b = rel @ b_hat
             # Find the closest neighbor in +a direction (exclude self
-            mask_a = (proj_a > 0.1) & (np.abs(rel @ b_hat) < np.linalg.norm(b_vec)/2)
+            mask_a = (proj_a > min_dist) & (np.abs(proj_b) < np.linalg.norm(b_vec)/2) & (np.abs(proj_a) < np.linalg.norm(a_vec)*1.5)
             if np.any(mask_a):
                 j = np.argmin(np.where(mask_a, proj_a, np.inf))
                 lines_a.append([origin, origins[j]])
-                values_a.append(np.linalg.norm(origins[j] - origin) * dx)
+                values_a.append(np.linalg.norm(origins[j] - origin) * self.dx)
             # Find the closest neighbor in +b direction (exclude self)
-            mask_b = (proj_b > 0.1) & (np.abs(rel @ a_hat) < np.linalg.norm(a_vec)/2)
+            mask_b = (proj_b > min_dist) & (np.abs(proj_a) < np.linalg.norm(a_vec)/2) & (np.abs(proj_b) < np.linalg.norm(b_vec)*1.5)
             if np.any(mask_b):
                 j = np.argmin(np.where(mask_b, proj_b, np.inf))
                 lines_b.append([origin, origins[j]])
-                values_b.append(np.linalg.norm(origins[j] - origin) * dx)
+                values_b.append(np.linalg.norm(origins[j] - origin) * self.dx)
+
+        if line_plot_direction:
+            # Determine projection vector and axis name
+            if line_plot_direction == 'a':
+                proj_hat, axis_name = a_hat, 'a'
+            elif line_plot_direction == 'b':
+                proj_hat, axis_name = b_hat, 'b'
+            else:
+                raise ValueError("line_plot_direction must be 'a' or 'b'")
+
+            # Setup plot
+            fig, (ax_a, ax_b) = plt.subplots(2, 1, sharex=True)
+            
+            # Data to process: [ (data_lines, data_values, axis_to_plot_on, color, param_name), ... ]
+            datasets = [
+                (lines_a, values_a, ax_a, 'blue', 'a'),
+                (lines_b, values_b, ax_b, 'green', 'b')
+            ]
+
+            for lines, values, ax, color, param_name in datasets:
+                if not lines:
+                    ax.text(0.5, 0.5, f'No data for parameter {param_name}', ha='center', va='center', transform=ax.transAxes)
+                    continue
+
+                # --- Moving Average Calculation ---
+                line_midpoints = np.array([np.mean(line, axis=0) for line in lines])
+                values_arr = np.array(values)
+                projected_dist = (line_midpoints @ proj_hat) * self.dx
+
+                # Default window size
+                window = line_plot_averaging_window
+                if window is None:
+                    # Default to one unit cell dimension of the projection axis
+                    if line_plot_direction == 'a':
+                        window_pixels = np.linalg.norm(self.a_vector['perfect'])
+                    else: # 'b'
+                        window_pixels = np.linalg.norm(self.b_vector['perfect'])
+                    window = window_pixels * self.dx
+
+                sort_indices = np.argsort(projected_dist)
+                sorted_dist = projected_dist[sort_indices]
+                sorted_values = values_arr[sort_indices]
+
+                # --- Clustering and Stats Calculation ---
+                plot_cluster_dist_means = np.array([])
+                plot_cluster_value_means = np.array([])
+                plot_cluster_value_stds = np.array([])
+                plot_cluster_value_cis = np.array([])
+
+                if sorted_dist.size > 0:
+                    clusters_data = []
+                    current_cluster_dists = [sorted_dist[0]]
+                    current_cluster_values = [sorted_values[0]]
+                    cluster_start_dist = sorted_dist[0]
+
+                    for i in range(1, len(sorted_dist)):
+                        current_dist = sorted_dist[i]
+                        current_val = sorted_values[i]
+
+                        if current_dist - cluster_start_dist <= window:
+                            current_cluster_dists.append(current_dist)
+                            current_cluster_values.append(current_val)
+                        else:
+                            if current_cluster_values:
+                                mean_d = np.mean(current_cluster_dists)
+                                mean_v = np.mean(current_cluster_values)
+                                std_v = np.std(current_cluster_values) if len(current_cluster_values) > 0 else 0
+                                ci_v = 0
+                                if len(current_cluster_values) > 1:
+                                    sem = np.std(current_cluster_values, ddof=1) / np.sqrt(len(current_cluster_values))
+                                    ci_v = 1.96 * sem
+                                clusters_data.append((mean_d, mean_v, std_v, ci_v))
+
+                            cluster_start_dist = current_dist
+                            current_cluster_dists = [current_dist]
+                            current_cluster_values = [current_val]
+
+                    if current_cluster_values: # Finalize the last cluster
+                        mean_d = np.mean(current_cluster_dists)
+                        mean_v = np.mean(current_cluster_values)
+                        std_v = np.std(current_cluster_values) if len(current_cluster_values) > 0 else 0
+                        ci_v = 0
+                        if len(current_cluster_values) > 1:
+                            sem = np.std(current_cluster_values, ddof=1) / np.sqrt(len(current_cluster_values))
+                            ci_v = 1.96 * sem
+                        clusters_data.append((mean_d, mean_v, std_v, ci_v))
+
+                    if clusters_data:
+                        plot_cluster_dist_means = np.array([c[0] for c in clusters_data])
+                        plot_cluster_value_means = np.array([c[1] for c in clusters_data])
+                        plot_cluster_value_stds = np.array([c[2] for c in clusters_data])
+                        plot_cluster_value_cis = np.array([c[3] for c in clusters_data])
+
+                # --- Plotting ---
+                ax.scatter(sorted_dist, sorted_values, alpha=0.2, color='gray', label='Raw Data', s=10)
+
+                if plot_cluster_dist_means.size > 0:
+                    if line_plot_style == 'confidence_interval':
+                        ax.errorbar(plot_cluster_dist_means, plot_cluster_value_means,
+                                    yerr=plot_cluster_value_cis, fmt='o', color=color,
+                                    capsize=3, markersize=5, elinewidth=1.5,
+                                    label=f'Parameter {param_name} (cluster mean & 95% CI)')
+                    elif line_plot_style == 'error_bars':
+                        ax.errorbar(plot_cluster_dist_means, plot_cluster_value_means,
+                                    yerr=plot_cluster_value_stds, fmt='o', color=color,
+                                    capsize=3, markersize=5, elinewidth=1.5,
+                                    label=f'Parameter {param_name} (cluster mean ± std)')
+                    else:
+                        raise ValueError("line_plot_style must be 'confidence_interval' or 'error_bars'")
+                else:
+                    if sorted_dist.size > 0: # Raw data might exist even if no clusters formed (e.g. single point)
+                         ax.text(0.5, 0.4, f'Not enough data to form clusters for {param_name}', ha='center', va='center', transform=ax.transAxes, fontsize=9)
+                    # else: (handled by the initial check for `if not lines:`) -> ax.text(0.5, 0.5, f'No data for parameter {param_name}'...)
+
+                ax.set_ylabel(f'Lattice parameter {param_name} ({units})')
+                ax.legend()
+                ax.grid(True)
+
+            fig.suptitle(f'Lattice Parameter Profile along {axis_name}-direction', fontsize=16)
+            ax_b.set_xlabel(f'Distance along {axis_name}-axis ({units})')
+            plt.tight_layout(rect=[0, 0.03, 1, 0.96]) # Adjust layout to make room for suptitle
+            plt.show()
 
         # Atom coloring by type
         x = self.atomic_columns.x
@@ -1059,6 +1190,7 @@ class CrystalAnalyzer:
         color_map = {atype: color for atype, color in zip(unique_types, get_unique_colors())}
         atom_colors = [color_map[atype] for atype in atom_types]
 
+        plt.figure()
         plt.subplot(1, 2, 1)
         plt.imshow(self.image, cmap="gray")
         lc_a = LineCollection(lines_a, array=np.array(values_a), cmap='Blues', linewidths=2)
@@ -1092,7 +1224,8 @@ class CrystalAnalyzer:
         plt.ylim(0, self.image.shape[0])
         plt.show()
 
-    def plot_lattice_parameter_nearest(self, units='A', show_lattice:bool=False, angle_thresh:float=0.95, dist_min:float=1, dist_max_a:float=3, dist_max_b:float=3,boundary_thresh:int=20):
+
+    def plot_lattice_parameter_nearest(self, units='A', show_lattice:bool=False, angle_thresh:float=0.95, dist_min_a:float=1, dist_min_b:float=1, dist_max_a:float=None, dist_max_b:float=None, boundary_thresh:int=5):
         """
         Plot local lattice parameters using all nearest neighbors in the a and b directions
         within an angular and distance cutoff.
@@ -1101,12 +1234,12 @@ class CrystalAnalyzer:
             units (str, optional): Unit of the lattice parameter. Defaults to 'A'.
             show_lattice (bool, optional): Whether to show the lattice. Defaults to False.
             angle_thresh (float, optional): Angular cutoff. Defaults to 0.95.
-            dist_min (float, optional): Minimum distance in A. Defaults to 1.
+            dist_min_a (float, optional): Minimum distance in a direction in A. Defaults to 1.
+            dist_min_b (float, optional): Minimum distance in b direction in A. Defaults to 1.
             dist_max_a (float, optional): Maximum distance in a direction in A. Defaults to 3.
             dist_max_b (float, optional): Maximum distance in b direction in A. Defaults to 3.
             boundary_thresh (int, optional): Boundary threshold in pixels. Defaults to 20.
         """
-        dx = self.dx
         a_vec = self.a_vector['perfect']
         b_vec = self.b_vector['perfect']
         a_hat = a_vec / np.linalg.norm(a_vec)
@@ -1114,39 +1247,44 @@ class CrystalAnalyzer:
 
         if dist_max_a is None:
             # Guess a reasonable maximum distance (e.g., 1.5 × norm of a_vec)
-            dist_max_a  = 1.3 * np.linalg.norm(a_vec) * dx
+            dist_max_a  = 1.3 * np.linalg.norm(a_vec) * self.dx
         if dist_max_b is None:
             # Guess a reasonable maximum distance (e.g., 1.5 × norm of b_vec)
-            dist_max_b  = 1.3 * np.linalg.norm(b_vec) * dx
+            dist_max_b  = 1.3 * np.linalg.norm(b_vec) * self.dx
 
         lines_a, values_a = [], []
         lines_b, values_b = [], []
 
-        for coord in self.peak_positions:
-            x,y = coord
-            if (
-                (x < boundary_thresh) or (x > self.image.shape[1] - boundary_thresh) or
-                (y < boundary_thresh) or (y > self.image.shape[0] - boundary_thresh)
-            ):
-                continue  # Skip if near boundary
-            rel = self.peak_positions - coord
-            dists = np.linalg.norm(rel, axis=1) * dx
+        # skip boundary
+        mask = np.ones(len(self.peak_positions), dtype=bool)
+        mask[self.peak_positions[:,0] < boundary_thresh] = False
+        mask[self.peak_positions[:,0] > self.image.shape[1] - boundary_thresh] = False
+        mask[self.peak_positions[:,1] < boundary_thresh] = False
+        mask[self.peak_positions[:,1] > self.image.shape[0] - boundary_thresh] = False
+
+        peak_masked = self.peak_positions[mask]
+
+
+        for i in range(len(peak_masked)):
+            x,y = peak_masked[i]
+            rel = peak_masked - np.array([x,y])
+            dists = np.linalg.norm(rel, axis=1) * self.dx
             # Exclude self
-            valid_a  = (dists > dist_min) & (dists < dist_max_a)
-            valid_b = (dists > dist_min) & (dists < dist_max_b)
+            valid_a  = (dists > dist_min_a) & (dists < dist_max_a)
+            valid_b = (dists > dist_min_b) & (dists < dist_max_b)
 
             # For a direction
             cos_a = np.abs((rel @ a_hat) / (np.linalg.norm(rel, axis=1) + 1e-12))
             mask_a = valid_a & (cos_a > angle_thresh)
             for j in np.where(mask_a)[0]:
-                lines_a.append([coord, self.peak_positions[j]])
+                lines_a.append([peak_masked[i], peak_masked[j]])
                 values_a.append(dists[j])
 
             # For b direction
             cos_b = np.abs((rel @ b_hat) / (np.linalg.norm(rel, axis=1) + 1e-12))
             mask_b = valid_b & (cos_b > angle_thresh)
             for j in np.where(mask_b)[0]:
-                lines_b.append([coord, self.peak_positions[j]])
+                lines_b.append([peak_masked[i], peak_masked[j]])
                 values_b.append(dists[j])
 
         # Atom coloring by type
