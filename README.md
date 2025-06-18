@@ -101,7 +101,8 @@ cd examples
 <!-- ROADMAP -->
 ## Roadmap
 ### TO-DO list
-- [ ] Test the code on windows
+- [ ] Model based on Keras to support different backend (Tensorflow, PyTorch, JAX)
+- [ ] Test the code on Windows
 - [ ] Improve Gaussian mixture model and selection rule
 - [ ] Atom counting based on simulated library
 - [ ] Better peak initization
@@ -146,7 +147,7 @@ Distributed under the GPLv3 License. See `LICENSE` for more information.
 <!-- CONTACT -->
 ## Contact
 
-Zezhong Zhang - zezhong.zhang@uantwerpen.be
+Zezhong Zhang - zhangzz@aisi.ac.cn
 
 Project Link: [https://github.com/zezhong-zhang/qem](https://github.com/zezhong-zhang/qem)
 
