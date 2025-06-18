@@ -30,3 +30,5 @@ examples/ETO_KTO/
 data/2016-05_efficientFitProgram/
 flake8_autofix/
 examples/dev.ipynb
+data/SRO-CTO/
+examples/superlattice_adf.h5
