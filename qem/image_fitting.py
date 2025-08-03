@@ -2206,6 +2206,108 @@ class ImageFitting:
         
         plt.show()
 
+    def integrate_gmm_with_crystal_analyzer(self, region_index: int = 0):
+        """Integrate GMM atom count estimates with crystal analyzer atomic model.
+        
+        This method combines the statistical atom counting from GMM with the 
+        crystal structure analysis to create a 3D atomic model with realistic
+        atom counts in each column. Z-spacing is automatically determined from
+        the supercell structure.
+        
+        Args:
+            region_index: Index of the region to update (default: 0)
+            
+        Returns:
+            Updated crystal analyzer object with GMM-based atom counts
+        """
+        if not hasattr(self, 'atom_count_estimates'):
+            raise ValueError("Please run estimate_atom_counts_with_gmm() first")
+            
+        if region_index not in self.regions.keys:
+            raise ValueError(f"Region {region_index} not found in regions")
+            
+        # Get the crystal analyzer for this region
+        region = self.regions[region_index]
+        if not hasattr(region, 'analyzer') or region.analyzer is None:
+            raise ValueError(f"No crystal analyzer found for region {region_index}. "
+                           "Please run map_lattice() first.")
+                           
+        crystal_analyzer = region.analyzer
+        
+        # Filter atom count estimates for columns in this region
+        column_mask = self.region_column_labels == region_index
+        region_atom_counts = {}
+        
+        for element_name, all_counts in self.atom_count_estimates.items():
+            if element_name == 'all_elements':
+                # Handle case where GMM was fit to all elements together
+                region_atom_counts[element_name] = all_counts[column_mask]
+            else:
+                # Handle per-element GMM fitting
+                element_columns = column_mask & (self.atom_types == self.elements.index(element_name))
+                if element_columns.any():
+                    region_atom_counts[element_name] = all_counts
+        
+        # Update the crystal analyzer with GMM results
+        updated_columns = crystal_analyzer.update_atoms_from_gmm(
+            region_atom_counts
+        )
+        
+        # Update the region's columns
+        region.columns = updated_columns
+        
+        return crystal_analyzer
+        
+    def update_all_regions_with_gmm(self):
+        """Update all regions with GMM atom count estimates.
+        
+        Z-spacing is automatically determined from the supercell structure.
+            
+        Returns:
+            Dictionary mapping region indices to updated crystal analyzers
+        """
+        updated_analyzers = {}
+        
+        for region_index in self.regions.keys:
+            try:
+                analyzer = self.integrate_gmm_with_crystal_analyzer(region_index)
+                updated_analyzers[region_index] = analyzer
+                logging.info(f"Successfully updated region {region_index} with GMM results")
+            except Exception as e:
+                logging.warning(f"Could not update region {region_index}: {str(e)}")
+                
+        return updated_analyzers
+        
+    def export_gmm_updated_structure(self, region_index: int = 0, filename: str = None):
+        """Export the GMM-updated atomic structure to various formats.
+        
+        Args:
+            region_index: Index of the region to export
+            filename: Output filename (without extension)
+            
+        Returns:
+            ASE Atoms object of the updated structure
+        """
+        if region_index not in self.regions.keys:
+            raise ValueError(f"Region {region_index} not found")
+            
+        region = self.regions[region_index]
+        if not hasattr(region, 'columns') or region.columns is None:
+            raise ValueError(f"No atomic columns found for region {region_index}. "
+                           "Please run integrate_gmm_with_crystal_analyzer() first.")
+        
+        # Get the updated lattice
+        updated_lattice = region.columns.lattice
+        
+        if filename:
+            # Export to different formats
+            from ase.io import write
+            write(f"{filename}.xyz", updated_lattice)
+            write(f"{filename}.cif", updated_lattice) 
+            logging.info(f"Exported GMM-updated structure to {filename}.xyz and {filename}.cif")
+            
+        return updated_lattice
+
     def plot_region(self):
         plt.figure()
         plt.imshow(self.image, cmap="gray")
