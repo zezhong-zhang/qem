@@ -2195,6 +2195,7 @@ class ImageFitting:
             all_counts = []
             all_pos_x = []
             all_pos_y = []
+            scatter = None  # Initialize scatter variable
             
             for atom_type in np.unique(self.atom_types):
                 element = self.elements[atom_type]
@@ -2224,7 +2225,7 @@ class ImageFitting:
                     )
             
             # Create colorbar for all elements
-            if all_counts:
+            if all_counts and scatter is not None:
                 cbar = plt.colorbar(scatter, ax=ax, shrink=0.8)
                 cbar.set_label('Number of Atoms', fontsize=14, fontweight='bold')
                 # Set integer ticks on colorbar
