@@ -102,7 +102,6 @@ class ImageFitting:
         pbc: bool = False,
         fit_background: bool = True,
         monitor_memory: bool = False,
-        monitor_memory: bool = False,
     ):
         """
         Initialize the ImageFitting class with comprehensive input validation.
@@ -1542,7 +1541,6 @@ class ImageFitting:
         # This is the key performance improvement, as compilation happens only ONCE.
         local_model_template = self._create_fitting_model(params)
         local_model_template.compile(
-            optimizer=keras.optimizers.AdamW(learning_rate=step_size),
             optimizer=keras.optimizers.AdamW(learning_rate=step_size),
             loss=self.loss,
         )
