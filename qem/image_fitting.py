@@ -61,6 +61,21 @@ from qem.memory_optimization import (
     memory_optimizer,
     chunked_processor,
 )
+from qem.linear_solver import (
+    ParameterValidator,
+    DesignMatrixBuilder,
+    LinearSystemSolver,
+    SolutionProcessor,
+)
+from qem.validation import ImageFittingValidator, FittingParameterValidator
+from qem.memory_optimization import (
+    BatchMemoryOptimizer,
+    ChunkedProcessor,
+    SparseMatrixOptimizer,
+    MemoryMonitor,
+    memory_optimizer,
+    chunked_processor,
+)
 import keras
 
 from scipy.ndimage import sobel, binary_erosion, binary_dilation, gaussian_filter
@@ -87,8 +102,10 @@ class ImageFitting:
         pbc: bool = False,
         fit_background: bool = True,
         monitor_memory: bool = False,
+        monitor_memory: bool = False,
     ):
         """
+        Initialize the ImageFitting class with comprehensive input validation.
         Initialize the ImageFitting class with comprehensive input validation.
 
         Args:
@@ -106,7 +123,6 @@ class ImageFitting:
         """
         # Validate all input parameters
         try:
-            image = gaussian_filter(image, 1.0)
             self.image = ImageFittingValidator.validate_image(image)
             self.dx = ImageFittingValidator.validate_dx(dx)
             self.elements = ImageFittingValidator.validate_elements(elements)
@@ -1524,11 +1540,9 @@ class ImageFitting:
 
         # Create and compile a single, reusable model for optimizing local batches.
         # This is the key performance improvement, as compilation happens only ONCE.
-        atoms_selected_mask = np.zeros(self.num_coordinates, dtype=bool)
-        atoms_selected_mask[:batch_size] = True
-        select_params = self.select_params(params, atoms_selected_mask)
-        local_model_template = self._create_fitting_model(select_params)
+        local_model_template = self._create_fitting_model(params)
         local_model_template.compile(
+            optimizer=keras.optimizers.AdamW(learning_rate=step_size),
             optimizer=keras.optimizers.AdamW(learning_rate=step_size),
             loss=self.loss,
         )
