@@ -1536,14 +1536,6 @@ class ImageFitting:
             params = self.params if self.params is not None else self.init_params()
         params = {k: keras.ops.stop_gradient(v) for k, v in params.items()}
 
-        # Create and compile a single, reusable model for optimizing local batches.
-        # This is the key performance improvement, as compilation happens only ONCE.
-        local_model_template = self._create_fitting_model(params)
-        local_model_template.compile(
-            optimizer=keras.optimizers.AdamW(learning_rate=step_size),
-            loss=self.loss,
-        )
-
         # Prepare model inputs once, handling backend-specific batching.
         if self.backend == "torch":
             model_inputs = [keras.ops.expand_dims(g, 0) for g in (self.x_grid, self.y_grid)]
@@ -1571,21 +1563,24 @@ class ImageFitting:
                     
                     # a) Calculate the target for the local model. The target is the original image
                     #    minus the contribution from all *other* (non-batch) atoms.
-                    params_without_batch = safe_deepcopy_params(params)
-                    height_tensor = params_without_batch['height']
-                    update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
-                    update_values = keras.ops.zeros(keras.ops.shape(batch_indices))
-                    params_without_batch['height'] = keras.ops.scatter_update(
-                        height_tensor,
-                        update_indices,
-                        update_values
-                    )
-                    params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
-                    
-                    model_others = self._create_fitting_model(params_without_batch)
-                    model_others.set_params(params_without_batch)
-                    prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
-                    local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
+                    if batch_size < self.num_coordinates:
+                        params_without_batch = safe_deepcopy_params(params)
+                        height_tensor = params_without_batch['height']
+                        update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
+                        update_values = keras.ops.zeros(keras.ops.shape(batch_indices))
+                        params_without_batch['height'] = keras.ops.scatter_update(
+                            height_tensor,
+                            update_indices,
+                            update_values
+                        )
+                        params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
+                        
+                        model_others = self._create_fitting_model(params_without_batch)
+                        model_others.set_params(params_without_batch)
+                        prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
+                        local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
+                    else:
+                        local_target = self.image_tensor
 
                     # b) Isolate the parameters for the current batch
                     atoms_selected_mask = np.zeros(self.num_coordinates, dtype=bool)
@@ -1593,16 +1588,11 @@ class ImageFitting:
                     select_params = self.select_params(params, atoms_selected_mask)
                     
                     # c) Create or reuse local model
-                    if len(batch_indices) < batch_size:
-                        local_model = self._create_fitting_model(select_params)
-                        local_model.compile(
-                            optimizer=keras.optimizers.Adam(learning_rate=step_size),
-                            loss=self.loss,
-                        )
-                    else:
-                        # For full batch, create new model with correct parameter shapes
-                        local_model = local_model_template
-                        local_model.set_params(select_params)
+                    local_model = self._create_fitting_model(select_params)
+                    local_model.compile(
+                        optimizer=keras.optimizers.Adam(learning_rate=step_size),
+                        loss=self.loss,
+                    )
 
                     # d) Optimize the local model using train_on_batch
                     for _ in tqdm(range(maxiter), desc="Random batch optimization", leave=False):
