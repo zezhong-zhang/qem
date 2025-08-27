@@ -1522,7 +1522,6 @@ class ImageFitting:
         maxiter: int = 50,
         tol: float = 1e-3,
         step_size: float = 1e-2,
-        verbose: bool = False,
         local: bool = True,
         plot: bool = False,
     ):
@@ -1561,8 +1560,7 @@ class ImageFitting:
         )
         
         with operation_context:
-            for epoch in range(num_epoch):
-                print(f"Epoch {epoch + 1}/{num_epoch}")
+            for epoch in tqdm(range(num_epoch), desc="Training epochs"):
                 params = self.linear_estimator(params)  
                 pre_params = safe_deepcopy_params(params)
                 
@@ -1607,7 +1605,7 @@ class ImageFitting:
                         local_model.set_params(select_params)
 
                     # d) Optimize the local model using train_on_batch
-                    for _ in range(maxiter):
+                    for _ in tqdm(range(maxiter), desc="Random batch optimization", leave=False):
                         local_model.train_on_batch(x=model_inputs, y=local_target)
 
                     # e) Retrieve optimized parameters and update the main parameter set
