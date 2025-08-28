@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 
 def voronoi_integrate(
-    s,
+    image,
     points_x,
     points_y,
     method="Voronoi",
@@ -25,7 +25,7 @@ def voronoi_integrate(
 
     Parameters
     ----------
-    s : HyperSpy signal or array-like object
+    image : 2D, 3D or 4D array-like
         Assuming 2D, 3D or 4D dataset where the spatial dimensions are 2D and
         any remaining dimensions are spectral.
     point_x, point_y : list
@@ -56,33 +56,10 @@ def voronoi_integrate(
     intensity_record : HyperSpy signal, same size as s
         Each pixel/voxel in a particular segment or region has the value of the
         integration, value.
-    point_record : HyperSpy Signal2D with no navigation dimension
+    point_record : 2D numpy array, same size as image
         Image showing where each integration region is, pixels equating to
         point 0 (integrated_intensity[0]) all have value 0, all pixels
         equating to integrated_intensity[1] all have value 1 etc.
-
-    Examples
-    --------
-
-    >>> import atomap.api as am
-    >>> from atomap.tools import integrate
-    >>> import hyperspy.api as hs
-    >>> sublattice = am.dummy_data.get_simple_cubic_sublattice(
-    ...        image_noise=True)
-    >>> image = hs.signals.Signal2D(sublattice.image)
-    >>> i_points, i_record, p_record = integrate(
-    ...        image,
-    ...        points_x=sublattice.x_position,
-    ...        points_y=sublattice.y_position, method='Voronoi')
-    >>> i_record.plot()
-
-    For a 3 dimensional dataset, with artificial EELS data
-
-    >>> s = am.dummy_data.get_eels_spectrum_survey_image()
-    >>> s_eels = am.dummy_data.get_eels_spectrum_map()
-    >>> peaks = am.get_atom_positions(s, separation=4)
-    >>> i_points, i_record, p_record = integrate(
-    ...         s_eels, peaks[:, 0], peaks[:, 1], max_radius=3)
 
     Note
     ----
@@ -90,9 +67,8 @@ def voronoi_integrate(
     memory error with large sizes.
 
     """
-    image = s.__array__()
     if len(image.shape) < 2:
-        raise ValueError("s must have at least 2 dimensions")
+        raise ValueError("image must have at least 2 dimensions")
     intensity_record = np.zeros_like(image, dtype=float)
     integrated_intensity = np.zeros(image.shape[:-2])
     integrated_intensity = np.stack(

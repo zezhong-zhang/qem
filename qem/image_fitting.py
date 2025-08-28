@@ -1,7 +1,6 @@
 # Standard library imports
 import copy
 import logging
-import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from typing import Any
@@ -9,16 +8,15 @@ from typing import Any
 # Third-party library imports
 import matplotlib.pyplot as plt
 import numpy as np
-from hyperspy.signals import Signal2D
 from matplotlib_scalebar.scalebar import ScaleBar
 from numpy.typing import NDArray
-from scipy.optimize import curve_fit, lsq_linear
-from scipy.sparse import coo_matrix
-from scipy.sparse.linalg import spsolve
+from scipy.optimize import curve_fit
 from skimage.feature import peak_local_max
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import sobel, binary_erosion, binary_dilation, gaussian_filter,laplace
+from skimage.morphology import remove_small_objects, label
+from skimage.measure import find_contours
+from matplotlib.path import Path
 from tqdm import tqdm
-from skimage.filters import threshold_multiotsu
 
 # Application-specific imports
 from qem.crystal_analyzer import CrystalAnalyzer
@@ -61,29 +59,7 @@ from qem.memory_optimization import (
     memory_optimizer,
     chunked_processor,
 )
-from qem.linear_solver import (
-    ParameterValidator,
-    DesignMatrixBuilder,
-    LinearSystemSolver,
-    SolutionProcessor,
-)
-from qem.validation import ImageFittingValidator, FittingParameterValidator
-from qem.memory_optimization import (
-    BatchMemoryOptimizer,
-    ChunkedProcessor,
-    SparseMatrixOptimizer,
-    MemoryMonitor,
-    memory_optimizer,
-    chunked_processor,
-)
 import keras
-
-from scipy.ndimage import sobel, binary_erosion, binary_dilation, gaussian_filter
-from skimage.morphology import remove_small_objects, label
-from scipy.ndimage import gaussian_filter, binary_dilation,laplace
-from skimage.measure import find_contours
-from skimage.feature import peak_local_max
-from matplotlib.path import Path
 
 # Only configure logging if not already configured
 if not logging.getLogger().handlers:
@@ -330,9 +306,9 @@ class ImageFitting:
         if self.params is None:
             raise ValueError("Please initialize the parameters first.")
         if self.fit_background:
-            s = Signal2D(self.image - safe_convert_to_numpy(self.params["background"]))
+            image = (self.image - safe_convert_to_numpy(self.params["background"]))
         else:
-            s = Signal2D(self.image - self.init_background)
+            image = (self.image - self.init_background)
         pos_x = self.params["pos_x"]
         pos_y = self.params["pos_y"]
         pos_x = safe_convert_to_numpy(pos_x)
@@ -341,7 +317,7 @@ class ImageFitting:
             max_radius = self.params["width"].max() * 5
             max_radius = safe_convert_to_numpy(max_radius)
         integrated_intensity, intensity_record, point_record = voronoi_integrate(
-            s, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
+            image, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
         )
         integrated_intensity = integrated_intensity * self.dx**2
         intensity_record = intensity_record * self.dx**2
