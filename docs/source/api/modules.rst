@@ -24,10 +24,10 @@ qem.model module
    :undoc-members:
    :show-inheritance:
 
-qem.backend_utils module
+qem.backend module
 -------------------------
 
-.. automodule:: qem.backend_utils
+.. automodule:: qem.backend
    :members:
    :undoc-members:
    :show-inheritance:

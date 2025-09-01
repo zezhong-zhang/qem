@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 # Configure backend automatically
-from qem.backend_utils import setup_test_backend
+from qem.backend import setup_test_backend
 backend = setup_test_backend()
 
 from keras import ops

@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 # Configure backend automatically
-from qem.backend_utils import setup_test_backend
+from qem.backend import setup_test_backend
 backend = setup_test_backend()
 
 from keras import ops
@@ -14,7 +14,7 @@ from qem.image_fitting import ImageFitting
 
 def test_backend_detection():
     """Test that backend detection works."""
-    from qem.backend_utils import detect_available_backends
+    from qem.backend import detect_available_backends
     available = detect_available_backends()
     assert len(available) > 0, "No backends available"
     print(f"Available backends: {available}")

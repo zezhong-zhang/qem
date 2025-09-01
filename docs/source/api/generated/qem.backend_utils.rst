@@ -1,7 +1,7 @@
 ﻿qem.backend\_utils
 ==================
 
-.. automodule:: qem.backend_utils
+.. automodule:: qem.backend
 
    
    .. rubric:: Functions

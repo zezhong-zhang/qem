@@ -81,7 +81,7 @@ Supporting utilities and tools:
    :toctree: generated/
    :nosignatures:
 
-   qem.backend_utils
+   qem.backend
    qem.utils
    qem.io
    qem.periodic_table
@@ -110,7 +110,7 @@ Backend Utilities
 
 Backend detection and configuration utilities for JAX/TensorFlow/PyTorch support.
 
-.. automodule:: qem.backend_utils
+.. automodule:: qem.backend
    :members:
    :undoc-members:
    :show-inheritance:
