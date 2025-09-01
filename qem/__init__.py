@@ -10,9 +10,9 @@ __version__ = "0.1.0"
 from . import io
 from . import utils
 
-# Only import backend_utils if needed to avoid initialization issues
+# Only import backend if needed to avoid initialization issues
 try:
-    from . import backend_utils
-    __all__ = ['io', 'utils', 'backend_utils']
+    from . import backend
+    __all__ = ['io', 'utils', 'backend']
 except ImportError:
     __all__ = ['io', 'utils']
