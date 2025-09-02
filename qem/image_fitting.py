@@ -60,6 +60,7 @@ from qem.memory_optimization import (
     chunked_processor,
 )
 import keras
+import h5py
 
 # Only configure logging if not already configured
 if not logging.getLogger().handlers:
@@ -2554,6 +2555,180 @@ class ImageFitting:
         cbar = plt.colorbar()
         cbar.set_ticks(np.arange(self.regions.num_regions))  # type: ignore
         plt.title("Region Map")
+
+    def save(self, filepath: str) -> None:
+        """
+        Save ImageFitting state to HDF5 file.
+        
+        Args:
+            filepath: Path to save the HDF5 file
+        """
+        with h5py.File(filepath, 'w') as f:
+            # Save input image and parameters
+            f.create_dataset('image', data=self.image)
+            f.attrs['dx'] = self.dx
+            f.attrs['units'] = self.units
+            f.attrs['model_type'] = self.model_type
+            f.attrs['same_width'] = self.same_width
+            f.attrs['pbc'] = self.pbc
+            f.attrs['fit_background'] = self.fit_background
+            
+            # Save fitted parameters
+            if self.params is not None:
+                params_group = f.create_group('params')
+                for key, value in self.params.items():
+                    # Handle different tensor types and devices
+                    if hasattr(value, 'cpu') and hasattr(value, 'numpy'):
+                        # Handle PyTorch GPU tensors
+                        value = value.cpu().detach().numpy()
+                    elif hasattr(value, 'numpy'):
+                        # Handle NumPy or CPU tensors
+                        value = value.numpy()
+                    elif hasattr(value, 'device') and 'GPU' in str(value.device):
+                        # Additional GPU tensor handling
+                        try:
+                            value = np.array(value)
+                        except (TypeError, RuntimeError):
+                            value = np.asarray(value)
+                    params_group.create_dataset(key, data=value)
+            
+            # Save fitted image
+            if hasattr(self, 'prediction') and self.prediction is not None:
+                f.create_dataset('prediction', data=self.prediction)
+            
+            # Save coordinates and atom types
+            f.create_dataset('coordinates', data=self.coordinates)
+            f.create_dataset('atom_types', data=self.atom_types)
+            
+            # Save elements list
+            if self.elements is not None:
+                f.create_dataset('elements', data=[e.encode('utf-8') for e in self.elements])
+            
+            # Save voronoi data if available
+            if hasattr(self, '_voronoi_volume') and self._voronoi_volume is not None:
+                f.create_dataset('voronoi_volume', data=self._voronoi_volume)
+            if hasattr(self, '_voronoi_map') and self._voronoi_map is not None:
+                f.create_dataset('voronoi_map', data=self._voronoi_map)
+
+    def load(self, filepath: str) -> 'ImageFitting':
+        """
+        Load ImageFitting state from HDF5 file.
+        
+        Args:
+            filepath: Path to the HDF5 file to load
+            
+        Returns:
+            ImageFitting instance with loaded state
+            
+        Raises:
+            FileNotFoundError: If the file doesn't exist
+            KeyError: If required attributes are missing
+            ValueError: If data validation fails
+        """
+        try:
+            with h5py.File(filepath, 'r') as f:
+                # Validate required datasets exist
+                required_datasets = ['image']
+                for dataset in required_datasets:
+                    if dataset not in f:
+                        raise KeyError(f"Missing required dataset: {dataset}")
+                
+                # Validate required attributes exist
+                required_attrs = ['dx', 'units', 'model_type', 'same_width', 'pbc', 'fit_background']
+                for attr in required_attrs:
+                    if attr not in f.attrs:
+                        raise KeyError(f"Missing required attribute: {attr}")
+                
+                # Load input image and parameters
+                self.image = f['image'][:]
+                self.dx = float(f.attrs['dx'])
+                self.units = str(f.attrs['units'])
+                self.model_type = str(f.attrs['model_type'])
+                self.same_width = bool(f.attrs['same_width'])
+                self.pbc = bool(f.attrs['pbc'])
+                self.fit_background = bool(f.attrs['fit_background'])
+                
+                # Validate image data
+                if not isinstance(self.image, np.ndarray) or self.image.ndim != 2:
+                    raise ValueError("Image must be a 2D numpy array")
+                
+                # Load fitted parameters
+                if 'params' in f:
+                    params = {}
+                    params_group = f['params']
+                    for key in params_group.keys():
+                        data = params_group[key]
+                        if data.ndim == 0:
+                            params[key] = data[()]
+                        else:
+                            params[key] = data[:]
+                    
+                    # Validate parameter shapes
+                    num_coords = len(self.coordinates)
+                    if 'pos_x' in params and 'pos_y' in params:
+                        if len(params['pos_x']) != len(params['pos_y']):
+                            raise ValueError("pos_x and pos_y must have the same length")
+                        num_coords = len(params['pos_x'])
+                        self.coordinates = np.stack([params['pos_x'], params['pos_y']], axis=1)
+                    
+                    # Validate other parameters
+                    for key, value in params.items():
+                        if key in ['pos_x', 'pos_y', 'height']:
+                            if len(value) != num_coords:
+                                raise ValueError(f"Parameter {key} length mismatch with coordinates")
+
+                    self.params = params
+
+                # Load fitted image
+                if 'prediction' in f:
+                    prediction = f['prediction'][:]
+                    if prediction.shape != self.image.shape:
+                        raise ValueError("Prediction shape must match image shape")
+                    self.prediction = prediction
+
+                # Load coordinates and atom types
+                if 'coordinates' in f:
+                    coords = f['coordinates'][:]
+                    if coords.ndim != 2 or coords.shape[1] != 2:
+                        raise ValueError("Coordinates must be Nx2 array")
+                    self.coordinates = coords
+
+                if 'atom_types' in f:
+                    atom_types = f['atom_types'][:]
+                    if len(atom_types) != len(self.coordinates):
+                        raise ValueError("Atom types length must match coordinates length")
+                    self.atom_types = atom_types
+
+                # Load elements
+                if 'elements' in f:
+                    try:
+                        elements_bytes = f['elements'][:]
+                        self.elements = [e.decode('utf-8') if isinstance(e, bytes) else str(e) 
+                                           for e in elements_bytes]
+                    except (UnicodeDecodeError, AttributeError):
+                        logging.warning("Could not decode elements list, using default")
+                        self.elements = None
+
+                # Load voronoi data
+                if 'voronoi_volume' in f:
+                    voronoi_volume = f['voronoi_volume'][:]
+                    if len(voronoi_volume) != len(self.coordinates):
+                        raise ValueError("Voronoi volume length must match coordinates length")
+                    self._voronoi_volume = voronoi_volume
+                
+                if 'voronoi_map' in f:
+                    voronoi_map = f['voronoi_map'][:]
+                    if voronoi_map.shape != self.image.shape:
+                        raise ValueError("Voronoi map shape must match image shape")
+                    self._voronoi_map = voronoi_map
+                
+                logging.info(f"Successfully loaded ImageFitting state from {filepath}")
+                return self
+                
+        except FileNotFoundError:
+            raise FileNotFoundError(f"HDF5 file not found: {filepath}")
+        except Exception as e:
+            raise ValueError(f"Error loading HDF5 file: {str(e)}") from e
 
     def get_memory_usage(self) -> dict:
         """
