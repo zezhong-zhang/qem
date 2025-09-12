@@ -59,6 +59,7 @@ from qem.memory_optimization import (
     memory_optimizer,
     chunked_processor,
 )
+from qem.background_estimator import integrate_background_estimation
 import keras
 import h5py
 
@@ -1512,6 +1513,11 @@ class ImageFitting:
         if params is None:
             params = self.params if self.params is not None else self.init_params()
         params = {k: keras.ops.stop_gradient(v) for k, v in params.items()}
+
+        # for k, v in params.items():
+        #     if keras.utils.is_keras_tensor(v) is False:
+        #        v = keras.ops.convert_to_tensor(v)
+        #     params[k] = keras.ops.stop_gradient(v)
 
         # Prepare model inputs once, handling backend-specific batching.
         if self.backend == "torch":
