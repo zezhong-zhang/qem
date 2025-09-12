@@ -13,7 +13,7 @@ from scipy.stats import mode, median_abs_deviation
 from sklearn.cluster import KMeans
 from typing import Tuple, Optional, Union
 
-from qem.utils import safe_convert_to_numpy
+from qem.utils.params import safe_convert_to_numpy
 
 
 class RobustBackgroundEstimator:

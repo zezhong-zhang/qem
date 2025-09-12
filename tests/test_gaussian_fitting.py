@@ -1,7 +1,7 @@
 """Tests for refinement functions."""
 import numpy as np
 import pytest
-from qem.refine import calculate_center_of_mass, fit_gaussian, gauss2d
+from qem.fit.refine import calculate_center_of_mass, fit_gaussian, gauss2d
 
 def test_gaussian_fitting():
     """Test 2D Gaussian fitting functionality."""

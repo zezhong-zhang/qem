@@ -17,9 +17,9 @@ from shapely.geometry import Point, Polygon
 from skimage.feature import peak_local_max
 from skimage.transform import rescale
 
-from qem.atomic_column import AtomicColumns
-from qem.color import get_unique_colors
-from qem.gui_classes import GetAtomSelection, InteractivePlot
+from qem.analysis.atomic_column import AtomicColumns
+from qem.visualization.color import get_unique_colors
+from qem.visualization.select import GetAtomSelection, InteractivePlot
 from scipy.ndimage import gaussian_filter
 
 logging.basicConfig(level=logging.INFO)

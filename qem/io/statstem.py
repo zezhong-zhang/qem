@@ -5,7 +5,7 @@ import scipy.io as sio
 from PIL import Image
 
 
-def read_legacyInputStatSTEM(filename):
+def read_statstem(filename):
     """
     This function is used to read legacy StatSTEM input files in from .mat files.
 
@@ -26,8 +26,8 @@ def read_legacyInputStatSTEM(filename):
         Provided filename does not exist
     Examples
     --------
-    >>> from pyStatSTEM.io import read_legacyInputStatSTEM
-    >>> legacyData = read_legacyInputStatSTEM('Examples/Example_PtIr.mat')
+    >>> from pyStatSTEM.io import read_statstem
+    >>> legacyData = read_statstem('Examples/Example_PtIr.mat')
     >>> inputStatSTEM = legacyData["input"]
     >>> plt.imshow(inputStatSTEM['obs'])
     """

@@ -5,7 +5,7 @@ import numpy as np
 from matplotlib.path import Path
 from matplotlib.widgets import PolygonSelector
 
-from qem.color import get_unique_colors
+from qem.visualization.color import get_unique_colors
 
 logging.basicConfig(level=logging.INFO)
 import tkinter as tk
@@ -13,7 +13,7 @@ from tkinter import simpledialog
 
 from matplotlib_scalebar.scalebar import ScaleBar
 
-from qem.zoom import zoom_nd
+from qem.visualization.zoom import zoom_nd
 
 
 def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False):

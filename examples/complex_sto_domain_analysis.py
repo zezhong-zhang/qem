@@ -10,7 +10,7 @@ strategies to each.
 import hyperspy.api as hs
 import numpy as np
 import matplotlib.pyplot as plt
-from qem.image_fitting import ImageFitting
+from qem.fit.image_fitting import ImageFitting
 
 def analyze_complex_sto_domain(image_file_path, dx_value=None):
     """

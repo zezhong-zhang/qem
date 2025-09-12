@@ -7,7 +7,7 @@ from numba import jit as njit
 load_dotenv()
 import keras
 
-from qem.utils import safe_convert_to_numpy, safe_convert_to_tensor
+from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 
 class ImageModel(keras.Model):
     """Base class for all image models."""

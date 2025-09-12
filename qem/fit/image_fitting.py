@@ -19,13 +19,14 @@ from matplotlib.path import Path
 from tqdm import tqdm
 
 # Application-specific imports
-from qem.crystal_analyzer import CrystalAnalyzer
-from qem.gui_classes import (
+from qem.analysis.crystal_analyzer import CrystalAnalyzer
+from qem.analysis.region import Regions, Region
+from qem.visualization.select import (
     GetAtomSelection,
     GetRegionSelection,
     InteractivePlot,
 )
-from qem.model import (
+from qem.fit.model import (
     ImageModel,
     GaussianKernel,
     GaussianModel,
@@ -34,24 +35,23 @@ from qem.model import (
     gaussian_2d_single,
 )
 from qem.processing import butterworth_window
-from qem.refine import calculate_center_of_mass
-from qem.region import Regions,Region
-from qem.utils import (
-    get_random_indices_in_batches,
-    remove_close_coordinates,
+from qem.fit.refine import calculate_center_of_mass
+from qem.utils.params import (
     safe_convert_to_numpy,
     safe_convert_to_tensor,
     safe_deepcopy_params,
 )
-from qem.voronoi import voronoi_integrate, voronoi_point_record
-from qem.linear_solver import (
+from qem.utils.arrays import get_random_indices_in_batches
+from qem.visualization.geometry import remove_close_coordinates
+from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
+from qem.fit.linear_solver import (
     ParameterValidator,
     DesignMatrixBuilder,
     LinearSystemSolver,
     SolutionProcessor,
 )
-from qem.validation import ImageFittingValidator, FittingParameterValidator
-from qem.memory_optimization import (
+from qem.schema.validation import ImageFittingValidator, FittingParameterValidator
+from qem.utils.memory_optimization import (
     BatchMemoryOptimizer,
     ChunkedProcessor,
     SparseMatrixOptimizer,
@@ -59,7 +59,7 @@ from qem.memory_optimization import (
     memory_optimizer,
     chunked_processor,
 )
-from qem.background_estimator import integrate_background_estimation
+from qem.fit.background_estimator import integrate_background_estimation
 import keras
 import h5py
 
@@ -429,7 +429,6 @@ class ImageFitting:
 
         # Initialize background using robust estimation
         if self.fit_background:
-            from qem.background_estimator import integrate_background_estimation
             init_background = integrate_background_estimation(
                 self, 
                 background_method='combined',
@@ -2291,7 +2290,7 @@ class ImageFitting:
         if not hasattr(self, 'params') or self.params is None:
             raise ValueError("Please run fitting first to obtain refined cross-sections")
         
-        from qem.gaussian_mixture_model import GaussianMixtureModel
+        from qem.analysis.gaussian_mixture_model import GaussianMixtureModel
         
         # Get refined cross-sections (volumes)
         cross_sections = self.volume.reshape(-1, 1)  # Reshape for GMM input

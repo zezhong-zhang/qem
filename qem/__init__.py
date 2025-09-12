@@ -8,11 +8,25 @@ __version__ = "0.1.0"
 
 # Core modules - import these directly as they're commonly used
 from . import io
+from . import fit
+from .fit.image_fitting import ImageFitting
+from . import analysis
+from . import visualization
+from . import processing
+from . import instruments
 from . import utils
+from . import schema
 
-# Only import backend if needed to avoid initialization issues
-try:
-    from . import backend
-    __all__ = ['io', 'utils', 'backend']
-except ImportError:
-    __all__ = ['io', 'utils']
+# Main application
+from .app import *
+
+__all__ = [
+    'data',
+    'fit', 
+    'analysis',
+    'visualization',
+    'processing',
+    'instruments',
+    'utils',
+    'schema',
+]

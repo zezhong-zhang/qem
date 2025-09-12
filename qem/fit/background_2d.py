@@ -19,7 +19,7 @@ except ImportError:
     PHOTUTILS_AVAILABLE = False
     warnings.warn("photutils not available. Background2D method will be unavailable.")
 
-from qem.utils import safe_convert_to_numpy
+from qem.utils.params import safe_convert_to_numpy
 
 
 class Background2DEstimator:

@@ -11,5 +11,5 @@
       file_exists
       read_delimited_text
       read_image
-      read_legacyInputStatSTEM
+      read_statstem
    

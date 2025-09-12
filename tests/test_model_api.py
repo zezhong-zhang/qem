@@ -2,11 +2,11 @@
 """Simple script to test model API."""
 
 try:
-    from qem.backend import setup_test_backend
+    from qem.utils.backend import setup_test_backend
     setup_test_backend()
     
     from keras import ops
-    from qem.model import GaussianModel
+    from qem.fit.model import GaussianModel
     from qem.utils import safe_convert_to_numpy
     
     print("Testing model API...")

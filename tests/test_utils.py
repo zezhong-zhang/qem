@@ -3,13 +3,13 @@ import numpy as np
 import pytest
 
 # Configure backend automatically
-from qem.backend import setup_test_backend, detect_available_backends
+from qem.utils.backend import setup_test_backend, detect_available_backends
 setup_test_backend()
 
 import keras
 from keras import ops
 
-from qem.utils import safe_convert_to_numpy, safe_convert_to_tensor, safe_deepcopy_params
+from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor, safe_deepcopy_params
 
 
 def test_safe_convert_to_numpy():
@@ -79,7 +79,7 @@ def test_safe_deepcopy_params():
 
 def test_backend_compatibility():
     """Test that utilities work across different backends."""
-    from qem.backend import configure_backend
+    from qem.utils.backend import configure_backend
     
     backends_to_test = detect_available_backends()
     

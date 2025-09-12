@@ -1,7 +1,7 @@
 ﻿qem.gui\_classes
 ================
 
-.. automodule:: qem.gui_classes
+.. automodule:: qem.select
 
    
    .. rubric:: Functions

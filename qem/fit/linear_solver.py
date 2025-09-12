@@ -13,10 +13,9 @@ from scipy.optimize import lsq_linear
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve
 
-from qem.utils import safe_convert_to_numpy
+from qem.utils.params import safe_convert_to_numpy
 
-
-from qem.exceptions import ParameterError, DataError, ValidationError
+from qem.schema.exceptions import ParameterError, DataError, ValidationError
 
 
 class ParameterValidator:

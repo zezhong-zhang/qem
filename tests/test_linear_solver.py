@@ -7,14 +7,14 @@ import pytest
 from scipy.sparse import coo_matrix
 import keras
 
-from qem.exceptions import ParameterError, DataError, ValidationError
-from qem.linear_solver import (
+from qem.schema.exceptions import ParameterError, DataError, ValidationError
+from qem.fit.linear_solver import (
     ParameterValidator,
     DesignMatrixBuilder,
     LinearSystemSolver,
     SolutionProcessor,
 )
-from qem.model import GaussianModel
+from qem.fit.model import GaussianModel
 
 
 class TestParameterValidator:

@@ -4,15 +4,15 @@ import numpy as np
 import pytest
 
 # Configure backend automatically
-from qem.backend import setup_test_backend
+from qem.utils.backend import setup_test_backend
 backend = setup_test_backend()
 
 from keras import ops
 import keras
 
-from qem.image_fitting import ImageFitting
-from qem.model import GaussianModel, LorentzianModel, VoigtModel
-from qem.utils import safe_convert_to_numpy
+from qem.fit.image_fitting import ImageFitting
+from qem.fit.model import GaussianModel, LorentzianModel, VoigtModel
+from qem.utils.params import safe_convert_to_numpy
 
 
 @pytest.mark.parametrize(

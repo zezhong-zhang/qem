@@ -3,13 +3,13 @@ import numpy as np
 import pytest
 
 # Configure backend automatically
-from qem.backend import setup_test_backend
+from qem.utils.backend import setup_test_backend
 setup_test_backend()
 
 from keras import ops
 
 # Import the model classes
-from qem.model import (
+from qem.fit.model import (
     GaussianModel,
     LorentzianModel,
     VoigtModel,
