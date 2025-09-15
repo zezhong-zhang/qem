@@ -92,7 +92,6 @@ class Benchmark:
         step_size=1e-2,
         num_epoch=10,
         batch_size=1000,
-        verbose=False,
         plot=True,
         fit_stochastic=True,
     ) -> None:
@@ -107,11 +106,10 @@ class Benchmark:
                 step_size=step_size,
                 num_epoch=num_epoch,
                 batch_size=batch_size,
-                verbose=verbose,
                 plot=plot,
             )
         else:
-            params = model.fit_global(params=params,maxiter=maxiter, tol=tol, step_size=step_size, verbose=verbose)
+            params = model.fit_global(params=params,maxiter=maxiter, tol=tol, step_size=step_size)
         self.qem = model
         self.model_qem = model.prediction
         self.scs_qem = model.volume
