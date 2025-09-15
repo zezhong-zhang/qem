@@ -89,26 +89,41 @@ class RobustBackgroundEstimator:
         """
         # Flatten the image
         flat_image = self.image.ravel().reshape(-1, 1)
-        
+
+        # Check for uniform intensity
+        if np.all(self.image == self.image[0]):
+            logging.warning("Image has uniform intensity, K-means may not work.")
+            return float(self.image[0])
+
+        # Adjust n_clusters if unique values are insufficient
+        unique_values = len(np.unique(flat_image))
+        if unique_values < n_clusters:
+            n_clusters = unique_values
+            if n_clusters == 1:
+                return float(flat_image[0])
+
         # Perform K-means clustering
         kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
         kmeans.fit(flat_image)
-        
+
         # Get cluster centers and labels
         centers = kmeans.cluster_centers_.flatten()
         labels = kmeans.labels_
-        
+
         # Identify the cluster with the lowest intensity as background
         background_cluster = np.argmin(centers)
         background_pixels = flat_image[labels == background_cluster].flatten()
-        
-        # Use the mode of the background cluster
+
+        # Log clustering details
+        logging.info(f"K-means clustering completed: centers={centers}, background_cluster={background_cluster}")
+
+        # Calculate background value
         if len(background_pixels) > 0:
-            background_mode = mode(background_pixels).mode[0]
-            background = np.percentile(background_pixels, 10)  # Conservative estimate
+            background = np.median(background_pixels)  # Use median for robustness
         else:
             background = np.min(self.image)
-            
+            logging.warning("Background cluster is empty, falling back to global minimum.")
+
         logging.info(f"K-means background estimation: {background:.3f}")
         return float(background)
         

@@ -1068,51 +1068,56 @@ class ImageFitting:
         return self.coordinates
 
     def remove_close_coordinates(self, threshold: int = 10):
+        """
+        Remove coordinates that are too close to each other, considering periodic boundary conditions (PBC) if enabled.
+        Also removes the corresponding atom types from self.atom_types.
+
+        Args:
+            threshold (int): Minimum allowed distance between coordinates. Defaults to 10.
+
+        Returns:
+            np.ndarray: The filtered coordinates.
+        """
         if self.pbc:
-            coords, _ = remove_close_coordinates(self.coordinates.copy(), threshold)
-            # find the coords near the boundary
+            # Remove close coordinates in the original box
+            coords, atom_types, _ = remove_close_coordinates(self.coordinates.copy(), self.atom_types.copy(), threshold)
+            
+            # Identify coordinates near the boundary
             mask_boundary = (
                 (coords[:, 0] < threshold)
                 | (coords[:, 0] > self.nx - threshold)
                 | (coords[:, 1] < threshold)
                 | (coords[:, 1] > self.ny - threshold)
             )
-            # genearate the boundary coords under the pbc
             coords_boundary = coords[mask_boundary]
-            # identify the coords in the coords_boundary that are close to the coords_boundary_pbc
-            coords_boundary_pbc = coords_boundary.copy()
-            for i, j in [
-                (1, 0),
-                (0, 1),
-                (1, 1),
-                (-1, 0),
-                (0, -1),
-                (-1, -1),
-                (1, -1),
-                (-1, 1),
-            ]:
-                coords_boundary_shifted = coords_boundary + np.array(
-                    [i * self.nx, j * self.ny]
-                )
-                for row in coords_boundary:
-                    too_close = (
-                        np.linalg.norm(coords_boundary_shifted - row, axis=1)
-                        < threshold
-                    ).any()
-                    # same_type = coords_boundary_shifted[too_close,2] == row[2]
-                    if too_close:
-                        # find the index of the row in the coords_boundary_pbc
-                        idx = np.where((coords_boundary_pbc == row).all(axis=1))[0]
-                        # dump the row if it is too close to the boundary
-                        coords_boundary_pbc = np.delete(
-                            coords_boundary_pbc, idx, axis=0
-                        )
-            # now combine the coords that are not close to the boundary with the coords_boundary_pbc
-            coords_final = np.vstack([coords[~mask_boundary], coords_boundary_pbc])
-            self.coordinates = coords_final
+            atom_types_boundary = atom_types[mask_boundary]
+            
+            # Generate periodic images of boundary coordinates
+            shifts = np.array([
+                [i * self.nx, j * self.ny]
+                for i, j in [(1, 0), (0, 1), (1, 1), (-1, 0), (0, -1), (-1, -1), (1, -1), (-1, 1)]
+            ])
+            
+            # Check if any periodic image is too close to the original boundary coordinates
+            to_remove = set()
+            for shift in shifts:
+                shifted_coords = coords_boundary + shift
+                for i, coord in enumerate(coords_boundary):
+                    distances = np.linalg.norm(shifted_coords - coord, axis=1)
+                    if (distances < threshold).any():
+                        to_remove.add(i)
+            
+            # Remove overlapping boundary coordinates and corresponding atom types
+            coords_boundary_filtered = np.delete(coords_boundary, list(to_remove), axis=0)
+            atom_types_boundary_filtered = np.delete(atom_types_boundary, list(to_remove), axis=0)
+            
+            # Combine non-boundary and filtered boundary coordinates and atom types
+            self.coordinates = np.vstack([coords[~mask_boundary], coords_boundary_filtered])
+            self.atom_types = np.concatenate([atom_types[~mask_boundary], atom_types_boundary_filtered])
         else:
-            self.coordinates, _ = remove_close_coordinates(self.coordinates, threshold)
-        return self.coordinates
+            self.coordinates, self.atom_types,_ = remove_close_coordinates(self.coordinates, self.atom_types, threshold)
+        
+        return self.coordinates, self.atom_types
 
     def add_or_remove_peaks(self, min_distance: int = 2, image=None):
         if image is None:
