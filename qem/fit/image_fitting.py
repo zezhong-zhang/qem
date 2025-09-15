@@ -60,7 +60,6 @@ from qem.utils.memory_optimization import (
     chunked_processor,
 )
 from qem.fit.background_estimator import background_estimation
-from qem.processing.signal import ssim
 import keras
 import h5py
 
