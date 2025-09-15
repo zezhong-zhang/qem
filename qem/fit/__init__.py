@@ -33,7 +33,7 @@ __all__ = [
     
     # Background estimation
     'RobustBackgroundEstimator',
-    'integrate_background_estimation',
+    'background_estimation',
     
     # Voronoi integration
     'voronoi_integrate',

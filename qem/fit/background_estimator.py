@@ -367,7 +367,7 @@ class BackgroundValidator:
         return validation_results
 
 
-def integrate_background_estimation(image_fitting, 
+def background_estimation(image_fitting, 
                                   background_method: str = 'combined',
                                   **kwargs) -> float:
     """

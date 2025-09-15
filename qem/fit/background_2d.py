@@ -11,13 +11,8 @@ from scipy import ndimage
 from scipy.optimize import minimize_scalar
 from typing import Tuple, Optional, Union, Dict, Any
 import warnings
+from photutils.background import Background2D, MedianBackground, SExtractorBackground
 
-try:
-    from photutils import Background2D, MedianBackground, SExtractorBackground
-    PHOTUTILS_AVAILABLE = True
-except ImportError:
-    PHOTUTILS_AVAILABLE = False
-    warnings.warn("photutils not available. Background2D method will be unavailable.")
 
 from qem.utils.params import safe_convert_to_numpy
 
@@ -44,40 +39,10 @@ class Background2DEstimator:
         self.mask = mask
         self.ny, self.nx = self.image.shape
         
-    def estimate_background_rolling_ball(self, 
-                                     radius: int = 50,
-                                     smoothing: bool = True) -> np.ndarray:
-        """
-        Estimate background using rolling ball algorithm.
-        
-        This method simulates a rolling ball (structuring element) moving over
-        the image surface to estimate the background.
-        
-        Args:
-            radius: Radius of the rolling ball (structuring element)
-            smoothing: Whether to apply smoothing to the background
-            
-        Returns:
-            2D background array
-        """
-        # Create circular structuring element
-        y, x = np.ogrid[-radius:radius+1, -radius:radius+1]
-        mask = x**2 + y**2 <= radius**2
-        
-        # Apply morphological opening (rolling ball)
-        background = ndimage.grey_opening(self.image, footprint=mask)
-        
-        if smoothing:
-            # Apply additional smoothing to reduce artifacts
-            background = ndimage.gaussian_filter(background, sigma=radius//4)
-            
-        logging.info(f"Rolling ball background estimation completed, radius: {radius}")
-        return background
-        
     def estimate_background_photutils(self,
                                    box_size: Tuple[int, int] = (50, 50),
                                    filter_size: Tuple[int, int] = (3, 3),
-                                   method: str = 'median') -> np.ndarray:
+                                   method: str = 'sextractor') -> np.ndarray:
         """
         Estimate background using photutils Background2D.
         
@@ -89,9 +54,7 @@ class Background2DEstimator:
         Returns:
             2D background array
         """
-        if not PHOTUTILS_AVAILABLE:
-            raise ImportError("photutils is required for Background2D method")
-            
+
         # Select background estimator
         if method == 'median':
             bkg_estimator = MedianBackground()
@@ -109,7 +72,6 @@ class Background2DEstimator:
             mask=self.mask
         )
         
-        logging.info(f"Background2D estimation completed: {bkg.background_median:.3f} ± {bkg.background_rms:.3f}")
         return bkg.background
         
     def optimize_background_scaling(self,
@@ -180,14 +142,14 @@ class Background2DEstimator:
         return optimized_background, optimization_info
         
     def estimate_background_2d(self, 
-                             method: str = 'rolling_ball',
+                             method: str = 'photutils',
                              optimize_scaling: bool = True,
                              **kwargs) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         Comprehensive 2D background estimation.
         
         Args:
-            method: Background estimation method ('rolling_ball', 'photutils')
+            method: Background estimation method ('photutils')
             optimize_scaling: Whether to optimize background scaling
             **kwargs: Additional parameters for specific methods
             
@@ -195,9 +157,7 @@ class Background2DEstimator:
             Tuple of (background_2d, estimation_info)
         """
         # Step 1: Initial background estimation
-        if method == 'rolling_ball':
-            background_2d = self.estimate_background_rolling_ball(**kwargs)
-        elif method == 'photutils':
+        if method == 'photutils':
             background_2d = self.estimate_background_photutils(**kwargs)
         else:
             raise ValueError(f"Unknown method: {method}")
@@ -286,53 +246,3 @@ class Background2DEstimator:
         validation_results['confidence'] = float(confidence)
         
         return validation_results
-
-
-class Background2DIntegrator:
-    """Integration class for 2D background estimation into QEM workflows."""
-    
-    @staticmethod
-    def integrate_2d_background(image_fitting,
-                              method: str = 'rolling_ball',
-                              optimize_scaling: bool = True,
-                              **kwargs) -> Tuple[np.ndarray, Dict[str, Any]]:
-        """
-        Integrate 2D background estimation into ImageFitting workflow.
-        
-        Args:
-            image_fitting: ImageFitting instance
-            method: Background estimation method
-            optimize_scaling: Whether to optimize background scaling
-            **kwargs: Additional parameters
-            
-        Returns:
-            Tuple of (background_2d, integration_info)
-        """
-        # Create 2D background estimator
-        estimator = Background2DEstimator(
-            image=image_fitting.image,
-            dx=image_fitting.dx
-        )
-        
-        # Estimate 2D background
-        background_2d, estimation_info = estimator.estimate_background_2d(
-            method=method,
-            optimize_scaling=optimize_scaling,
-            **kwargs
-        )
-        
-        # Validate the estimate
-        validation = estimator.validate_2d_background(background_2d)
-        
-        integration_info = {
-            'background_2d': background_2d,
-            'estimation_info': estimation_info,
-            'validation': validation,
-            'method': method,
-            'optimize_scaling': optimize_scaling
-        }
-        
-        logging.info(f"2D background estimation integrated: {method}")
-        logging.info(f"Validation confidence: {validation['confidence']:.3f}")
-        
-        return background_2d, integration_info
