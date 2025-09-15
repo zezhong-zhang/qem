@@ -1850,8 +1850,7 @@ class ImageFitting:
 
     def select_params(self, params: dict, mask: np.ndarray):
         select_params = {}
-        if self.fit_background:
-            select_params["background"] = params["background"]
+        select_params["background"] = params["background"]
         if self.same_width:
             if "width" in params:
                 select_params["width"] = params["width"]
@@ -2682,7 +2681,7 @@ class ImageFitting:
                             if len(value) != num_coords:
                                 raise ValueError(f"Parameter {key} length mismatch with coordinates")
 
-                    self.params = params
+                    self.params = {k: safe_convert_to_tensor(v) for k, v in params.items()}
 
                 # Load fitted image
                 if 'prediction' in f:
