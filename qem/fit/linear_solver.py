@@ -179,16 +179,50 @@ class DesignMatrixBuilder:
         else:
             shape = (self.nx * self.ny, num_coordinates)
         
-        # Build sparse matrix
-        design_matrix = coo_matrix(
-            (
-                safe_convert_to_numpy(data_tensor),
-                (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))
-            ),
-            shape=shape
-        )
+        backend = keras.backend.backend()
+        if backend == "torch":
+            import torch
+
+            def build_sparse_matrix_torch(data, row, col, shape, device="cuda"):
+                # PyTorch sparse COO tensor
+                indices = torch.stack([row, col])
+                values = data
+                sparse_mat = torch.sparse_coo_tensor(indices, values, size=shape, device=device)
+                return sparse_mat
         
+            design_matrix = build_sparse_matrix_torch(data_tensor, rows_tensor, cols_tensor, shape)
+        elif backend == "tensorflow":
+            import tensorflow as tf
+            def build_sparse_matrix_tf(data, row, col, shape):
+                # TensorFlow SparseTensor
+                indices = tf.stack([row, col], axis=1)
+                sparse_mat = tf.sparse.SparseTensor(indices, data, dense_shape=shape)
+                return sparse_mat
+            
+            design_matrix = build_sparse_matrix_tf(data_tensor, rows_tensor, cols_tensor, shape)
+        elif backend == "jax":
+            import jax
+            import jax.numpy as jnp
+            from jax.experimental import sparse as jsparse
+
+            def build_sparse_matrix_jax(data, row, col, shape):
+                # JAX sparse COO matrix
+                mat = jsparse.BCOO((data, jnp.stack([row, col])), shape=shape)
+                return mat     
+                   
+            design_matrix = build_sparse_matrix_jax(data_tensor, rows_tensor, cols_tensor, shape)
+        else:
+            # Build sparse matrix
+            design_matrix = coo_matrix(
+                (
+                    safe_convert_to_numpy(data_tensor),
+                    (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))
+                ),
+                shape=shape
+            )
+            
         return design_matrix
+
 
 
 class LinearSystemSolver:
@@ -211,58 +245,24 @@ class LinearSystemSolver:
         Raises:
             DataError: If system cannot be solved
         """
-        try:
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            
+            # Check for singular matrix explicitly
+            AtA = design_matrix.T @ design_matrix
+            
+            # Use normal equations for regular case
+            Atb = design_matrix.T @ target
+            solution = keras.ops.lstsq(AtA.to_dense(), Atb)
+
+            # Check for singular matrix warnings
+            if w and any("singular matrix" in str(warning.message).lower() for warning in w):
+                raise DataError(
+                    "Singular matrix encountered. Peak positions may need refinement."
+                )
+            
+            return solution
                 
-                # Check for singular matrix explicitly
-                AtA = design_matrix.T @ design_matrix
-                
-                # Check if the matrix is singular by computing its condition number or determinant
-                try:
-                    # Convert to dense to check singularity
-                    AtA_dense = AtA.toarray()
-                    det = np.linalg.det(AtA_dense)
-                    if abs(det) < 1e-12:  # Very small determinant indicates singularity
-                        raise DataError("singular matrix: system is underdetermined or ill-conditioned")
-                except (np.linalg.LinAlgError, ValueError):
-                    # Handle cases where conversion to dense fails
-                    pass
-                
-                if non_negative:
-                    design_matrix_csr = design_matrix.tocsr()
-                    result = lsq_linear(design_matrix_csr, target, bounds=(0, np.inf))
-                    solution = result.x
-                    
-                    if not result.success:
-                        raise DataError(f"Non-negative solver failed: {result.message}")
-                        
-                else:
-                    # Use normal equations for regular case
-                    Atb = design_matrix.T @ target
-                    solution = spsolve(AtA, Atb)
-                
-                # Check for singular matrix warnings
-                if w and any("singular matrix" in str(warning.message).lower() for warning in w):
-                    raise DataError(
-                        "Singular matrix encountered. Peak positions may need refinement."
-                    )
-                
-                # Additional check: if solution contains NaN or infinite values, matrix might be singular
-                if np.any(np.isnan(solution)) or np.any(np.isinf(solution)):
-                    raise DataError("singular matrix: system is underdetermined or ill-conditioned")
-                
-                return solution
-                
-        except np.linalg.LinAlgError as e:
-            if "singular matrix" in str(e).lower():
-                raise DataError("singular matrix: system is underdetermined or ill-conditioned")
-            else:
-                raise DataError(f"Linear algebra error: {str(e)}")
-        except Exception as e:
-            if "singular" in str(e).lower():
-                raise DataError("singular matrix: system is underdetermined or ill-conditioned")
-            raise DataError(f"System solving failed: {str(e)}")
 
 
 class SolutionProcessor:
@@ -283,7 +283,7 @@ class SolutionProcessor:
             return False
         
         # Check for NaN or infinite values
-        if np.any(np.isnan(solution)) or np.any(np.isinf(solution)):
+        if keras.ops.any(keras.ops.isnan(solution)) or keras.ops.any(keras.ops.isinf(solution)):
             logging.warning("Solution contains NaN or infinite values")
             return False
         
@@ -291,8 +291,8 @@ class SolutionProcessor:
     
     @staticmethod
     def process_height_scaling(height_scale: np.ndarray, 
-                             min_scale: float = 0.1, 
-                             max_scale: float = 10.0) -> np.ndarray:
+                             min_scale: float = 0.8, 
+                             max_scale: float = 1.2) -> np.ndarray:
         """
         Process and constrain height scaling factors.
         
@@ -305,11 +305,11 @@ class SolutionProcessor:
             Processed height scaling factors
         """        
         # Count out-of-bounds values for logging
-        too_small = np.sum(height_scale < min_scale)
-        too_large = np.sum(height_scale > max_scale)
+        too_small = keras.ops.sum(height_scale < min_scale)
+        too_large = keras.ops.sum(height_scale > max_scale)
         
         # Apply constraints
-        height_scale = np.clip(height_scale, min_scale, max_scale)
+        height_scale = keras.ops.clip(height_scale, min_scale, max_scale)
         
         # Log warnings if constraints were applied
         if too_small > 0:

@@ -59,7 +59,7 @@ from qem.utils.memory_optimization import (
     memory_optimizer,
     chunked_processor,
 )
-from qem.fit.background_estimator import integrate_background_estimation
+from qem.fit.background_estimator import background_estimation
 import keras
 import h5py
 
@@ -429,7 +429,7 @@ class ImageFitting:
 
         # Initialize background using robust estimation
         if self.fit_background:
-            init_background = integrate_background_estimation(
+            init_background = background_estimation(
                 self, 
                 background_method='combined',
                 mad={'percentile': 5.0},
@@ -1258,15 +1258,15 @@ class ImageFitting:
         Returns:
             Flattened target vector
         """
-        target = safe_convert_to_numpy(self.image_tensor).ravel()
+        # target = safe_convert_to_numpy(self.image_tensor).ravel()
+        target = self.image_tensor.ravel()
         
         if not self.fit_background:
-            background = safe_convert_to_numpy(params["background"])
-            target = target - background
+            target = target - params["background"]
             
         return target
-    
-    def _process_solution(self, solution: np.ndarray, params: dict) -> dict:
+
+    def _process_solution(self, solution: np.ndarray, params: dict, update_threshold: float = 0.2) -> dict:
         """
         Process linear system solution and update parameters.
         
@@ -1287,7 +1287,11 @@ class ImageFitting:
         # Extract height scaling and background
         if self.fit_background:
             background = max(solution[-1], self.init_background)
-            params["background"] = keras.ops.convert_to_tensor(background)
+            update_rel = (background - params["background"])/params["background"]
+            if keras.ops.abs(update_rel) > update_threshold:
+                update_rel_clip = keras.ops.clip(update_rel,-update_threshold,update_threshold)
+                background = params["background"] *(1+ update_rel_clip)
+            params["background"] = background
             height_scale = solution[:-1]
         else:
             height_scale = solution
@@ -1296,10 +1300,8 @@ class ImageFitting:
         processed_scale = processor.process_height_scaling(height_scale)
         
         # Update height parameters
-        original_height = keras.ops.convert_to_tensor(params["height"])
-        scale_tensor = keras.ops.convert_to_tensor(processed_scale)
-        params["height"] = scale_tensor * original_height
-        
+        params["height"] *= processed_scale
+
         # Update instance parameters
         self.params = params
         return params
@@ -2645,6 +2647,7 @@ class ImageFitting:
                 
                 # Load input image and parameters
                 self.image = f['image'][:]
+                self.image_tensor = safe_convert_to_tensor(self.image)
                 self.dx = float(f.attrs['dx'])
                 self.units = str(f.attrs['units'])
                 self.model_type = str(f.attrs['model_type'])
