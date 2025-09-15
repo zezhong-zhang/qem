@@ -74,7 +74,7 @@ class RobustBackgroundEstimator:
         logging.info(f"MAD-based background estimation: {background:.3f}")
         return float(background)
         
-    def estimate_background_kmeans(self, n_clusters: int = 3) -> float:
+    def estimate_background_kmeans(self, n_clusters: int = 2) -> float:
         """
         Estimate background using K-means clustering.
         
@@ -104,8 +104,8 @@ class RobustBackgroundEstimator:
         
         # Use the mode of the background cluster
         if len(background_pixels) > 0:
-            background_mode = mode(background_pixels).mode[0]
-            background = np.percentile(background_pixels, 10)  # Conservative estimate
+            background = mode(background_pixels).mode
+            # background = np.percentile(background_pixels, 10)  # Conservative estimate
         else:
             background = np.min(self.image)
             
