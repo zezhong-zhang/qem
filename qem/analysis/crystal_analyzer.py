@@ -1204,8 +1204,8 @@ class CrystalAnalyzer:
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter a map')
         # set the plot to the view of the image
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
 
         plt.subplot(1, 2, 2)
         plt.imshow(self.image, cmap="gray")
@@ -1220,8 +1220,8 @@ class CrystalAnalyzer:
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter b map')
         # set the plot to the view of the image
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
         plt.show()
 
 
@@ -1307,8 +1307,8 @@ class CrystalAnalyzer:
         if hasattr(self, 'scalebar'):
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter a (nearest) map')
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
 
         plt.subplot(1, 2, 2)
         plt.imshow(self.image, cmap="gray")
@@ -1322,8 +1322,8 @@ class CrystalAnalyzer:
         if hasattr(self, 'scalebar'):
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter b (nearest) map')
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
         plt.show()
 
 
