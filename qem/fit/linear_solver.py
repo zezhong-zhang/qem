@@ -253,7 +253,7 @@ class LinearSystemSolver:
             
             # Use normal equations for regular case
             Atb = design_matrix.T @ target
-            solution = keras.ops.lstsq(AtA.to_dense(), Atb)
+            solution = keras.ops.lstsq(AtA.cpu().to_dense(), Atb.cpu().to_dense())
 
             # Check for singular matrix warnings
             if w and any("singular matrix" in str(warning.message).lower() for warning in w):
