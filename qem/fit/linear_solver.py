@@ -247,13 +247,14 @@ class LinearSystemSolver:
         """
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            
+            design_matrix = design_matrix.cpu()
+            target = target.cpu()
             # Check for singular matrix explicitly
             AtA = design_matrix.T @ design_matrix
             
             # Use normal equations for regular case
             Atb = design_matrix.T @ target
-            solution = keras.ops.lstsq(AtA.cpu().to_dense(), Atb.cpu().to_dense())
+            solution = keras.ops.lstsq(AtA.to_dense(), Atb)
 
             # Check for singular matrix warnings
             if w and any("singular matrix" in str(warning.message).lower() for warning in w):
