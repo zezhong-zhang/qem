@@ -100,10 +100,10 @@ class ImageFitting:
         """
         # Validate all input parameters
         try:
-            self.image = ImageFittingValidator.validate_image(image)
-            self.dx = ImageFittingValidator.validate_dx(dx)
-            self.elements = ImageFittingValidator.validate_elements(elements)
-            self.model_type = ImageFittingValidator.validate_model_type(model_type)
+            self.image = image
+            self.dx = dx
+            self.elements = elements
+            self.model_type = model_type
             
             # Validate string parameters
             if not isinstance(units, str):
@@ -368,7 +368,7 @@ class ImageFitting:
     # Init grids and models
     def initialize_grid(self):
         """Initialize the coordinate grids for the model."""
-        self.image_tensor = keras.ops.convert_to_tensor(self.image, dtype="float32")
+        self.image_tensor = keras.ops.convert_to_tensor(gaussian_filter(self.image,1), dtype="float32")
         x = keras.ops.arange(self.nx, dtype="float32")
         y = keras.ops.arange(self.ny, dtype="float32")
         x_grid, y_grid = keras.ops.meshgrid(x, y)
