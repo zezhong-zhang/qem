@@ -49,38 +49,46 @@ def make_mask_circle_centre(arr, radius):
     return mask
 
 
-def remove_close_coordinates(coordinates, threshold):
+def remove_close_coordinates(coordinates, atom_types=None, threshold = 5):
     """
     Remove coordinates that are within a specified threshold distance of each other.
+    Optionally, also remove the corresponding atom types if provided.
 
     Parameters:
-    - threshold: The distance below which coordinates are considered too close and should be removed.
-    """
+    - coordinates (np.ndarray): Input coordinates (shape: [n, 2] or [n, 3]).
+    - atom_types (np.ndarray, optional): Atom types corresponding to the coordinates.
+    - threshold (float): Distance threshold for removal.
 
-    # Create a boolean mask initialized to keep all coordinates
+    Returns:
+    - np.ndarray: Filtered coordinates.
+    - np.ndarray: Filtered atom types (if atom_types is provided).
+    - np.ndarray: Boolean mask of kept coordinates.
+    """
+    if len(coordinates) == 0:
+        return coordinates, atom_types, np.array([], dtype=bool)
+
+    # Initialize mask to keep all coordinates
     keep_mask = np.ones(len(coordinates), dtype=bool)
 
-    # Calculate the absolute differences in x and y coordinates
-    for i, coord in enumerate(coordinates):
+    # Precompute pairwise distances (upper triangular part)
+    for i in range(len(coordinates)):
         if not keep_mask[i]:
-            # Already marked for removal
-            continue
+            continue  # Skip if already marked for removal
 
-        # Compute absolute differences for all coordinates with the current one
-        diffs = np.abs(coordinates - coord)
+        # Compute Euclidean distances from coordinate i to all others
+        distances = np.linalg.norm(coordinates - coordinates[i], axis=1)
 
-        # Find coordinates too close in either x or y (excluding the current one)
-        too_close_mask = (
-            (diffs[:, 0] < threshold)
-            & (diffs[:, 1] < threshold)
-            & (np.arange(len(coordinates)) != i)
-        )
+        # Mark coordinates too close (excluding itself)
+        too_close = (distances < threshold) & (np.arange(len(coordinates)) != i)
+        keep_mask[too_close] = False
 
-        # Update the keep mask
-        keep_mask[too_close_mask] = False
-
-    # Filter coordinates based on the keep mask
-    return coordinates[keep_mask], keep_mask
+    # Filter coordinates and atom types
+    filtered_coords = coordinates[keep_mask]
+    if atom_types is not None:
+        filtered_atom_types = atom_types[keep_mask]
+        return filtered_coords, filtered_atom_types, keep_mask
+    else:
+        return filtered_coords, keep_mask
 
 
 def is_point_in_polygon(point, polygon):
