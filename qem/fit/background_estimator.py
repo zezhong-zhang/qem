@@ -282,7 +282,7 @@ class RobustBackgroundEstimator:
             
             if estimates:
                 # Use the minimum estimate to avoid overestimation
-                background = min(estimates)
+                background = np.mean(estimates)
             else:
                 # Fallback to global minimum
                 background = np.min(self.image)

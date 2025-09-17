@@ -60,6 +60,7 @@ from qem.utils.memory_optimization import (
     chunked_processor,
 )
 from qem.fit.background_estimator import background_estimation
+from qem.optimizers.lbfgs import LBFGSOptimizer
 import keras
 import h5py
 
@@ -1142,11 +1143,12 @@ class ImageFitting:
         
         # Extract height scaling and background
         if self.fit_background:
-            background = max(solution[-1], self.init_background)
-            update_rel = (background - params["background"])/params["background"]
-            if keras.ops.abs(update_rel) > update_threshold:
-                update_rel_clip = keras.ops.clip(update_rel,-update_threshold,update_threshold)
-                background = params["background"] *(1+ update_rel_clip)
+            background, valid = processor.process_background(
+                solution, params, self.init_background, update_threshold
+            )
+            if not valid:
+                logging.warning("Background update too large, skipping parameter update with linear estimator")
+                return params
             params["background"] = background
             height_scale = solution[:-1]
         else:
@@ -1165,33 +1167,50 @@ class ImageFitting:
     def optimize(
         self,
         model: ImageModel,
-        image_tensor: np.ndarray,
-        params: dict,
+        image_tensor: np.ndarray = None,
+        params: dict = None,
         maxiter: int = 1000,
         tol: float = 1e-4,
         step_size: float = 0.01,
-        verbose: bool = False,
+        verbose: bool = True,
         batch_size: int = 1024,
+        optimizer_type: str = "adam",
+        **optimizer_kwargs
     ) -> dict[str, NDArray[Any]]:
+        """
+        Optimize model parameters using specified optimizer.
+        
+        Args:
+            model: The image model to optimize
+            image_tensor: Target image tensor (uses self.image_tensor if None)
+            params: Initial parameters (uses model params if None)
+            maxiter: Maximum iterations/epochs
+            tol: Tolerance for convergence
+            step_size: Learning rate
+            verbose: Whether to print progress
+            batch_size: Batch size for training
+            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
+            **optimizer_kwargs: Additional optimizer-specific parameters
+            
+        Returns:
+            Dictionary containing optimized parameters
+        """
         if image_tensor is None:
             image_tensor = self.image_tensor
-        model.set_params(params)
+        if params is not None:
+            model.set_params(params)
 
-        # Build the model with the correct input shape (grid shapes)
+        # Build the model if not already built
         if not model.built:
             model.build()
 
         # Backend-specific input preparation
         if self.backend == "torch":
-            # PyTorch needs batch dimensions for inputs and target
             image_tensor = keras.ops.expand_dims(image_tensor, 0)
             x_grid = keras.ops.expand_dims(self.x_grid, 0)
             y_grid = keras.ops.expand_dims(self.y_grid, 0)
             model_inputs = [x_grid, y_grid]
         else:
-            # JAX and TensorFlow can handle without explicit batch dimension for inputs
-            # but still need batch dimension for target
-            # image_tensor = keras.ops.expand_dims(image_tensor, 0)
             model_inputs = [self.x_grid, self.y_grid]
         
         operation_context = (
@@ -1200,44 +1219,103 @@ class ImageFitting:
         )
         
         with operation_context:
-            model.compile(
-                optimizer=keras.optimizers.AdamW(learning_rate=step_size), loss=self.loss
-            )
+            # Choose optimizer based on type
+            if optimizer_type.lower() == "lbfgs":
+                # Try L-BFGS with PyTorch, fall back to AdamW if not available
+                assert (self.backend == "torch", "L-BFGS requires PyTorch backend")
+                # import torch.nn.functional as F
 
-            early_stopping = keras.callbacks.EarlyStopping(
-                monitor="loss",
-                min_delta=tol,
-                patience=100,
-                verbose=verbose,
-                restore_best_weights=True,
-            )
+                lbfgs_optimizer = LBFGSOptimizer(
+                    learning_rate=step_size,
+                    maxiter=20,
+                    tolerance_grad=optimizer_kwargs.get('tolerance_grad', 1e-7),
+                    tolerance_change=optimizer_kwargs.get('tolerance_change', 1e-9),
+                    )
+                        
+                # def loss_fn(outputs, targets):
+                #     return F.mse_loss(outputs, targets)
+                
+                results = lbfgs_optimizer.optimize(
+                    model=model,
+                    loss_fn=self.loss,
+                    inputs=model_inputs,
+                    targets=image_tensor,
+                    maxiter=maxiter,
+                    verbose=verbose
+                )
+                
+                if verbose:
+                    logging.info(f"L-BFGS optimization: Loss = {results['final_loss']:.6f}, "
+                                f"Converged = {results['converged']}")
+            # Use standard first-order optimizers
+            else:
+                if optimizer_type.lower() == "adamw":
+                    opt = keras.optimizers.AdamW(learning_rate=step_size)
+                else:  # default to adam
+                    opt = keras.optimizers.Adam(learning_rate=step_size)
+                    
+                model.compile(optimizer=opt, loss=self.loss)
 
-            model.fit(
-                x=model_inputs,
-                y=image_tensor,
-                epochs=maxiter,
-                verbose=verbose,
-                callbacks=[early_stopping],
-                batch_size=batch_size,  # Set to 1 since we have only one sample (the full image)
-            )
-            optimized_params = model.get_params()
-            return optimized_params
+                early_stopping = keras.callbacks.EarlyStopping(
+                    monitor="loss",
+                    min_delta=tol,
+                    patience=100,
+                    verbose=verbose,
+                    restore_best_weights=True,
+                )
+
+                reduce_on_plateau = keras.callbacks.ReduceLROnPlateau(
+                    monitor="loss",
+                    factor=0.1,
+                    patience=10,
+                    verbose=0,
+                    mode="auto",
+                    min_delta=0.0001,
+                    cooldown=0,
+                    min_lr=1e-06,
+                )
+                model.fit(
+                    x=model_inputs,
+                    y=image_tensor,
+                    epochs=maxiter,
+                    verbose=verbose,
+                    callbacks=[early_stopping, reduce_on_plateau],
+                    batch_size=batch_size,
+                )
+                
+        optimized_params = model.get_params()
+        return optimized_params
 
     def fit_global(
         self,
-        params: dict = None,  # type: ignore
+        params: dict = None,
         maxiter: int = 1000,
         tol: float = 1e-3,
         step_size: float = 0.01,
+        optimizer: str = "adam",
         local: bool = True,
-        verbose: bool = False,
+        verbose: bool = True,
+        **optimizer_kwargs
     ):
+        """
+        Fit model parameters globally using specified optimizer.
+        
+        Args:
+            params: Initial parameters (uses self.params or initializes if None)
+            maxiter: Maximum iterations/epochs
+            tol: Tolerance for convergence
+            step_size: Learning rate
+            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
+            local: Whether to use local prediction for final result
+            verbose: Whether to print optimization progress
+            **optimizer_kwargs: Additional optimizer-specific parameters
+            
+        Returns:
+            Dictionary containing optimized parameters
+        """
         if params is None:
             params = self.params if self.params is not None else self.init_params()
         
-        params = self.linear_estimator()
-        
-        # Create model with appropriate parameter trainability
         fitting_model = self._create_fitting_model(params)
         
         params = self.optimize(
@@ -1247,11 +1325,13 @@ class ImageFitting:
             maxiter=maxiter,
             tol=tol,
             step_size=step_size,
+            optimizer_type=optimizer,
             verbose=verbose,
+            **optimizer_kwargs
         )
+        
         self.params = params
         self.prediction = safe_convert_to_numpy(self.predict(params, local=local))
-
         return params
 
     def fit_stochastic(
@@ -1262,35 +1342,35 @@ class ImageFitting:
         maxiter: int = 50,
         tol: float = 1e-3,
         step_size: float = 1e-2,
+        optimizer: str = "adam",
+        verbose: bool = True,
         local: bool = True,
         plot: bool = False,
+        **optimizer_kwargs
     ):
         """
-        Fits model parameters stochastically by optimizing random batches of coordinates.
-
-        This method avoids the high overhead of model creation and compilation inside
-        the training loop by using a single, reusable model for batch optimization.
+        Fit model parameters stochastically by optimizing random batches of coordinates.
+        
+        Args:
+            params: Initial parameters (uses self.params or initializes if None)
+            num_epoch: Number of training epochs
+            batch_size: Size of random batches
+            maxiter: Maximum iterations per batch
+            tol: Tolerance for convergence
+            step_size: Learning rate
+            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
+            local: Whether to use local prediction
+            plot: Whether to plot progress
+            **optimizer_kwargs: Additional optimizer-specific parameters
+            
+        Returns:
+            Dictionary containing optimized parameters
         """
-        # --- 1. Initialization ---
         if params is None:
             params = self.params if self.params is not None else self.init_params()
         params = {k: keras.ops.stop_gradient(v) for k, v in params.items()}
 
-        # for k, v in params.items():
-        #     if keras.utils.is_keras_tensor(v) is False:
-        #        v = keras.ops.convert_to_tensor(v)
-        #     params[k] = keras.ops.stop_gradient(v)
-
-        # Prepare model inputs once, handling backend-specific batching.
-        if self.backend == "torch":
-            model_inputs = [keras.ops.expand_dims(g, 0) for g in (self.x_grid, self.y_grid)]
-        else:
-            model_inputs = [self.x_grid, self.y_grid]
-
-        # --- 2. Main Training Loop ---
         self.converged = False
-        
-        # Use memory monitoring for the entire training loop
         operation_context = (
             self.memory_monitor.monitor_operation("fit_stochastic") 
             if self.memory_monitor else nullcontext()
@@ -1300,65 +1380,58 @@ class ImageFitting:
             for epoch in tqdm(range(num_epoch), desc="Training epochs"):
                 params = self.linear_estimator(params)  
                 pre_params = safe_deepcopy_params(params)
-                
                 random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
 
-                for batch_indices in tqdm(random_batches, desc="Fitting random batch", leave=False):
-                    # --- 3. Per-Batch Optimization ---
-                    
-                    # a) Calculate the target for the local model. The target is the original image
-                    #    minus the contribution from all *other* (non-batch) atoms.
+                for batch_indices in tqdm(random_batches, desc="Fitting batch", leave=False):
+                    # Calculate local target (subtract other atoms' contributions)
                     if batch_size < self.num_coordinates:
                         params_without_batch = safe_deepcopy_params(params)
                         height_tensor = params_without_batch['height']
                         update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
                         update_values = keras.ops.zeros(keras.ops.shape(batch_indices))
                         params_without_batch['height'] = keras.ops.scatter_update(
-                            height_tensor,
-                            update_indices,
-                            update_values
-                        )
+                            height_tensor, update_indices, update_values)
                         params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
                         
                         model_others = self._create_fitting_model(params_without_batch)
-                        model_others.set_params(params_without_batch)
                         prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
                         local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
                     else:
                         local_target = self.image_tensor
 
-                    # b) Isolate the parameters for the current batch
+                    # Optimize batch using unified optimize method
                     atoms_selected_mask = np.zeros(self.num_coordinates, dtype=bool)
                     atoms_selected_mask[batch_indices] = True
                     select_params = self.select_params(params, atoms_selected_mask)
                     
-                    # c) Create or reuse local model
                     local_model = self._create_fitting_model(select_params)
-                    local_model.compile(
-                        optimizer=keras.optimizers.Adam(learning_rate=step_size),
-                        loss=self.loss,
+                    
+                    # Use unified optimize method for batch
+                    optimized_params = self.optimize(
+                        model=local_model,
+                        image_tensor=local_target,
+                        params=select_params,
+                        maxiter=maxiter,
+                        tol=tol,
+                        step_size=step_size,
+                        optimizer=optimizer,
+                        verbose=verbose,
+                        **optimizer_kwargs
                     )
-
-                    # d) Optimize the local model using train_on_batch
-                    for _ in tqdm(range(maxiter), desc="Random batch optimization", leave=False):
-                        local_model.train_on_batch(x=model_inputs, y=local_target)
-
-                    # e) Retrieve optimized parameters and update the main parameter set
-                    optimized_params = local_model.get_params()
+                    
                     params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, select_params)
 
-                # Check for convergence at the end of an epoch
+                # Check convergence
                 if self.convergence(params, pre_params, tol):
-                    print("Convergence criteria met.")
+                    logging.info("Convergence criteria met.")
                     self.converged = True
                     break
         
-        # --- 4. Finalization ---
-        # self.params = self.linear_estimator(params)
-        self.prediction = safe_convert_to_numpy(self.predict(self.params))
-        print("Stochastic fitting complete.")
+        self.params = params
+        self.prediction = safe_convert_to_numpy(self.predict(params, local=local))
+        logging.info("Stochastic fitting complete.")
         return self.params
 
     def _plot_progress(self, params, index, select_params):

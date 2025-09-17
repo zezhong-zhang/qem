@@ -247,14 +247,14 @@ class LinearSystemSolver:
         """
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            design_matrix = design_matrix.cpu()
-            target = target.cpu()
+            design_matrix = design_matrix
+            target = target
             # Check for singular matrix explicitly
             AtA = design_matrix.T @ design_matrix
             
             # Use normal equations for regular case
             Atb = design_matrix.T @ target
-            solution = keras.ops.lstsq(AtA.to_dense(), Atb)
+            solution = keras.ops.lstsq(AtA.cpu().to_dense(), Atb.cpu().to_dense())
 
             # Check for singular matrix warnings
             if w and any("singular matrix" in str(warning.message).lower() for warning in w):
@@ -334,3 +334,19 @@ class SolutionProcessor:
             )
         
         return height_scale
+
+    def process_background(self, solution, params, init_background, update_threshold=0.2):
+        """
+        Process and update the background parameter based on the solution.
+        Returns the new background and a flag indicating if the update is valid.
+        """
+        background = max(solution[-1], init_background)
+        prev_background = params["background"]
+        update_rel = (background - prev_background) / (prev_background + 1e-10)
+        if keras.ops.abs(update_rel) > update_threshold * 2:
+            # Update too large, skip update
+            return prev_background, False
+        if keras.ops.abs(update_rel) > update_threshold:
+            update_rel_clip = keras.ops.clip(update_rel, -update_threshold, update_threshold)
+            background = prev_background * (1 + update_rel_clip)
+        return background, True

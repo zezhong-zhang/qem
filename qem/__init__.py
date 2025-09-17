@@ -14,6 +14,7 @@ from . import analysis
 from . import visualization
 from . import processing
 from . import instruments
+from . import optimizers
 from . import utils
 from . import schema
 
@@ -27,6 +28,7 @@ __all__ = [
     'visualization',
     'processing',
     'instruments',
+    'optimizers',
     'utils',
     'schema',
 ]
