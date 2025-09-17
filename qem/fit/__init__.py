@@ -22,6 +22,7 @@ __all__ = [
     'DesignMatrixBuilder',
     'LinearSystemSolver',
     'SolutionProcessor',
+    'MemoryEstimator',
     
     # Refinement functions
     'calculate_center_of_mass',

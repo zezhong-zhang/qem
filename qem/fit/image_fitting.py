@@ -49,6 +49,7 @@ from qem.fit.linear_solver import (
     DesignMatrixBuilder,
     LinearSystemSolver,
     SolutionProcessor,
+    MemoryEstimator,
 )
 from qem.schema.validation import ImageFittingValidator, FittingParameterValidator
 from qem.utils.memory_optimization import (
@@ -1094,9 +1095,31 @@ class ImageFitting:
                 # Prepare target vector
                 target = self._prepare_target_vector(validated_params)
                 
-                # Solve linear system
+                # Estimate memory usage and choose solver strategy
+                nnz = design_matrix.nnz if hasattr(design_matrix, 'nnz') else len(design_matrix._values())
+                memory_est = MemoryEstimator.estimate_matrix_memory(
+                    self.nx * self.ny, self.num_coordinates, nnz
+                )
+                
+                # Get available GPU memory (rough estimate)
+                available_memory = 4000  # MB - adjust based on your GPU
+                if self.memory_monitor:
+                    gpu_info = self.memory_monitor.get_memory_info()
+                    if 'gpu_available_mb' in gpu_info:
+                        available_memory = gpu_info['gpu_available_mb']
+                
+                strategy = MemoryEstimator.choose_solver_strategy(memory_est, available_memory)
+                
+                logging.info(f"Matrix memory estimate: {memory_est['sparse_mb']:.1f}MB sparse, "
+                           f"{memory_est['ata_mb']:.1f}MB AtA, sparsity: {memory_est['sparsity']:.4f}")
+                logging.info(f"Using solver strategy: {strategy}")
+                
+                # Solve linear system with chosen strategy
                 solver = LinearSystemSolver()
-                solution = solver.solve_system(design_matrix, target, non_negative)
+                if strategy == 'iterative':
+                    solution = solver.solve_iterative(design_matrix, target, max_iter=1000, tol=1e-6)
+                else:
+                    solution = solver.solve_system(design_matrix, target, non_negative)
                 
                 # Process solution
                 return self._process_solution(solution, validated_params)
