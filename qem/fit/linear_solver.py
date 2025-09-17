@@ -51,43 +51,27 @@ class TorchSolver:
                 (str(device).startswith('mps') or torch.backends.mps.is_available()))
     
     @staticmethod
-    def _fallback_to_scipy(A, b: np.ndarray, non_negative: bool = False, iterative: bool = False) -> np.ndarray:
-        """Fallback to scipy sparse solver when PyTorch sparse ops fail."""
+    def _convert_to_scipy_matrix(A):
+        """Convert PyTorch tensor to scipy sparse matrix."""
         import torch
         from scipy.sparse import coo_matrix
         
-        # Handle different input types for A
         if hasattr(A, 'tocsr'):
             # Already a scipy sparse matrix
-            A_scipy = A
+            return A
         elif hasattr(A, 'is_sparse') and A.is_sparse:
             # PyTorch sparse tensor
             A_coo = A.coalesce()
             indices = A_coo.indices().cpu().numpy()
             values = A_coo.values().cpu().numpy()
             shape = A_coo.shape
-            A_scipy = coo_matrix((values, (indices[0], indices[1])), shape=shape)
+            return coo_matrix((values, (indices[0], indices[1])), shape=shape)
         elif hasattr(A, 'cpu'):
             # PyTorch dense tensor
-            A_scipy = coo_matrix(A.cpu().numpy())
+            return coo_matrix(A.cpu().numpy())
         else:
             # Assume it's already numpy or scipy
-            A_scipy = coo_matrix(A)
-        
-        # Convert target to numpy, handling MPS tensors
-        if isinstance(b, torch.Tensor):
-            b_numpy = b.cpu().numpy()
-        elif hasattr(b, 'cpu'):
-            # Handle other tensor types that might have cpu() method
-            b_numpy = b.cpu().numpy()
-        else:
-            b_numpy = np.asarray(b)
-        
-        # Use scipy solver
-        if iterative:
-            return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative)
-        else:
-            return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
+            return coo_matrix(A)
     
     @staticmethod
     def solve_direct(A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
@@ -97,7 +81,9 @@ class TorchSolver:
         device = getattr(A, 'device', torch.device('cpu'))
         if TorchSolver._is_mps_device(device):
             logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
-            return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=False)
+            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
         
         try:
             if not isinstance(b, torch.Tensor):
@@ -119,14 +105,33 @@ class TorchSolver:
                 solution = torch.clamp(solution, min=0.0)
             return solution.detach().cpu().numpy()
             
-        except RuntimeError as e:
+        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
             error_msg = str(e)
+            
+            # Check for MPS-specific errors
             if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
                 logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
                 logging.info("Falling back to scipy sparse solver")
-                return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=False)
+                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
+            
+            # Check for memory errors
+            elif any(keyword in error_msg.lower() for keyword in ["out of memory", "cuda out of memory", "mps out of memory", "memory"]):
+                logging.warning(f"PyTorch out of memory: {e}")
+                logging.info("Falling back to memory-efficient scipy sparse solver")
+                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
+            
             else:
                 raise
+        except MemoryError as e:
+            logging.warning(f"System memory error in PyTorch: {e}")
+            logging.info("Falling back to memory-efficient scipy sparse solver")
+            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
     
     @staticmethod
     def solve_iterative(A, b: np.ndarray, non_negative: bool = False, 
@@ -137,7 +142,9 @@ class TorchSolver:
         device = getattr(A, 'device', torch.device('cpu'))
         if TorchSolver._is_mps_device(device):
             logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
-            return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=True)
+            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
         
         try:
             if not isinstance(b, torch.Tensor):
@@ -168,14 +175,33 @@ class TorchSolver:
                 x = torch.clamp(x, min=0.0)
             return x.detach().cpu().numpy()
             
-        except RuntimeError as e:
+        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
             error_msg = str(e)
+            
+            # Check for MPS-specific errors
             if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
                 logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
                 logging.info("Falling back to scipy sparse solver")
-                return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=True)
+                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
+            
+            # Check for memory errors
+            elif any(keyword in error_msg.lower() for keyword in ["out of memory", "cuda out of memory", "mps out of memory", "memory"]):
+                logging.warning(f"PyTorch out of memory: {e}")
+                logging.info("Falling back to memory-efficient scipy sparse solver")
+                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
+            
             else:
                 raise
+        except MemoryError as e:
+            logging.warning(f"System memory error in PyTorch: {e}")
+            logging.info("Fallback to memory-efficient scipy sparse solver")
+            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
+            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
 
 
 class TensorFlowSolver:
@@ -406,9 +432,19 @@ class LinearSystemSolver:
         memory_info = self.get_memory_info(device)
         
         threshold = self.MEMORY_THRESHOLDS.get(self.backend, 0.3)
+        
+        # Be more conservative if we're close to memory limits
+        if memory_info.free_mb < 1000:  # Less than 1GB free
+            threshold *= 0.5  # Use only half the normal threshold
+            logging.warning(f"Low memory detected ({memory_info.free_mb:.1f}MB free), using conservative threshold")
+        
         max_memory = memory_info.free_mb * threshold
         
-        strategy = 'direct' if ata_memory_mb < max_memory else 'iterative'
+        # Force iterative solver for very large problems or low memory
+        if ata_memory_mb > max_memory or memory_info.free_mb < 500:
+            strategy = 'iterative'
+        else:
+            strategy = 'direct'
         
         logging.info(
             f"AtA memory: {ata_memory_mb:.1f}MB, available: {memory_info.free_mb:.1f}MB, "
@@ -464,7 +500,16 @@ class LinearSystemSolver:
             return solution
             
         except Exception as e:
-            logging.error(f"Linear solve failed: {str(e)}")
+            error_msg = str(e)
+            logging.error(f"Linear solve failed: {error_msg}")
+            
+            # Check if it's a memory-related error
+            is_memory_error = any(keyword in error_msg.lower() for keyword in 
+                                ["out of memory", "cuda out of memory", "mps out of memory", "memory", "memoryerror"])
+            
+            if is_memory_error:
+                logging.warning("Memory error detected, forcing scipy fallback for memory efficiency")
+            
             # Try iterative solver as fallback
             try:
                 logging.info("Attempting iterative solver as fallback...")
@@ -478,8 +523,19 @@ class LinearSystemSolver:
                 
                 if hasattr(design_matrix, 'tocsr'):  # scipy sparse matrix
                     return SciPySolver.solve_iterative(design_matrix, fallback_target, non_negative)
+                elif is_memory_error:
+                    # Force scipy conversion for memory errors
+                    logging.info("Converting to scipy for memory efficiency...")
+                    if hasattr(design_matrix, 'coalesce'):  # PyTorch sparse
+                        A_coo = design_matrix.coalesce()
+                        indices = A_coo.indices().cpu().numpy()
+                        values = A_coo.values().cpu().numpy()
+                        shape = A_coo.shape
+                        scipy_matrix = coo_matrix((values, (indices[0], indices[1])), shape=shape)
+                        return SciPySolver.solve_iterative(scipy_matrix, fallback_target, non_negative)
                 else:
                     return self.solver.solve_iterative(design_matrix, fallback_target, non_negative)
+                    
             except Exception as e2:
                 logging.error(f"Fallback solver also failed: {str(e2)}")
                 # Final fallback: try scipy if we haven't already
