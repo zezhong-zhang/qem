@@ -13,7 +13,7 @@ import keras
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve, lsqr, cg
 
-from qem.utils.params import safe_convert_to_numpy
+from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 from qem.schema.exceptions import ParameterError, DataError, ValidationError
 
 
@@ -40,61 +40,142 @@ class BackendSolver(Protocol):
 
 
 class TorchSolver:
-    """PyTorch-specific sparse linear solver."""
+    """PyTorch-specific sparse linear solver with MPS fallback."""
+    
+    @staticmethod
+    def _is_mps_device(device):
+        """Check if device is MPS (Apple Silicon) or if MPS is available."""
+        import torch
+        # Check if device is explicitly MPS or if MPS is available (indicating Apple Silicon)
+        return (hasattr(torch.backends, 'mps') and 
+                (str(device).startswith('mps') or torch.backends.mps.is_available()))
+    
+    @staticmethod
+    def _fallback_to_scipy(A, b: np.ndarray, non_negative: bool = False, iterative: bool = False) -> np.ndarray:
+        """Fallback to scipy sparse solver when PyTorch sparse ops fail."""
+        import torch
+        from scipy.sparse import coo_matrix
+        
+        # Handle different input types for A
+        if hasattr(A, 'tocsr'):
+            # Already a scipy sparse matrix
+            A_scipy = A
+        elif hasattr(A, 'is_sparse') and A.is_sparse:
+            # PyTorch sparse tensor
+            A_coo = A.coalesce()
+            indices = A_coo.indices().cpu().numpy()
+            values = A_coo.values().cpu().numpy()
+            shape = A_coo.shape
+            A_scipy = coo_matrix((values, (indices[0], indices[1])), shape=shape)
+        elif hasattr(A, 'cpu'):
+            # PyTorch dense tensor
+            A_scipy = coo_matrix(A.cpu().numpy())
+        else:
+            # Assume it's already numpy or scipy
+            A_scipy = coo_matrix(A)
+        
+        # Convert target to numpy, handling MPS tensors
+        if isinstance(b, torch.Tensor):
+            b_numpy = b.cpu().numpy()
+        elif hasattr(b, 'cpu'):
+            # Handle other tensor types that might have cpu() method
+            b_numpy = b.cpu().numpy()
+        else:
+            b_numpy = np.asarray(b)
+        
+        # Use scipy solver
+        if iterative:
+            return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative)
+        else:
+            return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
     
     @staticmethod
     def solve_direct(A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
         import torch
-        if not isinstance(b, torch.Tensor):
-            b = torch.tensor(b, device=A.device, dtype=A.dtype)
         
-        AtA = torch.sparse.mm(A.t(), A).to_dense()
-        Atb = torch.sparse.mm(A.t(), b.unsqueeze(1)).squeeze()
-        
-        # Regularization for stability
-        reg = 1e-8 * torch.trace(AtA) / AtA.shape[0]
-        AtA += reg * torch.eye(AtA.shape[0], device=AtA.device, dtype=AtA.dtype)
+        # Check for MPS device and fallback to scipy if needed
+        device = getattr(A, 'device', torch.device('cpu'))
+        if TorchSolver._is_mps_device(device):
+            logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
+            return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=False)
         
         try:
-            solution = torch.linalg.solve(AtA, Atb)
-        except Exception:
-            solution = torch.linalg.lstsq(AtA, Atb).solution
-        
-        if non_negative:
-            solution = torch.clamp(solution, min=0.0)
-        return solution.detach().cpu().numpy()
+            if not isinstance(b, torch.Tensor):
+                b = torch.tensor(b, device=A.device, dtype=A.dtype)
+            
+            AtA = torch.sparse.mm(A.t(), A).to_dense()
+            Atb = torch.sparse.mm(A.t(), b.unsqueeze(1)).squeeze()
+            
+            # Regularization for stability
+            reg = 1e-8 * torch.trace(AtA) / AtA.shape[0]
+            AtA += reg * torch.eye(AtA.shape[0], device=AtA.device, dtype=AtA.dtype)
+            
+            try:
+                solution = torch.linalg.solve(AtA, Atb)
+            except Exception:
+                solution = torch.linalg.lstsq(AtA, Atb).solution
+            
+            if non_negative:
+                solution = torch.clamp(solution, min=0.0)
+            return solution.detach().cpu().numpy()
+            
+        except RuntimeError as e:
+            error_msg = str(e)
+            if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
+                logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
+                logging.info("Falling back to scipy sparse solver")
+                return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=False)
+            else:
+                raise
     
     @staticmethod
     def solve_iterative(A, b: np.ndarray, non_negative: bool = False, 
                        max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
         import torch
-        if not isinstance(b, torch.Tensor):
-            b = torch.tensor(b, device=A.device, dtype=A.dtype)
         
-        # Conjugate gradient for A^T A x = A^T b
-        x = torch.zeros(A.shape[1], device=A.device, dtype=A.dtype)
-        r = torch.sparse.mm(A.t(), b.unsqueeze(1)).squeeze()  # A^T b
-        p = r.clone()
-        rsold = torch.dot(r, r)
+        # Check for MPS device and fallback to scipy if needed
+        device = getattr(A, 'device', torch.device('cpu'))
+        if TorchSolver._is_mps_device(device):
+            logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
+            return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=True)
         
-        for i in range(max_iter):
-            Ap = torch.sparse.mm(A, p.unsqueeze(1)).squeeze()
-            AtAp = torch.sparse.mm(A.t(), Ap.unsqueeze(1)).squeeze()
+        try:
+            if not isinstance(b, torch.Tensor):
+                b = torch.tensor(b, device=A.device, dtype=A.dtype)
             
-            alpha = rsold / torch.dot(p, AtAp)
-            x += alpha * p
-            r -= alpha * AtAp
-            rsnew = torch.dot(r, r)
+            # Conjugate gradient for A^T A x = A^T b
+            x = torch.zeros(A.shape[1], device=A.device, dtype=A.dtype)
+            r = torch.sparse.mm(A.t(), b.unsqueeze(1)).squeeze()  # A^T b
+            p = r.clone()
+            rsold = torch.dot(r, r)
             
-            if torch.sqrt(rsnew) < tol:
-                break
+            for i in range(max_iter):
+                Ap = torch.sparse.mm(A, p.unsqueeze(1)).squeeze()
+                AtAp = torch.sparse.mm(A.t(), Ap.unsqueeze(1)).squeeze()
+                
+                alpha = rsold / torch.dot(p, AtAp)
+                x += alpha * p
+                r -= alpha * AtAp
+                rsnew = torch.dot(r, r)
+                
+                if torch.sqrt(rsnew) < tol:
+                    break
+                
+                p = r + (rsnew / rsold) * p
+                rsold = rsnew
             
-            p = r + (rsnew / rsold) * p
-            rsold = rsnew
-        
-        if non_negative:
-            x = torch.clamp(x, min=0.0)
-        return x.detach().cpu().numpy()
+            if non_negative:
+                x = torch.clamp(x, min=0.0)
+            return x.detach().cpu().numpy()
+            
+        except RuntimeError as e:
+            error_msg = str(e)
+            if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
+                logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
+                logging.info("Falling back to scipy sparse solver")
+                return TorchSolver._fallback_to_scipy(A, b, non_negative, iterative=True)
+            else:
+                raise
 
 
 class TensorFlowSolver:
@@ -353,6 +434,12 @@ class LinearSystemSolver:
             DataError: If all solving methods fail
         """
         try:
+            # Convert target to numpy if it's a tensor (especially MPS tensors)
+            if hasattr(target, 'cpu'):
+                target = target.cpu().numpy()
+            elif not isinstance(target, np.ndarray):
+                target = np.asarray(target)
+            
             # Get device info for memory-aware strategy selection
             device = getattr(design_matrix, 'device', None)
             n_cols = design_matrix.shape[1]
@@ -360,11 +447,19 @@ class LinearSystemSolver:
             # Choose strategy based on memory constraints
             strategy, memory_info = self.choose_strategy(n_cols, device)
             
-            # Solve using chosen strategy
-            if strategy == 'direct':
-                solution = self.solver.solve_direct(design_matrix, target, non_negative)
+            # Check if we have a scipy sparse matrix (fallback case)
+            if hasattr(design_matrix, 'tocsr'):  # scipy sparse matrix
+                logging.info("Using scipy sparse solver for fallback compatibility")
+                if strategy == 'direct':
+                    solution = SciPySolver.solve_direct(design_matrix, target, non_negative)
+                else:
+                    solution = SciPySolver.solve_iterative(design_matrix, target, non_negative)
             else:
-                solution = self.solver.solve_iterative(design_matrix, target, non_negative)
+                # Use backend-specific solver
+                if strategy == 'direct':
+                    solution = self.solver.solve_direct(design_matrix, target, non_negative)
+                else:
+                    solution = self.solver.solve_iterative(design_matrix, target, non_negative)
             
             return solution
             
@@ -373,9 +468,42 @@ class LinearSystemSolver:
             # Try iterative solver as fallback
             try:
                 logging.info("Attempting iterative solver as fallback...")
-                return self.solver.solve_iterative(design_matrix, target, non_negative)
+                
+                # Ensure target is numpy array for fallback
+                fallback_target = target
+                if hasattr(target, 'cpu'):
+                    fallback_target = target.cpu().numpy()
+                elif not isinstance(target, np.ndarray):
+                    fallback_target = np.asarray(target)
+                
+                if hasattr(design_matrix, 'tocsr'):  # scipy sparse matrix
+                    return SciPySolver.solve_iterative(design_matrix, fallback_target, non_negative)
+                else:
+                    return self.solver.solve_iterative(design_matrix, fallback_target, non_negative)
             except Exception as e2:
                 logging.error(f"Fallback solver also failed: {str(e2)}")
+                # Final fallback: try scipy if we haven't already
+                if not hasattr(design_matrix, 'tocsr'):
+                    try:
+                        logging.info("Final fallback: attempting scipy conversion...")
+                        # Try to convert to scipy sparse matrix
+                        if hasattr(design_matrix, 'coalesce'):  # PyTorch sparse
+                            A_coo = design_matrix.coalesce()
+                            indices = A_coo.indices().cpu().numpy()
+                            values = A_coo.values().cpu().numpy()
+                            shape = A_coo.shape
+                            scipy_matrix = coo_matrix((values, (indices[0], indices[1])), shape=shape)
+                            
+                            # Ensure target is also on CPU
+                            if hasattr(target, 'cpu'):
+                                target_numpy = target.cpu().numpy()
+                            else:
+                                target_numpy = np.asarray(target)
+                            
+                            return SciPySolver.solve_iterative(scipy_matrix, target_numpy, non_negative)
+                    except Exception as e3:
+                        logging.error(f"Final fallback also failed: {str(e3)}")
+                
                 raise DataError(f"All linear system solving methods failed. Original error: {str(e)}")
 
 
@@ -465,8 +593,31 @@ class DesignMatrixBuilder:
         """Create sparse matrix in the appropriate backend format."""
         if self.backend == "torch":
             import torch
-            indices = torch.stack([rows_tensor, cols_tensor])
-            return torch.sparse_coo_tensor(indices, data_tensor, size=shape).coalesce()
+            
+            # Check if we're on MPS device - always fallback to scipy for MPS
+            device = getattr(data_tensor, 'device', torch.device('cpu'))
+            if hasattr(torch.backends, 'mps') and (str(device).startswith('mps') or torch.backends.mps.is_available()):
+                logging.warning("MPS backend detected, falling back to scipy sparse matrix for full compatibility")
+                # Always use scipy for MPS to avoid any sparse operation issues
+                return coo_matrix((safe_convert_to_numpy(data_tensor),
+                                 (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
+                                shape=shape)
+            
+            try:
+                indices = torch.stack([rows_tensor, cols_tensor])
+                return torch.sparse_coo_tensor(indices, data_tensor, size=shape).coalesce()
+            except RuntimeError as e:
+                error_msg = str(e)
+                if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
+                    logging.warning(f"PyTorch sparse tensor creation failed: {e}")
+                    logging.info("Falling back to scipy sparse matrix")
+                    # Fallback to scipy sparse matrix
+                    return coo_matrix((safe_convert_to_numpy(data_tensor),
+                                     (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
+                                    shape=shape)
+                else:
+                    raise
+                    
         elif self.backend == "tensorflow":
             import tensorflow as tf
             indices = tf.stack([rows_tensor, cols_tensor], axis=1)
@@ -531,16 +682,22 @@ class SolutionProcessor:
                              min_scale: float = 0.8, 
                              max_scale: float = 1.2) -> np.ndarray:
         """Process and constrain height scaling factors."""
+        # Convert to tensor for processing if it's a numpy array
+        if isinstance(height_scale, np.ndarray):
+            height_tensor = safe_convert_to_tensor(height_scale)
+        else:
+            height_tensor = height_scale
+        
         # Count out-of-bounds values for logging
-        too_small = keras.ops.sum(height_scale < min_scale)
-        too_large = keras.ops.sum(height_scale > max_scale)
+        too_small = keras.ops.sum(height_tensor < min_scale)
+        too_large = keras.ops.sum(height_tensor > max_scale)
 
         # Replace nan with 1
-        height_scale = keras.ops.where(keras.ops.isnan(height_scale), 
-                                     keras.ops.ones_like(height_scale), height_scale)
+        height_tensor = keras.ops.where(keras.ops.isnan(height_tensor), 
+                                      keras.ops.ones_like(height_tensor), height_tensor)
         
         # Apply constraints
-        height_scale = keras.ops.clip(height_scale, min_scale, max_scale)
+        height_tensor = keras.ops.clip(height_tensor, min_scale, max_scale)
         
         # Log warnings if constraints were applied
         if too_small > 0:
@@ -564,21 +721,35 @@ class SolutionProcessor:
                 "Consider refining peak positions or checking model parameters."
             )
         
-        return height_scale
+        # Convert back to numpy for consistency with original interface
+        return safe_convert_to_numpy(height_tensor)
 
     @staticmethod
     def process_background(solution, params, init_background, update_threshold=0.2):
         """Process and update the background parameter based on the solution."""
-        background = max(solution[-1], init_background)
+        # Extract background value (last element of solution)
+        if isinstance(solution, np.ndarray):
+            background_val = float(solution[-1])
+        else:
+            background_val = float(safe_convert_to_numpy(solution[-1]))
+        
+        background = max(background_val, init_background)
+        
+        # Get previous background value
         prev_background = params["background"]
-        update_rel = (background - prev_background) / (prev_background + 1e-10)
+        if hasattr(prev_background, 'shape'):  # It's a tensor
+            prev_bg_val = float(safe_convert_to_numpy(prev_background))
+        else:
+            prev_bg_val = float(prev_background)
         
-        if keras.ops.abs(update_rel) > update_threshold * 2:
+        update_rel = (background - prev_bg_val) / (prev_bg_val + 1e-10)
+        
+        if abs(update_rel) > update_threshold * 2:
             # Update too large, skip update
-            return prev_background, False
+            return prev_bg_val, False
         
-        if keras.ops.abs(update_rel) > update_threshold:
-            update_rel_clip = keras.ops.clip(update_rel, -update_threshold, update_threshold)
-            background = prev_background * (1 + update_rel_clip)
+        if abs(update_rel) > update_threshold:
+            update_rel_clip = max(-update_threshold, min(update_threshold, update_rel))
+            background = prev_bg_val * (1 + update_rel_clip)
         
         return background, True

@@ -66,6 +66,38 @@ def safe_convert_to_tensor(array, dtype="float32"):
     from keras import ops
     return ops.convert_to_tensor(array, dtype=dtype)
 
+def safe_stop_gradient(tensor):
+    """
+    Safely apply stop_gradient to a tensor, handling numpy scalars and arrays.
+    
+    Args:
+        tensor: Tensor, numpy array, or scalar
+        
+    Returns:
+        Tensor with gradients stopped, or original value if not a tensor
+    """
+    import keras
+    from keras import ops
+    
+    # If it's a numpy scalar or doesn't have gradients, return as-is
+    if isinstance(tensor, (int, float, np.integer, np.floating)):
+        return tensor
+    
+    # If it's a numpy array, convert to tensor first
+    if isinstance(tensor, np.ndarray):
+        tensor = ops.convert_to_tensor(tensor)
+    
+    # Apply stop_gradient if it's a tensor
+    if hasattr(tensor, 'shape'):
+        try:
+            return ops.stop_gradient(tensor)
+        except (AttributeError, TypeError):
+            # Fallback for cases where stop_gradient doesn't work
+            return tensor
+    
+    return tensor
+
+
 def safe_deepcopy_params(params):
     """
     Safely deep copy a parameter dictionary containing tensors.

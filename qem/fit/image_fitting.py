@@ -40,6 +40,7 @@ from qem.utils.params import (
     safe_convert_to_numpy,
     safe_convert_to_tensor,
     safe_deepcopy_params,
+    safe_stop_gradient,
 )
 from qem.utils.arrays import get_random_indices_in_batches
 from qem.visualization.geometry import remove_close_coordinates
@@ -1128,7 +1129,7 @@ class ImageFitting:
         Process linear system solution and update parameters.
         
         Args:
-            solution: Solution vector from linear solver
+            solution: Solution vector from linear solver (numpy array from scipy fallback)
             params: Original parameters dictionary
             
         Returns:
@@ -1149,7 +1150,9 @@ class ImageFitting:
             if not valid:
                 logging.warning("Background update too large, skipping parameter update with linear estimator")
                 return params
-            params["background"] = background
+            
+            # Convert background to Keras tensor to match parameter types
+            params["background"] = safe_convert_to_tensor(background)
             height_scale = solution[:-1]
         else:
             height_scale = solution
@@ -1157,8 +1160,11 @@ class ImageFitting:
         # Process height scaling factors
         processed_scale = processor.process_height_scaling(height_scale)
         
+        # Convert processed scale to Keras tensor to match parameter types
+        processed_scale_tensor = safe_convert_to_tensor(processed_scale)
+        
         # Update height parameters
-        params["height"] *= processed_scale
+        params["height"] *= processed_scale_tensor
 
         # Update instance parameters
         self.params = params
@@ -1368,7 +1374,7 @@ class ImageFitting:
         """
         if params is None:
             params = self.params if self.params is not None else self.init_params()
-        params = {k: keras.ops.stop_gradient(v) for k, v in params.items()}
+        params = {k: safe_stop_gradient(v) for k, v in params.items()}
 
         self.converged = False
         operation_context = (

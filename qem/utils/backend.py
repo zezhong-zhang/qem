@@ -53,6 +53,7 @@ def safe_convert_to_tensor(array, dtype="float32"):
     return ops.convert_to_tensor(array, dtype=dtype)
 
 
+
 def safe_deepcopy_params(params):
     """
     Safely deep copy a parameter dictionary containing tensors.
