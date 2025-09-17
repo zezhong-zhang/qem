@@ -15,6 +15,7 @@ from qem.fit.linear_solver import (
     SolutionProcessor,
 )
 from qem.fit.model import GaussianModel
+from qem.utils.config import get_config, create_linear_solver_array
 
 
 class TestParameterValidator:

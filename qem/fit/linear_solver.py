@@ -14,6 +14,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve, lsqr, cg
 
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
+from qem.utils.config import get_config, get_linear_solver_numpy_dtype, create_linear_solver_array
 from qem.schema.exceptions import ParameterError, DataError, ValidationError
 
 
@@ -51,27 +52,39 @@ class TorchSolver:
                 (str(device).startswith('mps') or torch.backends.mps.is_available()))
     
     @staticmethod
+    def _convert_target_to_numpy(b):
+        """Convert target vector to numpy with configured precision."""
+        b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+        return create_linear_solver_array(b_numpy)
+    
+    @staticmethod
     def _convert_to_scipy_matrix(A):
-        """Convert PyTorch tensor to scipy sparse matrix."""
+        """Convert PyTorch tensor to scipy sparse matrix with configured precision."""
         import torch
         from scipy.sparse import coo_matrix
         
+        config = get_config()
+        target_dtype = config.linear_solver_numpy_dtype
+        
         if hasattr(A, 'tocsr'):
-            # Already a scipy sparse matrix
+            # Already a scipy sparse matrix - ensure correct precision
+            if A.dtype != target_dtype:
+                return A.astype(target_dtype)
             return A
         elif hasattr(A, 'is_sparse') and A.is_sparse:
             # PyTorch sparse tensor
             A_coo = A.coalesce()
             indices = A_coo.indices().cpu().numpy()
-            values = A_coo.values().cpu().numpy()
+            values = A_coo.values().cpu().numpy().astype(target_dtype)
             shape = A_coo.shape
             return coo_matrix((values, (indices[0], indices[1])), shape=shape)
         elif hasattr(A, 'cpu'):
             # PyTorch dense tensor
-            return coo_matrix(A.cpu().numpy())
+            return coo_matrix(A.cpu().numpy().astype(target_dtype))
         else:
             # Assume it's already numpy or scipy
-            return coo_matrix(A)
+            data = np.asarray(A, dtype=target_dtype)
+            return coo_matrix(data)
     
     @staticmethod
     def solve_direct(A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
@@ -82,7 +95,7 @@ class TorchSolver:
         if TorchSolver._is_mps_device(device):
             logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
             A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            b_numpy = TorchSolver._convert_target_to_numpy(b)
             return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
         
         try:
@@ -113,7 +126,7 @@ class TorchSolver:
                 logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
                 logging.info("Falling back to scipy sparse solver")
                 A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                b_numpy = TorchSolver._convert_target_to_numpy(b)
                 return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
             
             # Check for memory errors
@@ -121,7 +134,7 @@ class TorchSolver:
                 logging.warning(f"PyTorch out of memory: {e}")
                 logging.info("Falling back to memory-efficient scipy sparse solver")
                 A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                b_numpy = TorchSolver._convert_target_to_numpy(b)
                 return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
             
             else:
@@ -130,7 +143,7 @@ class TorchSolver:
             logging.warning(f"System memory error in PyTorch: {e}")
             logging.info("Falling back to memory-efficient scipy sparse solver")
             A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            b_numpy = TorchSolver._convert_target_to_numpy(b)
             return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
     
     @staticmethod
@@ -143,7 +156,7 @@ class TorchSolver:
         if TorchSolver._is_mps_device(device):
             logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
             A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            b_numpy = TorchSolver._convert_target_to_numpy(b)
             return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
         
         try:
@@ -183,7 +196,7 @@ class TorchSolver:
                 logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
                 logging.info("Falling back to scipy sparse solver")
                 A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                b_numpy = TorchSolver._convert_target_to_numpy(b)
                 return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
             
             # Check for memory errors
@@ -191,7 +204,7 @@ class TorchSolver:
                 logging.warning(f"PyTorch out of memory: {e}")
                 logging.info("Falling back to memory-efficient scipy sparse solver")
                 A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+                b_numpy = TorchSolver._convert_target_to_numpy(b)
                 return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
             
             else:
@@ -200,7 +213,7 @@ class TorchSolver:
             logging.warning(f"System memory error in PyTorch: {e}")
             logging.info("Fallback to memory-efficient scipy sparse solver")
             A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
+            b_numpy = TorchSolver._convert_target_to_numpy(b)
             return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
 
 
@@ -328,6 +341,16 @@ class SciPySolver:
     
     @staticmethod
     def solve_direct(A: coo_matrix, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
+        # Ensure inputs use configured precision
+        config = get_config()
+        target_dtype = config.linear_solver_numpy_dtype
+        
+        # Convert to target precision if needed
+        if A.dtype != target_dtype:
+            A = A.astype(target_dtype)
+        if b.dtype != target_dtype:
+            b = b.astype(target_dtype)
+        
         A_csr = A.tocsr()
         AtA = A_csr.T @ A_csr
         Atb = A_csr.T @ b
@@ -340,11 +363,23 @@ class SciPySolver:
         
         if non_negative:
             solution = np.maximum(solution, 0.0)
-        return solution
+        
+        # Ensure output precision
+        return solution.astype(target_dtype)
     
     @staticmethod
     def solve_iterative(A: coo_matrix, b: np.ndarray, non_negative: bool = False, 
                        max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
+        # Ensure inputs use configured precision
+        config = get_config()
+        target_dtype = config.linear_solver_numpy_dtype
+        
+        # Convert to target precision if needed
+        if A.dtype != target_dtype:
+            A = A.astype(target_dtype)
+        if b.dtype != target_dtype:
+            b = b.astype(target_dtype)
+        
         A_csr = A.tocsr()
         
         try:
@@ -362,7 +397,9 @@ class SciPySolver:
         
         if non_negative:
             solution = np.maximum(solution, 0.0)
-        return solution
+        
+        # Ensure output precision
+        return solution.astype(target_dtype)
 
 
 class LinearSystemSolver:
