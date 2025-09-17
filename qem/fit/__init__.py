@@ -18,11 +18,11 @@ __all__ = [
     'ImageFitting',
     
     # Linear solver components
-    'ParameterValidator',
-    'DesignMatrixBuilder',
     'LinearSystemSolver',
+    'DesignMatrixBuilder',
+    'ParameterValidator', 
     'SolutionProcessor',
-    'MemoryEstimator',
+    'MemoryInfo',
     
     # Refinement functions
     'calculate_center_of_mass',
