@@ -6,8 +6,7 @@ from .model import *
 from .image_fitting import ImageFitting
 from .linear_solver import *
 from .refine import *
-from .background_estimator import *
-# from .background_2d import *
+from .background import BackgroundEstimator, estimate_background
 from .voronoi import *
 
 __all__ = [
@@ -33,8 +32,8 @@ __all__ = [
     'GaussianMixtureModel',
     
     # Background estimation
-    'RobustBackgroundEstimator',
-    'background_estimation',
+    'BackgroundEstimator',
+    'estimate_background',
     
     # Voronoi integration
     'voronoi_integrate',

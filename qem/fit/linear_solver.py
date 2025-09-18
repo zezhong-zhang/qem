@@ -650,8 +650,9 @@ class DesignMatrixBuilder:
         return peak_local, global_x, global_y, mask
     
     def build_sparse_matrix(self, peak_local, global_x, global_y, mask, 
-                          fit_background: bool, num_coordinates: int, x_grid, y_grid):
-        """Build sparse design matrix from peak data."""
+                          fit_background: bool, num_coordinates: int, x_grid, y_grid,
+                          background_2d: np.ndarray = None):
+        """Build sparse design matrix from peak data with optional 2D background."""
         # Extract valid data
         valid_indices = keras.ops.where(mask)
         shape = keras.ops.shape(peak_local)
@@ -674,8 +675,16 @@ class DesignMatrixBuilder:
             rows_tensor = keras.ops.concatenate([rows_tensor, keras.ops.cast(bg_rows, "int32")])
             cols_tensor = keras.ops.concatenate([cols_tensor, 
                 keras.ops.full((self.nx * self.ny,), num_coordinates, dtype="int32")])
-            data_tensor = keras.ops.concatenate([data_tensor, 
-                keras.ops.ones((self.nx * self.ny,), dtype="float32")])
+            
+            if background_2d is not None:
+                # Use 2D background values instead of ones
+                bg_data = keras.ops.convert_to_tensor(background_2d.ravel(), dtype="float32")
+                data_tensor = keras.ops.concatenate([data_tensor, bg_data])
+            else:
+                # Use scalar background (ones)
+                data_tensor = keras.ops.concatenate([data_tensor, 
+                    keras.ops.ones((self.nx * self.ny,), dtype="float32")])
+            
             shape = (self.nx * self.ny, num_coordinates + 1)
         else:
             shape = (self.nx * self.ny, num_coordinates)

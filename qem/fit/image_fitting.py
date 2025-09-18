@@ -45,6 +45,7 @@ from qem.utils.params import (
 from qem.utils.arrays import get_random_indices_in_batches
 from qem.visualization.geometry import remove_close_coordinates
 from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
+from qem.fit.background import BackgroundEstimator, estimate_background
 from qem.fit.linear_solver import (
     ParameterValidator,
     DesignMatrixBuilder,
@@ -60,7 +61,7 @@ from qem.utils.memory_optimization import (
     memory_optimizer,
     chunked_processor,
 )
-from qem.fit.background_estimator import background_estimation
+
 from qem.optimizers.lbfgs import LBFGSOptimizer
 import keras
 import h5py
@@ -167,6 +168,9 @@ class ImageFitting:
         self.ny, self.nx = image.shape
         self.regions = Regions(image=image)
         self.initialize_grid()
+        
+        # Initialize background estimation
+        self.background_estimator = BackgroundEstimator(self.image, self.dx)
 
     # I/O functions
     def save(self, filepath: str) -> None:
@@ -405,8 +409,11 @@ class ImageFitting:
             model.build()
         
         # Handle background trainability based on fit_background setting
-        if not self.fit_background and hasattr(model, 'background'):
-            model.background.trainable = False
+        if not self.fit_background:
+            if hasattr(model, 'background'):
+                model.background.trainable = False
+            if hasattr(model, 'background_scale'):
+                model.background_scale.trainable = False
             
         return model
 
@@ -471,11 +478,111 @@ class ImageFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
+    def enable_2d_background(self,
+                           method: str = 'photutils',
+                           **kwargs) -> dict:
+        """
+        Enable 2D background estimation for the image fitting.
+        
+        Args:
+            method: Background estimation method ('photutils', 'median', 'polynomial')
+            **kwargs: Additional parameters for background estimation
+            
+        Returns:
+            Dictionary with background estimation information
+        """
+        logging.info("Enabling 2D background estimation with method: %s", method)
+        
+        # Enable 2D background in the estimator
+        info = self.background_estimator.enable_2d_background(method=method, **kwargs)
+        
+        # Update fit_background to use 2D mode
+        self.fit_background = True
+        
+        logging.info("2D background estimation completed: scale=%.3f", info['initial_scale'])
+        return info
+    
+    def disable_2d_background(self):
+        """Disable 2D background estimation and revert to scalar background."""
+        self.background_estimator.disable_2d_background()
+        logging.info("2D background estimation disabled")
+    
+    def get_current_background(self) -> np.ndarray:
+        """
+        Get the current background (2D or scalar).
+        
+        Returns:
+            Background array (2D if enabled, otherwise scalar broadcast to 2D)
+        """
+        if self.background_estimator.use_2d_background:
+            return self.background_estimator.get_current_background()
+        else:
+            # Get scalar background value
+            bg_value = getattr(self, 'init_background', 0.0)
+            if self.params is not None and 'background' in self.params:
+                bg_value = safe_convert_to_numpy(self.params['background'])
+                if np.isscalar(bg_value):
+                    bg_value = float(bg_value)
+                else:
+                    bg_value = float(bg_value.item()) if bg_value.size == 1 else float(bg_value[0])
+            return self.background_estimator.get_current_background(bg_value)
+    
+    def update_2d_background_scale(self, new_scale: float):
+        """Update the 2D background scaling factor."""
+        self.background_estimator.update_2d_background_scale(new_scale)
+    
+    def optimize_2d_background_scale(self) -> float:
+        """
+        Optimize the 2D background scaling factor for the current image.
+        
+        This method finds the optimal scaling factor for the 2D background
+        that minimizes the residual between the scaled background and the image.
+        
+        Returns:
+            Optimal scaling factor
+        """
+        if not self.background_estimator.use_2d_background or self.background_estimator.background_2d is None:
+            raise ValueError("2D background not enabled or not estimated")
+        
+        from scipy.optimize import minimize_scalar
+        
+        background_2d = self.background_estimator.background_2d
+        
+        def objective(scale: float) -> float:
+            """Objective function using robust loss."""
+            scaled_bg = scale * background_2d
+            residual = self.image - scaled_bg
+            
+            # Use robust loss (Huber loss)
+            abs_residual = np.abs(residual)
+            threshold = 2.0 * np.median(abs_residual)
+            
+            loss = np.where(
+                abs_residual <= threshold,
+                0.5 * residual**2,
+                threshold * (abs_residual - 0.5 * threshold)
+            )
+            return np.mean(loss)
+        
+        # Get initial estimate
+        initial_scale = self.background_estimator.background_scale
+        
+        # Optimize with reasonable bounds
+        result = minimize_scalar(objective, bounds=(0.01, 100.0), method='bounded')
+        optimal_scale = result.x
+        
+        # Update the background estimator
+        self.update_2d_background_scale(optimal_scale)
+        
+        logging.info("2D background scale optimized: %.3f -> %.3f", initial_scale, optimal_scale)
+        return float(optimal_scale)
+
     def init_params(
         self,
         atom_size: float = 0.7,
         guess_radius: bool = False,
         init_background: float = 0.0,
+        background_2d: bool = False,
     ):
         """Initialize model parameters based on the current model type and settings.
 
@@ -508,20 +615,31 @@ class ImageFitting:
 
         # Initialize background using robust estimation
         if self.fit_background:
-            init_background = background_estimation(
-                self, 
-                background_method='combined',
-                mad={'percentile': 5.0},
-                kmeans={'n_clusters': 3},
-                edge={'edge_threshold': 0.1, 'low_intensity_ratio': 0.3}
-            )
+            if self.background_estimator.use_2d_background:
+                # For 2D background, optimize the scale and use background_scale parameter
+                background_scale = self.optimize_2d_background_scale()
+                self.init_background = background_scale
+                init_background = background_scale  # This will be the scale parameter
+            else:
+                # For 1D background, estimate scalar value
+                init_background = self.background_estimator.estimate_scalar_background(method='robust')
+                self.init_background = init_background
         else:
             self.init_background = init_background
 
         # Initialize heights from image values
-        height = (
-            self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
-        )
+        if self.background_estimator.use_2d_background:
+            # For 2D background, subtract the scaled background at peak positions
+            current_bg = self.get_current_background()
+            height = (
+                self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - 
+                current_bg[pos_y.astype(int), pos_x.astype(int)].ravel()
+            )
+        else:
+            # For scalar background, subtract the scalar value
+            height = (
+                self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
+            )
         height[height < 0] = 0  # Ensure non-negative heights
 
         # Initialize width parameters based on model type
@@ -536,10 +654,15 @@ class ImageFitting:
             "pos_y": pos_y,
             "height": height,
             "width": width,
-            "background": init_background,
             "same_width": self.same_width,
             "atom_types": self.atom_types
         }
+        
+        # Add background parameter (scalar background or 2D background scale)
+        if self.background_estimator.use_2d_background:
+            params["background_scale"] = init_background  # This is the scaling factor
+        else:
+            params["background"] = init_background  # This is the scalar background value
 
         if self.model_type == "voigt":
             if self.same_width:
@@ -1086,10 +1209,15 @@ class ImageFitting:
                 )
                 
                 # Create sparse design matrix
+                background_2d_for_matrix = None
+                if self.background_estimator.use_2d_background:
+                    background_2d_for_matrix = self.background_estimator.get_background_for_linear_estimation()
+                
                 design_matrix = matrix_builder.build_sparse_matrix(
                     peak_local, global_x, global_y, mask, 
                     self.fit_background, self.num_coordinates, 
-                    self.x_grid, self.y_grid
+                    self.x_grid, self.y_grid,
+                    background_2d_for_matrix
                 )
                 
                 # Prepare target vector
@@ -1120,7 +1248,14 @@ class ImageFitting:
         target = self.image_tensor.ravel()
         
         if not self.fit_background:
-            target = target - params["background"]
+            if self.background_estimator.use_2d_background:
+                # Subtract current 2D background
+                current_bg = self.get_current_background()
+                target = target - current_bg.ravel()
+            else:
+                # Subtract scalar background
+                bg_key = "background_scale" if "background_scale" in params else "background"
+                target = target - params[bg_key]
             
         return target
 
@@ -1144,16 +1279,34 @@ class ImageFitting:
         
         # Extract height scaling and background
         if self.fit_background:
-            background, valid = processor.process_background(
-                solution, params, self.init_background, update_threshold
-            )
-            if not valid:
-                logging.warning("Background update too large, skipping parameter update with linear estimator")
-                return params
-            
-            # Convert background to Keras tensor to match parameter types
-            params["background"] = safe_convert_to_tensor(background)
-            height_scale = solution[:-1]
+            if self.background_estimator.use_2d_background:
+                # For 2D background, the last element is the scaling factor
+                background_scale = solution[-1]
+                
+                # Validate and update 2D background scale
+                if 0.01 < background_scale < 100.0:  # Reasonable bounds
+                    self.update_2d_background_scale(float(background_scale))
+                    # Update the background_scale parameter
+                    params["background_scale"] = safe_convert_to_tensor(float(background_scale))
+                    # Remove old background parameter if it exists
+                    if "background" in params:
+                        del params["background"]
+                else:
+                    logging.warning("2D background scale out of bounds: %.3f, keeping current scale", background_scale)
+                
+                height_scale = solution[:-1]
+            else:
+                # Scalar background processing
+                background, valid = processor.process_background(
+                    solution, params, self.init_background, update_threshold
+                )
+                if not valid:
+                    logging.warning("Background update too large, skipping parameter update with linear estimator")
+                    return params
+                
+                # Convert background to Keras tensor to match parameter types
+                params["background"] = safe_convert_to_tensor(background)
+                height_scale = solution[:-1]
         else:
             height_scale = solution
         
