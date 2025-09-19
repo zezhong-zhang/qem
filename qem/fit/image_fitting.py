@@ -1168,7 +1168,7 @@ class ImageFitting:
         return diff
 
     # fitting
-    def linear_estimator(self, params: dict = None, non_negative: bool = False) -> dict:
+    def linear_estimator(self, params: dict = None, non_negative: bool = False,device='cpu') -> dict:
         """
         Perform linear estimation of peak heights using least squares fitting.
         
@@ -1219,10 +1219,8 @@ class ImageFitting:
                     self.x_grid, self.y_grid,
                     background_2d_for_matrix
                 )
-                
                 # Prepare target vector
                 target = self._prepare_target_vector(validated_params)
-                
                 # Solve linear system with automatic memory-aware strategy selection
                 solver = LinearSystemSolver()
                 solution = solver.solve_system(design_matrix, target, non_negative)
@@ -1547,6 +1545,7 @@ class ImageFitting:
                 for batch_indices in tqdm(random_batches, desc="Fitting batch", leave=False):
                     # Calculate local target (subtract other atoms' contributions)
                     if batch_size < self.num_coordinates:
+                        # in cuda
                         params_without_batch = safe_deepcopy_params(params)
                         height_tensor = params_without_batch['height']
                         update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
@@ -1556,8 +1555,17 @@ class ImageFitting:
                         params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
                         
                         model_others = self._create_fitting_model(params_without_batch)
+                        
                         prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
                         local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
+
+                        if self.backend == "torch":
+                            del params_without_batch
+                            del prediction_from_others
+                            del height_tensor
+                            del update_values
+                            import torch
+                            torch.cuda.empty_cache() 
                     else:
                         local_target = self.image_tensor
 
@@ -1580,7 +1588,10 @@ class ImageFitting:
                         verbose=verbose,
                         **optimizer_kwargs
                     )
-                    
+                    if self.backend == "torch":
+                            del local_target
+                            import torch
+                            torch.cuda.empty_cache()
                     params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, select_params)
@@ -1799,7 +1810,7 @@ class ImageFitting:
         # self.model = self.predict(self.params, self.x_grid, self.y_grid)
         return self.params
 
-    def voronoi_integration(self, max_radius: float = None, plot=False):
+    def voronoi_integration(self, max_radius: float = None, plot=False,save=False):
         """
         Compute the Voronoi integration of the atomic columns.
 
@@ -1830,6 +1841,10 @@ class ImageFitting:
         if plot:
             plt.imshow(intensity_record, cmap="viridis")
             plt.colorbar(label="Voronoi Integrated Intensity")
+        if save:
+            plt.savefig("Voronoi Integrated Intensity.png", dpi=300)
+            plt.savefig("Voronoi Integrated Intensity.svg")
+
         return integrated_intensity, intensity_record, point_record
 
     # parameters updates and convergence
@@ -2042,7 +2057,7 @@ class ImageFitting:
             )
         plt.legend()
 
-    def plot_fitting(self):
+    def plot_fitting(self,save = False):
         plt.figure(figsize=(15, 5))
         vmin = self.image.min()
         vmax = self.image.max()
@@ -2064,6 +2079,9 @@ class ImageFitting:
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Residual")
         plt.tight_layout()
+        if save:
+            plt.savefig("fitting.png", dpi=300)
+            plt.savefig("fitting.svg")
 
     def plot_scs(
         self,
@@ -2270,6 +2288,13 @@ class ImageFitting:
         if save:
             plt.savefig("voronoi_scs.svg")
             plt.savefig("voronoi_scs.png", dpi=300)
+    def plot_voronoi_integration_intensity(self,plot = False, save=False):
+        if plot:
+            plt.imshow(self._voronoi_map, cmap="viridis")
+            plt.colorbar(label="Voronoi Integrated Intensity")
+        if save:
+            plt.savefig("Voronoi Integrated Intensity.png", dpi=300)
+            plt.savefig("Voronoi Integrated Intensity.svg")
 
     def estimate_atom_counts_with_gmm(
         self,
@@ -2862,6 +2887,16 @@ class ImageFitting:
 
     @property
     def region_column_labels(self):
+        coordinates = self.coordinates
+        atom_types = self.atom_types
+        mask = (
+            (coordinates[:, 0] >= 0)
+            & (coordinates[:, 0] < self.nx)
+            & (coordinates[:, 1] >= 0)
+            & (coordinates[:, 1] < self.ny)
+        )
+        self.coordinates = coordinates[mask]
+        self.atom_types = atom_types[mask]
         return self.regions.region_map[
             self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
         ]

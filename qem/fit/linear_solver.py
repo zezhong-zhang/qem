@@ -523,10 +523,10 @@ class LinearSystemSolver:
             # Check if we have a scipy sparse matrix (fallback case)
             if hasattr(design_matrix, 'tocsr'):  # scipy sparse matrix
                 logging.info("Using scipy sparse solver for fallback compatibility")
-                if strategy == 'direct':
-                    solution = SciPySolver.solve_direct(design_matrix, target, non_negative)
-                else:
-                    solution = SciPySolver.solve_iterative(design_matrix, target, non_negative)
+                # if strategy == 'direct':
+                #     solution = SciPySolver.solve_direct(design_matrix, target, non_negative)
+                # else:
+                solution = SciPySolver.solve_iterative(design_matrix, target, non_negative)
             else:
                 # Use backend-specific solver
                 if strategy == 'direct':
@@ -673,6 +673,11 @@ class DesignMatrixBuilder:
         if fit_background:
             bg_rows = keras.ops.reshape(y_grid * self.nx + x_grid, (-1,))
             rows_tensor = keras.ops.concatenate([rows_tensor, keras.ops.cast(bg_rows, "int32")])
+            
+            del bg_rows
+            import torch
+            torch.cuda.empty_cache()
+            
             cols_tensor = keras.ops.concatenate([cols_tensor, 
                 keras.ops.full((self.nx * self.ny,), num_coordinates, dtype="int32")])
             
@@ -686,39 +691,50 @@ class DesignMatrixBuilder:
                     keras.ops.ones((self.nx * self.ny,), dtype="float32")])
             
             shape = (self.nx * self.ny, num_coordinates + 1)
+
         else:
             shape = (self.nx * self.ny, num_coordinates)
-        
-        return self._create_sparse_matrix(data_tensor, rows_tensor, cols_tensor, shape)
+        # here the cuda out of memory
+        sparse_matrix = self._create_sparse_matrix(data_tensor, rows_tensor, cols_tensor, shape)
+        del rows_tensor
+        del cols_tensor
+        del data_tensor
+        torch.cuda.empty_cache()
+        return sparse_matrix
     
-    def _create_sparse_matrix(self, data_tensor, rows_tensor, cols_tensor, shape):
+    def _create_sparse_matrix(self, data_tensor, rows_tensor, cols_tensor, shape,device='cpu'):
         """Create sparse matrix in the appropriate backend format."""
         if self.backend == "torch":
             import torch
-            
             # Check if we're on MPS device - always fallback to scipy for MPS
-            device = getattr(data_tensor, 'device', torch.device('cpu'))
-            if hasattr(torch.backends, 'mps') and (str(device).startswith('mps') or torch.backends.mps.is_available()):
-                logging.warning("MPS backend detected, falling back to scipy sparse matrix for full compatibility")
-                # Always use scipy for MPS to avoid any sparse operation issues
+            if device =='cpu':
                 return coo_matrix((safe_convert_to_numpy(data_tensor),
-                                 (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
+                                (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
                                 shape=shape)
-            
-            try:
-                indices = torch.stack([rows_tensor, cols_tensor])
-                return torch.sparse_coo_tensor(indices, data_tensor, size=shape).coalesce()
-            except RuntimeError as e:
-                error_msg = str(e)
-                if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
-                    logging.warning(f"PyTorch sparse tensor creation failed: {e}")
-                    logging.info("Falling back to scipy sparse matrix")
-                    # Fallback to scipy sparse matrix
-                    return coo_matrix((safe_convert_to_numpy(data_tensor),
-                                     (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
-                                    shape=shape)
-                else:
-                    raise
+            else:
+                try:
+                    device = getattr(data_tensor, 'device', torch.device('cpu'))
+                    if hasattr(torch.backends, 'mps') and (str(device).startswith('mps') or torch.backends.mps.is_available()):
+                        logging.warning("MPS backend detected, falling back to scipy sparse matrix for full compatibility")
+                        #Always use scipy for MPS to avoid any sparse operation issues
+                        indices = torch.stack([rows_tensor, cols_tensor])
+                        # here the cuda out of memory
+                        sparse_tensor = torch.sparse_coo_tensor(indices, data_tensor, size=shape).coalesce()
+                        del indices
+                        import torch
+                        torch.cuda.empty_cache()
+                        return sparse_tensor
+                except RuntimeError as e:
+                    error_msg = str(e)
+                    if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS","CUDA out of memory"]):
+                        logging.warning(f"PyTorch sparse tensor creation failed: {e}")
+                        logging.info("Falling back to scipy sparse matrix")
+                        # Fallback to scipy sparse matrix
+                        return coo_matrix((safe_convert_to_numpy(data_tensor),
+                                        (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
+                                        shape=shape)
+                    else:
+                        raise
                     
         elif self.backend == "tensorflow":
             import tensorflow as tf
