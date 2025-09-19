@@ -1168,7 +1168,7 @@ class ImageFitting:
         return diff
 
     # fitting
-    def linear_estimator(self, params: dict = None, non_negative: bool = False) -> dict:
+    def linear_estimator(self, params: dict = None, non_negative: bool = False,device='cpu') -> dict:
         """
         Perform linear estimation of peak heights using least squares fitting.
         
@@ -1219,10 +1219,8 @@ class ImageFitting:
                     self.x_grid, self.y_grid,
                     background_2d_for_matrix
                 )
-                
                 # Prepare target vector
                 target = self._prepare_target_vector(validated_params)
-                
                 # Solve linear system with automatic memory-aware strategy selection
                 solver = LinearSystemSolver()
                 solution = solver.solve_system(design_matrix, target, non_negative)
@@ -1544,6 +1542,7 @@ class ImageFitting:
                 for batch_indices in tqdm(random_batches, desc="Fitting batch", leave=False):
                     # Calculate local target (subtract other atoms' contributions)
                     if batch_size < self.num_coordinates:
+                        # in cuda
                         params_without_batch = safe_deepcopy_params(params)
                         height_tensor = params_without_batch['height']
                         update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
@@ -1553,8 +1552,17 @@ class ImageFitting:
                         params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
                         
                         model_others = self._create_fitting_model(params_without_batch)
+                        
                         prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
                         local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
+
+                        if self.backend == "torch":
+                            del params_without_batch
+                            del prediction_from_others
+                            del height_tensor
+                            del update_values
+                            import torch
+                            torch.cuda.empty_cache() 
                     else:
                         local_target = self.image_tensor
 
@@ -1577,7 +1585,10 @@ class ImageFitting:
                         verbose=verbose,
                         **optimizer_kwargs
                     )
-                    
+                    if self.backend == "torch":
+                            del local_target
+                            import torch
+                            torch.cuda.empty_cache()
                     params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, select_params)
