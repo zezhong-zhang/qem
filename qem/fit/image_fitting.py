@@ -1157,8 +1157,8 @@ class ImageFitting:
             window = self.window
         diff = keras.ops.multiply(diff, window)
         mse = keras.ops.sqrt(keras.ops.mean(keras.ops.square(diff)))
-        l1 = keras.ops.mean(keras.ops.abs(diff))
-        return mse + l1
+        # l1 = keras.ops.mean(keras.ops.abs(diff))
+        return mse 
 
     def residual(self, params: dict):
         # Compute the sum of the Gaussians
