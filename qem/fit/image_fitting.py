@@ -1807,7 +1807,7 @@ class ImageFitting:
         # self.model = self.predict(self.params, self.x_grid, self.y_grid)
         return self.params
 
-    def voronoi_integration(self, max_radius: float = None, plot=False):
+    def voronoi_integration(self, max_radius: float = None, plot=False,save=False):
         """
         Compute the Voronoi integration of the atomic columns.
 
@@ -1838,6 +1838,10 @@ class ImageFitting:
         if plot:
             plt.imshow(intensity_record, cmap="viridis")
             plt.colorbar(label="Voronoi Integrated Intensity")
+        if save:
+            plt.savefig("Voronoi Integrated Intensity.png", dpi=300)
+            plt.savefig("Voronoi Integrated Intensity.svg")
+
         return integrated_intensity, intensity_record, point_record
 
     # parameters updates and convergence
@@ -2050,7 +2054,7 @@ class ImageFitting:
             )
         plt.legend()
 
-    def plot_fitting(self):
+    def plot_fitting(self,save = False):
         plt.figure(figsize=(15, 5))
         vmin = self.image.min()
         vmax = self.image.max()
@@ -2072,6 +2076,9 @@ class ImageFitting:
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Residual")
         plt.tight_layout()
+        if save:
+            plt.savefig("fitting.png", dpi=300)
+            plt.savefig("fitting.svg")
 
     def plot_scs(
         self,
@@ -2278,6 +2285,13 @@ class ImageFitting:
         if save:
             plt.savefig("voronoi_scs.svg")
             plt.savefig("voronoi_scs.png", dpi=300)
+    def plot_voronoi_integration_intensity(self,plot = False, save=False):
+        if plot:
+            plt.imshow(self._voronoi_map, cmap="viridis")
+            plt.colorbar(label="Voronoi Integrated Intensity")
+        if save:
+            plt.savefig("Voronoi Integrated Intensity.png", dpi=300)
+            plt.savefig("Voronoi Integrated Intensity.svg")
 
     def estimate_atom_counts_with_gmm(
         self,
@@ -2870,6 +2884,16 @@ class ImageFitting:
 
     @property
     def region_column_labels(self):
+        coordinates = self.coordinates
+        atom_types = self.atom_types
+        mask = (
+            (coordinates[:, 0] >= 0)
+            & (coordinates[:, 0] < self.nx)
+            & (coordinates[:, 1] >= 0)
+            & (coordinates[:, 1] < self.ny)
+        )
+        self.coordinates = coordinates[mask]
+        self.atom_types = atom_types[mask]
         return self.regions.region_map[
             self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
         ]
