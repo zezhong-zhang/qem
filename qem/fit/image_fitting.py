@@ -1333,7 +1333,7 @@ class ImageFitting:
         step_size: float = 0.01,
         verbose: bool = True,
         batch_size: int = 1024,
-        optimizer_type: str = "adam",
+        optimizer: str = "adam",
         **optimizer_kwargs
     ) -> dict[str, NDArray[Any]]:
         """
@@ -1363,6 +1363,7 @@ class ImageFitting:
         if not model.built:
             model.build()
 
+        print(f"Using {optimizer} optimizer for fitting.")
         # Backend-specific input preparation
         if self.backend == "torch":
             image_tensor = keras.ops.expand_dims(image_tensor, 0)
@@ -1379,7 +1380,7 @@ class ImageFitting:
         
         with operation_context:
             # Choose optimizer based on type
-            if optimizer_type.lower() == "lbfgs":
+            if optimizer.lower() == "lbfgs":
                 # Try L-BFGS with PyTorch, fall back to AdamW if not available
                 assert (self.backend == "torch", "L-BFGS requires PyTorch backend")
                 # import torch.nn.functional as F
@@ -1408,11 +1409,12 @@ class ImageFitting:
                                 f"Converged = {results['converged']}")
             # Use standard first-order optimizers
             else:
-                if optimizer_type.lower() == "adamw":
+                if optimizer.lower() == "adamw":
                     opt = keras.optimizers.AdamW(learning_rate=step_size)
-                else:  # default to adam
+                elif optimizer.lower() == "adam":  # default to adam
                     opt = keras.optimizers.Adam(learning_rate=step_size)
-                    
+                elif optimizer.lower() == "sgd":
+                    opt = keras.optimizers.SGD(learning_rate=step_size)
                 model.compile(optimizer=opt, loss=self.loss)
 
                 early_stopping = keras.callbacks.EarlyStopping(
@@ -1484,7 +1486,7 @@ class ImageFitting:
             maxiter=maxiter,
             tol=tol,
             step_size=step_size,
-            optimizer_type=optimizer,
+            optimizer=optimizer,
             verbose=verbose,
             **optimizer_kwargs
         )
@@ -1535,9 +1537,10 @@ class ImageFitting:
             if self.memory_monitor else nullcontext()
         )
         
+        params = self.linear_estimator(params)
+
         with operation_context:
             for epoch in tqdm(range(num_epoch), desc="Training epochs", leave=False):
-                params = self.linear_estimator(params)
                 pre_params = safe_deepcopy_params(params)
                 random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
 
