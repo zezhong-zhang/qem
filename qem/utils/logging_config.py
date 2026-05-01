@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
-
+from tqdm import tqdm
 
 class StructuredFormatter(logging.Formatter):
     """JSON-formatted logging for structured output."""
@@ -205,6 +205,18 @@ class PerformanceTracker:
         except ImportError:
             return None
 
+
+class TqdmLoggingHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            tqdm.write(msg)
+            self.flush()
+        except Exception:
+            self.handleError(record)
+
+# Add this handler to your logger
+logging.getLogger().addHandler(TqdmLoggingHandler())
 
 def setup_logging(
     level: Union[str, int] = "INFO",

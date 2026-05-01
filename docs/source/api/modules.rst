@@ -8,26 +8,26 @@ This page contains auto-generated documentation for all QEM modules.
    :undoc-members:
    :show-inheritance:
 
-qem.image_fitting module
+qem.fit.image_fitting module
 -------------------------
 
-.. automodule:: qem.image_fitting
+.. automodule:: qem.fit.image_fitting
    :members:
    :undoc-members:
    :show-inheritance:
 
-qem.model module
+qem.fit.model module
 ----------------
 
-.. automodule:: qem.model
+.. automodule:: qem.fit.model
    :members:
    :undoc-members:
    :show-inheritance:
 
-qem.backend_utils module
+qem.utils.backend module
 -------------------------
 
-.. automodule:: qem.backend_utils
+.. automodule:: qem.utils.backend
    :members:
    :undoc-members:
    :show-inheritance:
@@ -152,10 +152,10 @@ qem.zoom module
    :undoc-members:
    :show-inheritance:
 
-qem.gui_classes module
+qem.select module
 ----------------------
 
-.. automodule:: qem.gui_classes
+.. automodule:: qem.select
    :members:
    :undoc-members:
    :show-inheritance:
@@ -184,10 +184,10 @@ qem.dm module
    :undoc-members:
    :show-inheritance:
 
-qem.gaussian_mixture_model module
+qem.analysis.gaussian_mixture_model module
 ----------------------------------
 
-.. automodule:: qem.gaussian_mixture_model
+.. automodule:: qem.analysis.gaussian_mixture_model
    :members:
    :undoc-members:
    :show-inheritance:

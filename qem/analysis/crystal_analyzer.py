@@ -17,9 +17,9 @@ from shapely.geometry import Point, Polygon
 from skimage.feature import peak_local_max
 from skimage.transform import rescale
 
-from qem.atomic_column import AtomicColumns
-from qem.color import get_unique_colors
-from qem.gui_classes import GetAtomSelection, InteractivePlot
+from qem.analysis.atomic_column import AtomicColumns
+from qem.visualization.color import get_unique_colors
+from qem.visualization.select import GetAtomSelection, InteractivePlot
 from scipy.ndimage import gaussian_filter
 
 logging.basicConfig(level=logging.INFO)
@@ -1013,7 +1013,8 @@ class CrystalAnalyzer:
     def plot_lattice_parameter_unitcell(
         self, units='A', min_dist:float=0.1, show_lattice:bool=False,
         boundary_thresh:int=20, line_plot_direction:str=None,
-        line_plot_averaging_window:float=None, line_plot_style:str='confidence_interval'
+        line_plot_averaging_window:float=None, line_plot_style:str='confidence_interval',
+        save: bool = False,
     ):
         """
         Plot local lattice parameters using adaptive cell origins.
@@ -1204,8 +1205,8 @@ class CrystalAnalyzer:
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter a map')
         # set the plot to the view of the image
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
 
         plt.subplot(1, 2, 2)
         plt.imshow(self.image, cmap="gray")
@@ -1220,9 +1221,12 @@ class CrystalAnalyzer:
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter b map')
         # set the plot to the view of the image
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
         plt.show()
+        if save:
+            plt.savefig("lattice_parameter_map.svg")
+            plt.savefig("lattice_parameter_map.png", dpi=300)
 
 
     def plot_lattice_parameter_nearest(self, units='A', show_lattice:bool=False, angle_thresh:float=0.95, dist_min_a:float=1, dist_min_b:float=1, dist_max_a:float=None, dist_max_b:float=None, boundary_thresh:int=5):
@@ -1307,8 +1311,8 @@ class CrystalAnalyzer:
         if hasattr(self, 'scalebar'):
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter a (nearest) map')
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
 
         plt.subplot(1, 2, 2)
         plt.imshow(self.image, cmap="gray")
@@ -1322,8 +1326,8 @@ class CrystalAnalyzer:
         if hasattr(self, 'scalebar'):
             plt.gca().add_artist(self.scalebar)
         plt.title('Lattice parameter b (nearest) map')
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
+        #plt.xlim(0, self.image.shape[1])
+        #plt.ylim(0, self.image.shape[0])
         plt.show()
 
 

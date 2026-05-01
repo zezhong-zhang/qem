@@ -13,7 +13,7 @@ ImageFitting
 
 The primary class for analyzing STEM images and fitting atomic models.
 
-.. autoclass:: qem.image_fitting.ImageFitting
+.. autoclass:: qem.fit.image_fitting.ImageFitting
    :members:
    :undoc-members:
    :show-inheritance:
@@ -23,22 +23,22 @@ Model Classes
 
 Core model implementations for different peak shapes:
 
-.. autoclass:: qem.model.ImageModel
+.. autoclass:: qem.fit.model.ImageModel
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: qem.model.GaussianModel
+.. autoclass:: qem.fit.model.GaussianModel
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: qem.model.LorentzianModel
+.. autoclass:: qem.fit.model.LorentzianModel
    :members:
    :undoc-members:
    :show-inheritance:
 
-.. autoclass:: qem.model.VoigtModel
+.. autoclass:: qem.fit.model.VoigtModel
    :members:
    :undoc-members:
    :show-inheritance:
@@ -52,8 +52,8 @@ Core functionality modules:
    :toctree: generated/
    :nosignatures:
 
-   qem.image_fitting
-   qem.model
+   qem.fit.image_fitting
+   qem.fit.model
 
 Analysis and Processing Modules
 -------------------------------
@@ -81,7 +81,7 @@ Supporting utilities and tools:
    :toctree: generated/
    :nosignatures:
 
-   qem.backend_utils
+   qem.utils.backend
    qem.utils
    qem.io
    qem.periodic_table
@@ -100,7 +100,7 @@ Advanced features and specialized functionality:
    qem.probe
    qem.detector
    qem.abberration
-   qem.gui_classes
+   qem.select
 
 Key Functions
 -------------
@@ -110,7 +110,7 @@ Backend Utilities
 
 Backend detection and configuration utilities for JAX/TensorFlow/PyTorch support.
 
-.. automodule:: qem.backend_utils
+.. automodule:: qem.utils.backend
    :members:
    :undoc-members:
    :show-inheritance:

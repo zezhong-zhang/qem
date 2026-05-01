@@ -7,7 +7,7 @@ from scipy import ndimage as ndi
 from skimage import segmentation
 from skimage.feature import canny
 
-from .dm import dm_load
+from qem.io.dm import dm_load
 
 logging.basicConfig(level=logging.INFO)
 

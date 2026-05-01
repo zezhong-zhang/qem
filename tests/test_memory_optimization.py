@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from unittest.mock import patch, MagicMock
 
-from qem.memory_optimization import (
+from qem.utils.memory_optimization import (
     MemoryMonitor,
     BatchMemoryOptimizer,
     ChunkedProcessor,
@@ -32,7 +32,7 @@ class TestMemoryMonitor:
         """Test memory info retrieval when psutil is not available."""
         monitor = MemoryMonitor()
         
-        with patch('qem.memory_optimization.logging'):
+        with patch('qem.utils.memory_optimization.logging'):
             # Mock psutil import to raise ImportError
             with patch('builtins.__import__', side_effect=lambda name, *args, **kwargs: 
                       __import__(name, *args, **kwargs) if name != 'psutil' 
@@ -45,7 +45,7 @@ class TestMemoryMonitor:
         """Test memory logging when disabled."""
         monitor = MemoryMonitor(enable_logging=False)
         
-        with patch('qem.memory_optimization.logging') as mock_logging:
+        with patch('qem.utils.memory_optimization.logging') as mock_logging:
             monitor.log_memory_usage("test")
             mock_logging.info.assert_not_called()
     

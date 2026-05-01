@@ -1,7 +1,7 @@
-﻿qem.model
+﻿qem.fit.model
 =========
 
-.. automodule:: qem.model
+.. automodule:: qem.fit.model
 
    
    .. rubric:: Functions

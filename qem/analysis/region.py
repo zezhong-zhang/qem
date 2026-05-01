@@ -1,14 +1,14 @@
 from dataclasses import dataclass, field
 from typing import Optional
 import numpy as np
-from qem.crystal_analyzer import CrystalAnalyzer
+from qem.analysis.crystal_analyzer import CrystalAnalyzer
 from matplotlib.path import Path
-from qem.atomic_column import AtomicColumns
+from qem.analysis.atomic_column import AtomicColumns
 import matplotlib.pyplot as plt
-from qem.color import get_unique_colors
+from qem.visualization.color import get_unique_colors
 from ase.visualize import view
 import logging
-from qem.gui_classes import GetRegionSelection
+from qem.visualization.select import GetRegionSelection
 
 
 @dataclass

@@ -1,7 +1,6 @@
 # Standard library imports
 import copy
 import logging
-import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from typing import Any
@@ -9,24 +8,25 @@ from typing import Any
 # Third-party library imports
 import matplotlib.pyplot as plt
 import numpy as np
-from hyperspy.signals import Signal2D
 from matplotlib_scalebar.scalebar import ScaleBar
 from numpy.typing import NDArray
-from scipy.optimize import curve_fit, lsq_linear
-from scipy.sparse import coo_matrix
-from scipy.sparse.linalg import spsolve
+from scipy.optimize import curve_fit
 from skimage.feature import peak_local_max
-from scipy.ndimage import gaussian_filter
+from scipy.ndimage import sobel, binary_erosion, binary_dilation, gaussian_filter,laplace
+from skimage.morphology import remove_small_objects, label
+from skimage.measure import find_contours
+from matplotlib.path import Path
 from tqdm import tqdm
 
 # Application-specific imports
-from qem.crystal_analyzer import CrystalAnalyzer
-from qem.gui_classes import (
+from qem.analysis.crystal_analyzer import CrystalAnalyzer
+from qem.analysis.region import Regions, Region
+from qem.visualization.select import (
     GetAtomSelection,
     GetRegionSelection,
     InteractivePlot,
 )
-from qem.model import (
+from qem.fit.model import (
     ImageModel,
     GaussianKernel,
     GaussianModel,
@@ -35,24 +35,26 @@ from qem.model import (
     gaussian_2d_single,
 )
 from qem.processing import butterworth_window
-from qem.refine import calculate_center_of_mass
-from qem.region import Regions
-from qem.utils import (
-    get_random_indices_in_batches,
-    remove_close_coordinates,
+from qem.fit.refine import calculate_center_of_mass
+from qem.utils.params import (
     safe_convert_to_numpy,
     safe_convert_to_tensor,
     safe_deepcopy_params,
+    safe_stop_gradient,
 )
-from qem.voronoi import voronoi_integrate, voronoi_point_record
-from qem.linear_solver import (
+from qem.utils.backend import release_backend_memory
+from qem.utils.arrays import get_random_indices_in_batches
+from qem.visualization.geometry import remove_close_coordinates
+from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
+from qem.fit.background import BackgroundEstimator, estimate_background
+from qem.fit.linear_solver import (
     ParameterValidator,
     DesignMatrixBuilder,
     LinearSystemSolver,
     SolutionProcessor,
 )
-from qem.validation import ImageFittingValidator, FittingParameterValidator
-from qem.memory_optimization import (
+from qem.schema.validation import ImageFittingValidator, FittingParameterValidator
+from qem.utils.memory_optimization import (
     BatchMemoryOptimizer,
     ChunkedProcessor,
     SparseMatrixOptimizer,
@@ -60,8 +62,10 @@ from qem.memory_optimization import (
     memory_optimizer,
     chunked_processor,
 )
-import keras
 
+from qem.optimizers.lbfgs import LBFGSOptimizer
+import keras
+import h5py
 
 # Only configure logging if not already configured
 if not logging.getLogger().handlers:
@@ -83,6 +87,7 @@ class ImageFitting:
     ):
         """
         Initialize the ImageFitting class with comprehensive input validation.
+        Initialize the ImageFitting class with comprehensive input validation.
 
         Args:
             image (np.array): The input image as a numpy array.
@@ -99,10 +104,10 @@ class ImageFitting:
         """
         # Validate all input parameters
         try:
-            self.image = ImageFittingValidator.validate_image(image)
-            self.dx = ImageFittingValidator.validate_dx(dx)
-            self.elements = ImageFittingValidator.validate_elements(elements)
-            self.model_type = ImageFittingValidator.validate_model_type(model_type)
+            self.image = image
+            self.dx = dx
+            self.elements = elements
+            self.model_type = model_type
             
             # Validate string parameters
             if not isinstance(units, str):
@@ -144,7 +149,7 @@ class ImageFitting:
                     f"dx={self.dx} {self.units}, model={self.model_type}")
 
         # Create model instance based on type
-        self.model = self._create_model()
+        self.model = self._select_model()
 
         # Create Gaussian kernel for filtering
         self.kernel = GaussianKernel()
@@ -164,18 +169,220 @@ class ImageFitting:
         self.ny, self.nx = image.shape
         self.regions = Regions(image=image)
         self.initialize_grid()
+        
+        # Initialize background estimation
+        self.background_estimator = BackgroundEstimator(self.image, self.dx)
 
+    # I/O functions
+    def save(self, filepath: str) -> None:
+        """
+        Save ImageFitting state to HDF5 file.
+        
+        Args:
+            filepath: Path to save the HDF5 file
+        """
+        with h5py.File(filepath, 'w') as f:
+            # Save input image and parameters
+            f.create_dataset('image', data=self.image)
+            f.attrs['dx'] = self.dx
+            f.attrs['units'] = self.units
+            f.attrs['model_type'] = self.model_type
+            f.attrs['same_width'] = self.same_width
+            f.attrs['pbc'] = self.pbc
+            f.attrs['fit_background'] = self.fit_background
+            
+            # Save fitted parameters
+            if self.params is not None:
+                params_group = f.create_group('params')
+                for key, value in self.params.items():
+                    # Handle different tensor types and devices
+                    if hasattr(value, 'cpu') and hasattr(value, 'numpy'):
+                        # Handle PyTorch GPU tensors
+                        value = value.cpu().detach().numpy()
+                    elif hasattr(value, 'numpy'):
+                        # Handle NumPy or CPU tensors
+                        value = value.numpy()
+                    elif hasattr(value, 'device') and 'GPU' in str(value.device):
+                        # Additional GPU tensor handling
+                        try:
+                            value = np.array(value)
+                        except (TypeError, RuntimeError):
+                            value = np.asarray(value)
+                    params_group.create_dataset(key, data=value)
+            
+            # Save fitted image
+            if hasattr(self, 'prediction') and self.prediction is not None:
+                f.create_dataset('prediction', data=self.prediction)
+            
+            # Save coordinates and atom types
+            f.create_dataset('coordinates', data=self.coordinates)
+            f.create_dataset('atom_types', data=self.atom_types)
+            
+            # Save elements list
+            if self.elements is not None:
+                f.create_dataset('elements', data=[e.encode('utf-8') for e in self.elements])
+            
+            # Save voronoi data if available
+            if hasattr(self, '_voronoi_volume') and self._voronoi_volume is not None:
+                f.create_dataset('voronoi_volume', data=self._voronoi_volume)
+            if hasattr(self, '_voronoi_map') and self._voronoi_map is not None:
+                f.create_dataset('voronoi_map', data=self._voronoi_map)
+
+    def load(self, filepath: str) -> 'ImageFitting':
+        """
+        Load ImageFitting state from HDF5 file.
+        
+        Args:
+            filepath: Path to the HDF5 file to load
+            
+        Returns:
+            ImageFitting instance with loaded state
+            
+        Raises:
+            FileNotFoundError: If the file doesn't exist
+            KeyError: If required attributes are missing
+            ValueError: If data validation fails
+        """
+        try:
+            with h5py.File(filepath, 'r') as f:
+                # Validate required datasets exist
+                required_datasets = ['image']
+                for dataset in required_datasets:
+                    if dataset not in f:
+                        raise KeyError(f"Missing required dataset: {dataset}")
+                
+                # Validate required attributes exist
+                required_attrs = ['dx', 'units', 'model_type', 'same_width', 'pbc', 'fit_background']
+                for attr in required_attrs:
+                    if attr not in f.attrs:
+                        raise KeyError(f"Missing required attribute: {attr}")
+                
+                # Load input image and parameters
+                self.image = f['image'][:]
+                self.image_tensor = safe_convert_to_tensor(self.image)
+                self.dx = float(f.attrs['dx'])
+                self.units = str(f.attrs['units'])
+                self.model_type = str(f.attrs['model_type'])
+                self.same_width = bool(f.attrs['same_width'])
+                self.pbc = bool(f.attrs['pbc'])
+                self.fit_background = bool(f.attrs['fit_background'])
+                
+                # Validate image data
+                if not isinstance(self.image, np.ndarray) or self.image.ndim != 2:
+                    raise ValueError("Image must be a 2D numpy array")
+                
+                # Load fitted parameters
+                if 'params' in f:
+                    params = {}
+                    params_group = f['params']
+                    for key in params_group.keys():
+                        data = params_group[key]
+                        if data.ndim == 0:
+                            params[key] = data[()]
+                        else:
+                            params[key] = data[:]
+                    
+                    # Validate parameter shapes
+                    num_coords = len(self.coordinates)
+                    if 'pos_x' in params and 'pos_y' in params:
+                        if len(params['pos_x']) != len(params['pos_y']):
+                            raise ValueError("pos_x and pos_y must have the same length")
+                        num_coords = len(params['pos_x'])
+                        self.coordinates = np.stack([params['pos_x'], params['pos_y']], axis=1)
+                    
+                    # Validate other parameters
+                    for key, value in params.items():
+                        if key in ['pos_x', 'pos_y', 'height']:
+                            if len(value) != num_coords:
+                                raise ValueError(f"Parameter {key} length mismatch with coordinates")
+
+                    self.params = {k: safe_convert_to_tensor(v) for k, v in params.items()}
+
+                # Load fitted image
+                if 'prediction' in f:
+                    prediction = f['prediction'][:]
+                    if prediction.shape != self.image.shape:
+                        raise ValueError("Prediction shape must match image shape")
+                    self.prediction = prediction
+
+                # Load coordinates and atom types
+                if 'coordinates' in f:
+                    coords = f['coordinates'][:]
+                    if coords.ndim != 2 or coords.shape[1] != 2:
+                        raise ValueError("Coordinates must be Nx2 array")
+                    self.coordinates = coords
+
+                if 'atom_types' in f:
+                    atom_types = f['atom_types'][:]
+                    if len(atom_types) != len(self.coordinates):
+                        raise ValueError("Atom types length must match coordinates length")
+                    self.atom_types = atom_types
+
+                # Load elements
+                if 'elements' in f:
+                    try:
+                        elements_bytes = f['elements'][:]
+                        self.elements = [e.decode('utf-8') if isinstance(e, bytes) else str(e) 
+                                           for e in elements_bytes]
+                    except (UnicodeDecodeError, AttributeError):
+                        logging.warning("Could not decode elements list, using default")
+                        self.elements = None
+
+                # Load voronoi data
+                if 'voronoi_volume' in f:
+                    voronoi_volume = f['voronoi_volume'][:]
+                    if len(voronoi_volume) != len(self.coordinates):
+                        raise ValueError("Voronoi volume length must match coordinates length")
+                    self._voronoi_volume = voronoi_volume
+                
+                if 'voronoi_map' in f:
+                    voronoi_map = f['voronoi_map'][:]
+                    if voronoi_map.shape != self.image.shape:
+                        raise ValueError("Voronoi map shape must match image shape")
+                    self._voronoi_map = voronoi_map
+                
+                logging.info(f"Successfully loaded ImageFitting state from {filepath}")
+                return self
+                
+        except FileNotFoundError:
+            raise FileNotFoundError(f"HDF5 file not found: {filepath}")
+        except Exception as e:
+            raise ValueError(f"Error loading HDF5 file: {str(e)}") from e
+
+    def get_memory_usage(self) -> dict:
+        """
+        Get current memory usage statistics.
+        
+        Returns:
+            Dictionary with memory usage information. Returns empty dict if monitoring is disabled.
+        """
+        if self.memory_monitor is None:
+            return {}
+        return self.memory_monitor.get_memory_info()
+
+    def enable_memory_monitoring(self) -> None:
+        """Enable memory monitoring if it was disabled."""
+        if self.memory_monitor is None:
+            self.memory_monitor = MemoryMonitor()
+            logging.info("Memory monitoring enabled")
+
+    def disable_memory_monitoring(self) -> None:
+        """Disable memory monitoring."""
+        if self.memory_monitor is not None:
+            self.memory_monitor = None
+            logging.info("Memory monitoring disabled")
+
+    # Init grids and models
     def initialize_grid(self):
         """Initialize the coordinate grids for the model."""
-        self.image_tensor = keras.ops.convert_to_tensor(self.image, dtype="float32")
+        self.image_tensor = keras.ops.convert_to_tensor(gaussian_filter(self.image,1), dtype="float32")
         x = keras.ops.arange(self.nx, dtype="float32")
         y = keras.ops.arange(self.ny, dtype="float32")
         x_grid, y_grid = keras.ops.meshgrid(x, y)
         self.x_grid = keras.ops.convert_to_tensor(x_grid, dtype="float32")
         self.y_grid = keras.ops.convert_to_tensor(y_grid, dtype="float32")
 
-
-    def _create_model(self):
+    def _select_model(self):
         """Create a new model instance based on the model type."""
         if self.model_type == "gaussian":
             model = GaussianModel(dx=float(self.dx))
@@ -197,140 +404,21 @@ class ImageFitting:
         Returns:
             ImageModel: Model with background trainability based on fit_background setting.
         """
-        model = self._create_model()
+        model = self._select_model()
         model.set_params(params)
         if not model.built:
             model.build()
         
         # Handle background trainability based on fit_background setting
-        if not self.fit_background and hasattr(model, 'background'):
-            model.background.trainable = False
+        if not self.fit_background:
+            if hasattr(model, 'background'):
+                model.background.trainable = False
+            if hasattr(model, 'background_scale'):
+                model.background_scale.trainable = False
             
         return model
 
-    def predict(self, params: dict = None, model:ImageModel=None, local: bool = True):
-        """Predict the image based on the model's current parameters.
-
-        Args:
-            params (dict, optional): Parameters to use for prediction. If None, uses current params.
-            local (bool, optional): If True, calculate peaks locally. Defaults to False.
-
-        Returns:
-            array: Predicted image
-        """
-        
-        if params is None:
-            params = self.params
-        if model is None:
-            model = self.model
-        model.set_params(params)
-        
-        # # Ensure model is built
-        if not model.built:
-            model.build()
-        
-        prediction = model.sum(self.x_grid, self.y_grid, local=local)
-
-        # Handle periodic boundary conditions by rolling the image
-        if self.pbc:
-            for i, j in [
-                (1, 0),
-                (0, 1),
-                (-1, 0),
-                (0, -1),
-                (1, 1),
-                (-1, -1),
-                (1, -1),
-                (-1, 1),
-            ]:
-                # Temporarily set shifted grids for periodic boundary conditions
-                prediction += model.sum(self.x_grid + i * self.nx, self.y_grid + j * self.ny, local=local)
-        # self.prediction = safe_convert_to_numpy(prediction)
-        return prediction
-
-    # Properties
-
-    @property
-    def window(self):
-        """
-        Returns the window used for fitting.
-
-        Returns:
-            numpy.ndarray: A Butterworth-style window used for fitting.
-        """
-        if self._window is None:
-            window = butterworth_window(self.image.shape, 0.5, 10)
-            self._window = window
-        return self._window
-
-    @property
-    def volume(self):
-        """Calculate the volume of each peak in the model.
-
-        Returns:
-            numpy.ndarray: Array of volumes for each peak.
-        """
-        if not self.params:
-            raise ValueError("Parameters not initialized. Call init_params first.")
-
-        # Update the model's pixel size
-        self.model.dx = self.dx
-
-        # Create parameters dict for volume calculation
-        params = self.params.copy()
-        if self.same_width:
-            params["width"] = params["width"][self.atom_types]
-            if "ratio" in params:
-                params["ratio"] = params["ratio"][self.atom_types]
-        volume = self.model.volume(params)
-        return safe_convert_to_numpy(volume)
-
-    @property
-    def scalebar(self):
-        scalebar = ScaleBar(
-            self.dx,
-            units="A",
-            location="lower right",
-            length_fraction=0.2,
-            font_properties={"size": 20},
-        )
-        return scalebar
-
-    # voronoi integration
-    def voronoi_integration(self, max_radius: float = None, plot=False):
-        """
-        Compute the Voronoi integration of the atomic columns.
-
-        Returns:
-            np.array: The Voronoi integration of the atomic columns.
-        """
-        if self.params is None:
-            raise ValueError("Please initialize the parameters first.")
-        if self.fit_background:
-            s = Signal2D(self.image - safe_convert_to_numpy(self.params["background"]))
-        else:
-            s = Signal2D(self.image - self.init_background)
-        pos_x = self.params["pos_x"]
-        pos_y = self.params["pos_y"]
-        pos_x = safe_convert_to_numpy(pos_x)
-        pos_y = safe_convert_to_numpy(pos_y)
-        if max_radius is None:
-            max_radius = self.params["width"].max() * 5
-            max_radius = safe_convert_to_numpy(max_radius)
-        integrated_intensity, intensity_record, point_record = voronoi_integrate(
-            s, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
-        )
-        integrated_intensity = integrated_intensity * self.dx**2
-        intensity_record = intensity_record * self.dx**2
-        self._voronoi_volume = integrated_intensity
-        self._voronoi_map = intensity_record
-        self._voronoi_cell = point_record
-        if plot:
-            plt.imshow(intensity_record, cmap="viridis")
-            plt.colorbar(label="Voronoi Integrated Intensity")
-        return integrated_intensity, intensity_record, point_record
-
-    # init peaks and parameters
+    # init parameters
     def guess_radius(self):
         """
         Estimate the density of atomic columns in an image.
@@ -391,11 +479,111 @@ class ImageFitting:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
+    def enable_2d_background(self,
+                           method: str = 'photutils',
+                           **kwargs) -> dict:
+        """
+        Enable 2D background estimation for the image fitting.
+        
+        Args:
+            method: Background estimation method ('photutils', 'median', 'polynomial')
+            **kwargs: Additional parameters for background estimation
+            
+        Returns:
+            Dictionary with background estimation information
+        """
+        logging.info("Enabling 2D background estimation with method: %s", method)
+        
+        # Enable 2D background in the estimator
+        info = self.background_estimator.enable_2d_background(method=method, **kwargs)
+        
+        # Update fit_background to use 2D mode
+        self.fit_background = True
+        
+        logging.info("2D background estimation completed: scale=%.3f", info['initial_scale'])
+        return info
+    
+    def disable_2d_background(self):
+        """Disable 2D background estimation and revert to scalar background."""
+        self.background_estimator.disable_2d_background()
+        logging.info("2D background estimation disabled")
+    
+    def get_current_background(self) -> np.ndarray:
+        """
+        Get the current background (2D or scalar).
+        
+        Returns:
+            Background array (2D if enabled, otherwise scalar broadcast to 2D)
+        """
+        if self.background_estimator.use_2d_background:
+            return self.background_estimator.get_current_background()
+        else:
+            # Get scalar background value
+            bg_value = getattr(self, 'init_background', 0.0)
+            if self.params is not None and 'background' in self.params:
+                bg_value = safe_convert_to_numpy(self.params['background'])
+                if np.isscalar(bg_value):
+                    bg_value = float(bg_value)
+                else:
+                    bg_value = float(bg_value.item()) if bg_value.size == 1 else float(bg_value[0])
+            return self.background_estimator.get_current_background(bg_value)
+    
+    def update_2d_background_scale(self, new_scale: float):
+        """Update the 2D background scaling factor."""
+        self.background_estimator.update_2d_background_scale(new_scale)
+    
+    def optimize_2d_background_scale(self) -> float:
+        """
+        Optimize the 2D background scaling factor for the current image.
+        
+        This method finds the optimal scaling factor for the 2D background
+        that minimizes the residual between the scaled background and the image.
+        
+        Returns:
+            Optimal scaling factor
+        """
+        if not self.background_estimator.use_2d_background or self.background_estimator.background_2d is None:
+            raise ValueError("2D background not enabled or not estimated")
+        
+        from scipy.optimize import minimize_scalar
+        
+        background_2d = self.background_estimator.background_2d
+        
+        def objective(scale: float) -> float:
+            """Objective function using robust loss."""
+            scaled_bg = scale * background_2d
+            residual = self.image - scaled_bg
+            
+            # Use robust loss (Huber loss)
+            abs_residual = np.abs(residual)
+            threshold = 2.0 * np.median(abs_residual)
+            
+            loss = np.where(
+                abs_residual <= threshold,
+                0.5 * residual**2,
+                threshold * (abs_residual - 0.5 * threshold)
+            )
+            return np.mean(loss)
+        
+        # Get initial estimate
+        initial_scale = self.background_estimator.background_scale
+        
+        # Optimize with reasonable bounds
+        result = minimize_scalar(objective, bounds=(0.01, 100.0), method='bounded')
+        optimal_scale = result.x
+        
+        # Update the background estimator
+        self.update_2d_background_scale(optimal_scale)
+        
+        logging.info("2D background scale optimized: %.3f -> %.3f", initial_scale, optimal_scale)
+        return float(optimal_scale)
+
     def init_params(
         self,
         atom_size: float = 0.7,
         guess_radius: bool = False,
         init_background: float = 0.0,
+        background_2d: bool = False,
     ):
         """Initialize model parameters based on the current model type and settings.
 
@@ -426,16 +614,33 @@ class ImageFitting:
         pos_x = np.clip(pos_x, 0, self.image.shape[0] - 1)
         pos_y = np.clip(pos_y, 0, self.image.shape[1] - 1)
 
-        # Initialize background
+        # Initialize background using robust estimation
         if self.fit_background:
-            init_background = self.image.min()
+            if self.background_estimator.use_2d_background:
+                # For 2D background, optimize the scale and use background_scale parameter
+                background_scale = self.optimize_2d_background_scale()
+                self.init_background = background_scale
+                init_background = background_scale  # This will be the scale parameter
+            else:
+                # For 1D background, estimate scalar value
+                init_background = self.background_estimator.estimate_scalar_background(method='robust')
+                self.init_background = init_background
         else:
             self.init_background = init_background
 
         # Initialize heights from image values
-        height = (
-            self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
-        )
+        if self.background_estimator.use_2d_background:
+            # For 2D background, subtract the scaled background at peak positions
+            current_bg = self.get_current_background()
+            height = (
+                self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - 
+                current_bg[pos_y.astype(int), pos_x.astype(int)].ravel()
+            )
+        else:
+            # For scalar background, subtract the scalar value
+            height = (
+                self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - init_background
+            )
         height[height < 0] = 0  # Ensure non-negative heights
 
         # Initialize width parameters based on model type
@@ -450,30 +655,31 @@ class ImageFitting:
             "pos_y": pos_y,
             "height": height,
             "width": width,
-            "background": init_background,
             "same_width": self.same_width,
             "atom_types": self.atom_types
         }
+        
+        # Add background parameter (scalar background or 2D background scale)
+        if self.background_estimator.use_2d_background:
+            params["background_scale"] = init_background  # This is the scaling factor
+        else:
+            params["background"] = init_background  # This is the scalar background value
 
-        if isinstance(self.model, VoigtModel):
+        if self.model_type == "voigt":
             if self.same_width:
                 ratio = np.tile(0.9, self.num_atom_types).astype(float)
             else:
                 ratio = np.tile(0.9, self.num_coordinates).astype(float)
-            params["ratio"] = ratio
+            params.update({"ratio": ratio})
 
         for key in params.keys():
             params[key] = keras.ops.convert_to_tensor(params[key], dtype="float32")
         
         self.params = params
-        self.model = self._create_model()
-        self.model.set_params(self.params)
-        # Build the model with the correct input shape (grid shapes)
-        if not self.model.built:
-            self.model.build()
+        self.model = self._create_fitting_model(self.params)
         return params
 
-    # find atomic columns
+    # find atomic columns  
     def import_coordinates(self, coordinates: np.ndarray):
         self.coordinates = coordinates[:, :2]
 
@@ -610,11 +816,13 @@ class ImageFitting:
             plt.pause(0.1)
 
         region_mask = atom_select.get_region_mask()
-        self.regions.region_map[region_mask] = region_index
-        try:
-            self.region_path_dict[region_index] = atom_select.path
-        except AttributeError:
-            pass
+        # self.regions.region_map[region_mask] = region_index
+        region = Region(
+            name=f"region_{region_index}",
+            index=region_index,
+            path=atom_select.path,
+            image_shape=self.image.shape)
+        self.regions.add_region(region)
         logging.info(
             f"Assigned label {region_index} with {region_mask.sum()} pixels to the region map."
         )
@@ -807,51 +1015,56 @@ class ImageFitting:
         return self.coordinates
 
     def remove_close_coordinates(self, threshold: int = 10):
+        """
+        Remove coordinates that are too close to each other, considering periodic boundary conditions (PBC) if enabled.
+        Also removes the corresponding atom types from self.atom_types.
+
+        Args:
+            threshold (int): Minimum allowed distance between coordinates. Defaults to 10.
+
+        Returns:
+            np.ndarray: The filtered coordinates.
+        """
         if self.pbc:
-            coords, _ = remove_close_coordinates(self.coordinates.copy(), threshold)
-            # find the coords near the boundary
+            # Remove close coordinates in the original box
+            coords, atom_types, _ = remove_close_coordinates(self.coordinates.copy(), self.atom_types.copy(), threshold)
+            
+            # Identify coordinates near the boundary
             mask_boundary = (
                 (coords[:, 0] < threshold)
                 | (coords[:, 0] > self.nx - threshold)
                 | (coords[:, 1] < threshold)
                 | (coords[:, 1] > self.ny - threshold)
             )
-            # genearate the boundary coords under the pbc
             coords_boundary = coords[mask_boundary]
-            # identify the coords in the coords_boundary that are close to the coords_boundary_pbc
-            coords_boundary_pbc = coords_boundary.copy()
-            for i, j in [
-                (1, 0),
-                (0, 1),
-                (1, 1),
-                (-1, 0),
-                (0, -1),
-                (-1, -1),
-                (1, -1),
-                (-1, 1),
-            ]:
-                coords_boundary_shifted = coords_boundary + np.array(
-                    [i * self.nx, j * self.ny]
-                )
-                for row in coords_boundary:
-                    too_close = (
-                        np.linalg.norm(coords_boundary_shifted - row, axis=1)
-                        < threshold
-                    ).any()
-                    # same_type = coords_boundary_shifted[too_close,2] == row[2]
-                    if too_close:
-                        # find the index of the row in the coords_boundary_pbc
-                        idx = np.where((coords_boundary_pbc == row).all(axis=1))[0]
-                        # dump the row if it is too close to the boundary
-                        coords_boundary_pbc = np.delete(
-                            coords_boundary_pbc, idx, axis=0
-                        )
-            # now combine the coords that are not close to the boundary with the coords_boundary_pbc
-            coords_final = np.vstack([coords[~mask_boundary], coords_boundary_pbc])
-            self.coordinates = coords_final
+            atom_types_boundary = atom_types[mask_boundary]
+            
+            # Generate periodic images of boundary coordinates
+            shifts = np.array([
+                [i * self.nx, j * self.ny]
+                for i, j in [(1, 0), (0, 1), (1, 1), (-1, 0), (0, -1), (-1, -1), (1, -1), (-1, 1)]
+            ])
+            
+            # Check if any periodic image is too close to the original boundary coordinates
+            to_remove = set()
+            for shift in shifts:
+                shifted_coords = coords_boundary + shift
+                for i, coord in enumerate(coords_boundary):
+                    distances = np.linalg.norm(shifted_coords - coord, axis=1)
+                    if (distances < threshold).any():
+                        to_remove.add(i)
+            
+            # Remove overlapping boundary coordinates and corresponding atom types
+            coords_boundary_filtered = np.delete(coords_boundary, list(to_remove), axis=0)
+            atom_types_boundary_filtered = np.delete(atom_types_boundary, list(to_remove), axis=0)
+            
+            # Combine non-boundary and filtered boundary coordinates and atom types
+            self.coordinates = np.vstack([coords[~mask_boundary], coords_boundary_filtered])
+            self.atom_types = np.concatenate([atom_types[~mask_boundary], atom_types_boundary_filtered])
         else:
-            self.coordinates, _ = remove_close_coordinates(self.coordinates, threshold)
-        return self.coordinates
+            self.coordinates, self.atom_types,_ = remove_close_coordinates(self.coordinates, self.atom_types, threshold)
+        
+        return self.coordinates, self.atom_types
 
     def add_or_remove_peaks(self, min_distance: int = 2, image=None):
         if image is None:
@@ -882,15 +1095,45 @@ class ImageFitting:
         return self.coordinates
 
     # loss function and model prediction
+    def predict(self, params: dict = None, model:ImageModel=None, local: bool = True):
+        """Predict the image based on the model's current parameters.
 
-    def loss_val(self, params: dict):
-        prediction = self.predict(params)
-        diff = self.image_tensor - prediction
-        diff = keras.ops.multiply(diff, self.window)
-        # damping the difference near the edge
-        mse = keras.ops.sqrt(keras.ops.mean(keras.ops.square(diff)))
-        l1 = keras.ops.mean(keras.ops.abs(diff))
-        return mse + l1
+        Args:
+            params (dict, optional): Parameters to use for prediction. If None, uses current params.
+            local (bool, optional): If True, calculate peaks locally. Defaults to False.
+
+        Returns:
+            array: Predicted image
+        """
+        
+        if params is None:
+            params = self.params
+        if model is None:
+            model = self.model
+        model.set_params(params)
+        
+        # # Ensure model is built
+        if not model.built:
+            model.build()
+        
+        prediction = model.sum(self.x_grid, self.y_grid, local=local)
+
+        # Handle periodic boundary conditions by rolling the image
+        if self.pbc:
+            for i, j in [
+                (1, 0),
+                (0, 1),
+                (-1, 0),
+                (0, -1),
+                (1, 1),
+                (-1, -1),
+                (1, -1),
+                (-1, 1),
+            ]:
+                # Temporarily set shifted grids for periodic boundary conditions
+                prediction += model.sum(self.x_grid + i * self.nx, self.y_grid + j * self.ny, local=local)
+        # self.prediction = safe_convert_to_numpy(prediction)
+        return prediction
 
     def loss(self, y_true, y_pred):
         """
@@ -916,7 +1159,7 @@ class ImageFitting:
         diff = keras.ops.multiply(diff, window)
         mse = keras.ops.sqrt(keras.ops.mean(keras.ops.square(diff)))
         # l1 = keras.ops.mean(keras.ops.abs(diff))
-        return mse
+        return mse 
 
     def residual(self, params: dict):
         # Compute the sum of the Gaussians
@@ -926,66 +1169,85 @@ class ImageFitting:
         return diff
 
     # fitting
-    def linear_estimator(self, params: dict = None, non_negative: bool = False) -> dict:
+    def linear_estimator(
+        self,
+        params: dict = None,
+        non_negative: bool = False,
+        device: str = 'cpu',
+        best_effort: bool = False,
+    ) -> dict:
         """
         Perform linear estimation of peak heights using least squares fitting.
-        
-        This method builds a design matrix from the current peak model and solves
-        a linear system to estimate optimal height scaling factors. The implementation
-        uses modular components for better maintainability and error handling.
-        
+
+        Builds a sparse design matrix from the current peak model and solves
+        a linear system to estimate optimal height scaling factors.
+
         Args:
-            params: Model parameters dictionary. If None, uses self.params
-            non_negative: Whether to enforce non-negative height constraints
-            
+            params: Model parameters dictionary. If ``None``, uses ``self.params``.
+            non_negative: Whether to enforce non-negative height constraints.
+            device: Compute device hint passed through to the solver.
+            best_effort: If ``True``, log and swallow exceptions and return the
+                input parameters unchanged. Defaults to ``False`` so callers
+                see real failures (parameter validation errors, numerical
+                breakdowns, OOM) instead of getting silently stale results.
+
         Returns:
-            Updated parameters dictionary with refined height values
-            
+            Updated parameters dictionary with refined height values, or the
+            original parameters when ``best_effort`` swallows a failure.
+
         Raises:
-            Exception: If parameter validation or solving fails
+            ParameterError: If ``params`` fails validation.
+            QEMError: For backend / memory / numerical solver failures
+                (when ``best_effort=False``).
         """
         # Initialize parameters if needed
         if params is None:
             if self.params is None:
                 self.init_params()
             params = self.params
-        
+
         operation_context = (
-            self.memory_monitor.monitor_operation("linear_estimator") 
+            self.memory_monitor.monitor_operation("linear_estimator")
             if self.memory_monitor else nullcontext()
         )
-        
+
+        def _run() -> dict:
+            validated_params = ParameterValidator.validate_params(params)
+
+            matrix_builder = DesignMatrixBuilder(self.model, self.nx, self.ny)
+            peak_local, global_x, global_y, mask = matrix_builder.build_local_peaks(
+                validated_params, self.same_width, self.atom_types
+            )
+
+            background_2d_for_matrix = None
+            if self.background_estimator.use_2d_background:
+                background_2d_for_matrix = self.background_estimator.get_background_for_linear_estimation()
+
+            design_matrix = matrix_builder.build_sparse_matrix(
+                peak_local, global_x, global_y, mask,
+                self.fit_background, self.num_coordinates,
+                self.x_grid, self.y_grid,
+                background_2d_for_matrix,
+            )
+            target = self._prepare_target_vector(validated_params)
+            solver = LinearSystemSolver()
+            solution = solver.solve_system(design_matrix, target, non_negative)
+            return self._process_solution(solution, validated_params)
+
         with operation_context:
+            if not best_effort:
+                # Default path: surface real failures to the caller.
+                return _run()
             try:
-                # Validate input parameters
-                validated_params = ParameterValidator.validate_params(params)
-                
-                # Build design matrix components
-                matrix_builder = DesignMatrixBuilder(self.model, self.nx, self.ny)
-                peak_local, global_x, global_y, mask = matrix_builder.build_local_peaks(
-                    validated_params, self.same_width, self.atom_types
-                )
-                
-                # Create sparse design matrix
-                design_matrix = matrix_builder.build_sparse_matrix(
-                    peak_local, global_x, global_y, mask, 
-                    self.fit_background, self.num_coordinates, 
-                    self.x_grid, self.y_grid
-                )
-                
-                # Prepare target vector
-                target = self._prepare_target_vector(validated_params)
-                
-                # Solve linear system
-                solver = LinearSystemSolver()
-                solution = solver.solve_system(design_matrix, target, non_negative)
-                
-                # Process solution
-                return self._process_solution(solution, validated_params)
-                
+                return _run()
             except Exception as e:
-                logging.error(f"Linear estimation failed: {str(e)}")
-                return params  # Return original parameters on failure
+                # Opt-in best-effort behaviour for resilient outer loops
+                # (e.g. the stochastic fitter that pre-conditions params).
+                logging.warning(
+                    "linear_estimator failed in best_effort mode; "
+                    "returning input parameters unchanged: %s", e,
+                )
+                return params
     
     def _prepare_target_vector(self, params: dict) -> np.ndarray:
         """
@@ -997,20 +1259,27 @@ class ImageFitting:
         Returns:
             Flattened target vector
         """
-        target = safe_convert_to_numpy(self.image_tensor).ravel()
+        # target = safe_convert_to_numpy(self.image_tensor).ravel()
+        target = self.image_tensor.ravel()
         
         if not self.fit_background:
-            background = safe_convert_to_numpy(params["background"])
-            target = target - background
+            if self.background_estimator.use_2d_background:
+                # Subtract current 2D background
+                current_bg = self.get_current_background()
+                target = target - current_bg.ravel()
+            else:
+                # Subtract scalar background
+                bg_key = "background_scale" if "background_scale" in params else "background"
+                target = target - params[bg_key]
             
         return target
-    
-    def _process_solution(self, solution: np.ndarray, params: dict) -> dict:
+
+    def _process_solution(self, solution: np.ndarray, params: dict, update_threshold: float = 0.2) -> dict:
         """
         Process linear system solution and update parameters.
         
         Args:
-            solution: Solution vector from linear solver
+            solution: Solution vector from linear solver (numpy array from scipy fallback)
             params: Original parameters dictionary
             
         Returns:
@@ -1025,20 +1294,46 @@ class ImageFitting:
         
         # Extract height scaling and background
         if self.fit_background:
-            background = max(solution[-1], self.init_background)
-            params["background"] = keras.ops.convert_to_tensor(background)
-            height_scale = solution[:-1]
+            if self.background_estimator.use_2d_background:
+                # For 2D background, the last element is the scaling factor
+                background_scale = solution[-1]
+                
+                # Validate and update 2D background scale
+                if 0.01 < background_scale < 100.0:  # Reasonable bounds
+                    self.update_2d_background_scale(float(background_scale))
+                    # Update the background_scale parameter
+                    params["background_scale"] = safe_convert_to_tensor(float(background_scale))
+                    # Remove old background parameter if it exists
+                    if "background" in params:
+                        del params["background"]
+                else:
+                    logging.warning("2D background scale out of bounds: %.3f, keeping current scale", background_scale)
+                
+                height_scale = solution[:-1]
+            else:
+                # Scalar background processing
+                background, valid = processor.process_background(
+                    solution, params, self.init_background, update_threshold
+                )
+                if not valid:
+                    logging.warning("Background update too large, skipping parameter update with linear estimator")
+                    return params
+                
+                # Convert background to Keras tensor to match parameter types
+                params["background"] = safe_convert_to_tensor(background)
+                height_scale = solution[:-1]
         else:
             height_scale = solution
         
         # Process height scaling factors
         processed_scale = processor.process_height_scaling(height_scale)
         
-        # Update height parameters
-        original_height = keras.ops.convert_to_tensor(params["height"])
-        scale_tensor = keras.ops.convert_to_tensor(processed_scale)
-        params["height"] = scale_tensor * original_height
+        # Convert processed scale to Keras tensor to match parameter types
+        processed_scale_tensor = safe_convert_to_tensor(processed_scale)
         
+        # Update height parameters
+        params["height"] *= processed_scale_tensor
+
         # Update instance parameters
         self.params = params
         return params
@@ -1046,33 +1341,51 @@ class ImageFitting:
     def optimize(
         self,
         model: ImageModel,
-        image_tensor: np.ndarray,
-        params: dict,
+        image_tensor: np.ndarray = None,
+        params: dict = None,
         maxiter: int = 1000,
         tol: float = 1e-4,
         step_size: float = 0.01,
-        verbose: bool = False,
+        verbose: bool = True,
         batch_size: int = 1024,
+        optimizer: str = "adam",
+        **optimizer_kwargs
     ) -> dict[str, NDArray[Any]]:
+        """
+        Optimize model parameters using specified optimizer.
+        
+        Args:
+            model: The image model to optimize
+            image_tensor: Target image tensor (uses self.image_tensor if None)
+            params: Initial parameters (uses model params if None)
+            maxiter: Maximum iterations/epochs
+            tol: Tolerance for convergence
+            step_size: Learning rate
+            verbose: Whether to print progress
+            batch_size: Batch size for training
+            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
+            **optimizer_kwargs: Additional optimizer-specific parameters
+            
+        Returns:
+            Dictionary containing optimized parameters
+        """
         if image_tensor is None:
             image_tensor = self.image_tensor
-        model.set_params(params)
+        if params is not None:
+            model.set_params(params)
 
-        # Build the model with the correct input shape (grid shapes)
+        # Build the model if not already built
         if not model.built:
             model.build()
 
+        print(f"Using {optimizer} optimizer for fitting.")
         # Backend-specific input preparation
         if self.backend == "torch":
-            # PyTorch needs batch dimensions for inputs and target
             image_tensor = keras.ops.expand_dims(image_tensor, 0)
             x_grid = keras.ops.expand_dims(self.x_grid, 0)
             y_grid = keras.ops.expand_dims(self.y_grid, 0)
             model_inputs = [x_grid, y_grid]
         else:
-            # JAX and TensorFlow can handle without explicit batch dimension for inputs
-            # but still need batch dimension for target
-            # image_tensor = keras.ops.expand_dims(image_tensor, 0)
             model_inputs = [self.x_grid, self.y_grid]
         
         operation_context = (
@@ -1081,139 +1394,104 @@ class ImageFitting:
         )
         
         with operation_context:
-            model.compile(
-                optimizer=keras.optimizers.AdamW(learning_rate=step_size), loss=self.loss
-            )
+            # Choose optimizer based on type
+            if optimizer.lower() == "lbfgs":
+                # Try L-BFGS with PyTorch, fall back to AdamW if not available
+                assert (self.backend == "torch", "L-BFGS requires PyTorch backend")
+                # import torch.nn.functional as F
 
-            early_stopping = keras.callbacks.EarlyStopping(
-                monitor="loss",
-                min_delta=tol,
-                patience=100,
-                verbose=verbose,
-                restore_best_weights=True,
-            )
+                lbfgs_optimizer = LBFGSOptimizer(
+                    learning_rate=step_size,
+                    maxiter=20,
+                    tolerance_grad=optimizer_kwargs.get('tolerance_grad', 1e-7),
+                    tolerance_change=optimizer_kwargs.get('tolerance_change', 1e-9),
+                    )
+                        
+                # def loss_fn(outputs, targets):
+                #     return F.mse_loss(outputs, targets)
+                
+                results = lbfgs_optimizer.optimize(
+                    model=model,
+                    loss_fn=self.loss,
+                    inputs=model_inputs,
+                    targets=image_tensor,
+                    maxiter=maxiter,
+                    verbose=verbose
+                )
+                
+                if verbose:
+                    logging.info(f"L-BFGS optimization: Loss = {results['final_loss']:.6f}, "
+                                f"Converged = {results['converged']}")
+            # Use standard first-order optimizers
+            else:
+                if optimizer.lower() == "adamw":
+                    opt = keras.optimizers.AdamW(learning_rate=step_size)
+                elif optimizer.lower() == "adam":  # default to adam
+                    opt = keras.optimizers.Adam(learning_rate=step_size)
+                elif optimizer.lower() == "sgd":
+                    opt = keras.optimizers.SGD(learning_rate=step_size)
+                model.compile(optimizer=opt, loss=self.loss)
 
-            model.fit(
-                x=model_inputs,
-                y=image_tensor,
-                epochs=maxiter,
-                verbose=verbose,
-                callbacks=[early_stopping],
-                batch_size=batch_size,  # Set to 1 since we have only one sample (the full image)
-            )
-            optimized_params = model.get_params()
-            return optimized_params
+                early_stopping = keras.callbacks.EarlyStopping(
+                    monitor="loss",
+                    min_delta=tol,
+                    patience=100,
+                    verbose=verbose,
+                    restore_best_weights=True,
+                )
 
-    def fit_positions_only(
-        self,
-        params: dict = None,
-        maxiter: int = 500,
-        tol: float = 1e-3,
-        step_size: float = 0.01,
-        local: bool = True,
-        verbose: bool = False,
-    ):
-        """
-        Fit only atomic positions while keeping other parameters (heights, widths, background) fixed.
-        
-        This method uses the existing optimization framework with parameter masking to freeze
-        non-position variables (height, width, background, ratio) while allowing only positions
-        (pos_x, pos_y) to vary during optimization.
-        
-        Args:
-            params: Initial parameters. If None, uses self.params or initializes new ones.
-            maxiter: Maximum iterations for position optimization.
-            tol: Tolerance for convergence.
-            step_size: Learning rate for optimizer.
-            local: Whether to use local calculation for prediction.
-            verbose: Whether to print optimization progress.
-            
-        Returns:
-            dict: Optimized parameters with refined positions and fixed other variables.
-        """
-        if params is None:
-            params = self.params if self.params is not None else self.init_params()
-        
-        logging.info("Fitting positions only (keeping heights, widths, background fixed)...")
-        
-        # Step 1: Linear estimation for initial heights
-        logging.info("Step 1: Linear estimation for initial heights...")
-        params = self.linear_estimator(params)
-        
-        # Step 2: Create a positions-only model by selectively freezing parameters
-        logging.info("Step 2: Optimizing positions only...")
-        positions_model = self._create_positions_only_model(params)
-        
-        # Step 3: Optimize positions while keeping other parameters fixed
-        optimized_params = self.optimize(
-            model=positions_model,
-            image_tensor=self.image_tensor,
-            params=params,
-            maxiter=maxiter,
-            tol=tol,
-            step_size=step_size,
-            verbose=verbose,
-        )
-        
-        # Restore fixed parameters from original
-        for key in ['height', 'width', 'background']:
-            if key in params:
-                optimized_params[key] = params[key]
-        if 'ratio' in params:
-            optimized_params['ratio'] = params['ratio']
-        
-        self.params = optimized_params
-        self.prediction = safe_convert_to_numpy(self.predict(optimized_params, local=local))
-        
-        logging.info("Positions-only fitting completed.")
+                reduce_on_plateau = keras.callbacks.ReduceLROnPlateau(
+                    monitor="loss",
+                    factor=0.1,
+                    patience=10,
+                    verbose=0,
+                    mode="auto",
+                    min_delta=0.0001,
+                    cooldown=0,
+                    min_lr=1e-06,
+                )
+                model.fit(
+                    x=model_inputs,
+                    y=image_tensor,
+                    epochs=maxiter,
+                    verbose=verbose,
+                    callbacks=[early_stopping, reduce_on_plateau],
+                    batch_size=batch_size,
+                )
+                
+        optimized_params = model.get_params()
         return optimized_params
-
-    def _create_positions_only_model(self, params: dict):
-        """
-        Create a model instance that only allows position parameters to be trainable.
-        
-        Args:
-            params: Parameters dictionary with fixed values for non-position variables.
-            
-        Returns:
-            ImageModel: Model with frozen non-position parameters.
-        """
-        positions_model = self._create_fitting_model(params)
-        
-        # Set parameters and build model
-        positions_model.set_params(params)
-        if not positions_model.built:
-            positions_model.build()
-        
-        # Freeze non-position parameters by setting them as non-trainable
-        non_position_weights = ['height', 'width']
-        if hasattr(positions_model, 'ratio'):
-            non_position_weights.append('ratio')
-        
-        # Only freeze background if fit_background is True
-        if self.fit_background:
-            non_position_weights.append('background')
-        
-        for weight_name in non_position_weights:
-            if hasattr(positions_model, weight_name):
-                weight = getattr(positions_model, weight_name)
-                weight.trainable = False
-        
-        return positions_model
 
     def fit_global(
         self,
-        params: dict = None,  # type: ignore
+        params: dict = None,
         maxiter: int = 1000,
         tol: float = 1e-3,
         step_size: float = 0.01,
+        optimizer: str = "adam",
         local: bool = True,
-        verbose: bool = False,
+        verbose: bool = True,
+        **optimizer_kwargs
     ):
+        """
+        Fit model parameters globally using specified optimizer.
+        
+        Args:
+            params: Initial parameters (uses self.params or initializes if None)
+            maxiter: Maximum iterations/epochs
+            tol: Tolerance for convergence
+            step_size: Learning rate
+            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
+            local: Whether to use local prediction for final result
+            verbose: Whether to print optimization progress
+            **optimizer_kwargs: Additional optimizer-specific parameters
+            
+        Returns:
+            Dictionary containing optimized parameters
+        """
         if params is None:
             params = self.params if self.params is not None else self.init_params()
         
-        # Create model with appropriate parameter trainability
         fitting_model = self._create_fitting_model(params)
         
         params = self.optimize(
@@ -1223,11 +1501,13 @@ class ImageFitting:
             maxiter=maxiter,
             tol=tol,
             step_size=step_size,
+            optimizer=optimizer,
             verbose=verbose,
+            **optimizer_kwargs
         )
+        
         self.params = params
         self.prediction = safe_convert_to_numpy(self.predict(params, local=local))
-
         return params
 
     def fit_stochastic(
@@ -1238,111 +1518,111 @@ class ImageFitting:
         maxiter: int = 50,
         tol: float = 1e-3,
         step_size: float = 1e-2,
-        verbose: bool = False,
+        optimizer: str = "adam",
+        verbose: bool = True,
         local: bool = True,
         plot: bool = False,
+        **optimizer_kwargs
     ):
         """
-        Fits model parameters stochastically by optimizing random batches of coordinates.
-
-        This method avoids the high overhead of model creation and compilation inside
-        the training loop by using a single, reusable model for batch optimization.
+        Fit model parameters stochastically by optimizing random batches of coordinates.
+        
+        Args:
+            params: Initial parameters (uses self.params or initializes if None)
+            num_epoch: Number of training epochs
+            batch_size: Size of random batches
+            maxiter: Maximum iterations per batch
+            tol: Tolerance for convergence
+            step_size: Learning rate
+            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
+            local: Whether to use local prediction
+            plot: Whether to plot progress
+            **optimizer_kwargs: Additional optimizer-specific parameters
+            
+        Returns:
+            Dictionary containing optimized parameters
         """
-        # --- 1. Initialization ---
         if params is None:
             params = self.params if self.params is not None else self.init_params()
-        params = {k: keras.ops.stop_gradient(v) for k, v in params.items()}
+        params = {k: safe_stop_gradient(v) for k, v in params.items()}
 
-        # Create and compile a single, reusable model for optimizing local batches.
-        # This is the key performance improvement, as compilation happens only ONCE.
-        local_model_template = self._create_fitting_model(params)
-        local_model_template.compile(
-            optimizer=keras.optimizers.AdamW(learning_rate=step_size),
-            loss=self.loss,
-        )
-
-        # Prepare model inputs once, handling backend-specific batching.
-        if self.backend == "torch":
-            model_inputs = [keras.ops.expand_dims(g, 0) for g in (self.x_grid, self.y_grid)]
-        else:
-            model_inputs = [self.x_grid, self.y_grid]
-
-        # --- 2. Main Training Loop ---
         self.converged = False
-        
-        # Use memory monitoring for the entire training loop
         operation_context = (
             self.memory_monitor.monitor_operation("fit_stochastic") 
             if self.memory_monitor else nullcontext()
         )
         
+        # Pre-condition heights with a least-squares pass. The stochastic
+        # fitter is robust to a no-op pre-conditioning, so swallow failures
+        # here rather than aborting the whole run.
+        params = self.linear_estimator(params, best_effort=True)
+
         with operation_context:
-            for epoch in range(num_epoch):
-                print(f"Epoch {epoch + 1}/{num_epoch}")
-                params = self.linear_estimator(params)  
+            for epoch in tqdm(range(num_epoch), desc="Training epochs", leave=False):
                 pre_params = safe_deepcopy_params(params)
-                
                 random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
 
-                for batch_indices in tqdm(random_batches, desc="Fitting random batch", leave=False):
-                    # --- 3. Per-Batch Optimization ---
-                    
-                    # a) Calculate the target for the local model. The target is the original image
-                    #    minus the contribution from all *other* (non-batch) atoms.
-                    params_without_batch = safe_deepcopy_params(params)
-                    height_tensor = params_without_batch['height']
-                    update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
-                    update_values = keras.ops.zeros(keras.ops.shape(batch_indices))
-                    params_without_batch['height'] = keras.ops.scatter_update(
-                        height_tensor,
-                        update_indices,
-                        update_values
-                    )
-                    params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
-                    
-                    model_others = self._create_fitting_model(params_without_batch)
-                    model_others.set_params(params_without_batch)
-                    prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
-                    local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
+                for batch_indices in tqdm(random_batches, desc="Fitting batch", leave=False):
+                    # Calculate local target (subtract other atoms' contributions)
+                    if batch_size < self.num_coordinates:
+                        # in cuda
+                        params_without_batch = safe_deepcopy_params(params)
+                        height_tensor = params_without_batch['height']
+                        update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
+                        update_values = keras.ops.zeros(keras.ops.shape(batch_indices))
+                        params_without_batch['height'] = keras.ops.scatter_update(
+                            height_tensor, update_indices, update_values)
+                        params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
+                        
+                        model_others = self._create_fitting_model(params_without_batch)
+                        
+                        prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
+                        local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
 
-                    # b) Isolate the parameters for the current batch
+                        if self.backend == "torch":
+                            del params_without_batch
+                            del prediction_from_others
+                            del height_tensor
+                            del update_values
+                            release_backend_memory()
+                    else:
+                        local_target = self.image_tensor
+
+                    # Optimize batch using unified optimize method
                     atoms_selected_mask = np.zeros(self.num_coordinates, dtype=bool)
                     atoms_selected_mask[batch_indices] = True
                     select_params = self.select_params(params, atoms_selected_mask)
                     
-                    # c) Create or reuse local model
-                    if len(batch_indices) < batch_size:
-                        local_model = self._create_fitting_model(select_params)
-                        local_model.compile(
-                            optimizer=keras.optimizers.Adam(learning_rate=step_size),
-                            loss=self.loss,
-                        )
-                    else:
-                        # For full batch, create new model with correct parameter shapes
-                        local_model = local_model_template
-                        local_model.set_params(select_params)
-
-                    # d) Optimize the local model using train_on_batch
-                    for _ in range(maxiter):
-                        local_model.train_on_batch(x=model_inputs, y=local_target)
-
-                    # e) Retrieve optimized parameters and update the main parameter set
-                    optimized_params = local_model.get_params()
-                    clipped_params = self.clip_params(optimized_params)
-                    params = self.update_from_local_params(params, clipped_params, atoms_selected_mask)
+                    local_model = self._create_fitting_model(select_params)
+                    
+                    # Use unified optimize method for batch
+                    optimized_params = self.optimize(
+                        model=local_model,
+                        image_tensor=local_target,
+                        params=select_params,
+                        maxiter=maxiter,
+                        tol=tol,
+                        step_size=step_size,
+                        optimizer=optimizer,
+                        verbose=verbose,
+                        **optimizer_kwargs
+                    )
+                    if self.backend == "torch":
+                        del local_target
+                        release_backend_memory()
+                    params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, select_params)
 
-                # Check for convergence at the end of an epoch
+                # Check convergence
                 if self.convergence(params, pre_params, tol):
-                    print("Convergence criteria met.")
+                    logging.info("Convergence criteria met.")
                     self.converged = True
                     break
         
-        # --- 4. Finalization ---
-        # self.params = self.linear_estimator(params)
-        self.prediction = safe_convert_to_numpy(self.predict(self.params))
-        print("Stochastic fitting complete.")
+        self.params = params
+        self.prediction = safe_convert_to_numpy(self.predict(params, local=local))
+        logging.info("Stochastic fitting complete.")
         return self.params
 
     def _plot_progress(self, params, index, select_params):
@@ -1548,6 +1828,43 @@ class ImageFitting:
         # self.model = self.predict(self.params, self.x_grid, self.y_grid)
         return self.params
 
+    def voronoi_integration(self, max_radius: float = None, plot=False,save=False):
+        """
+        Compute the Voronoi integration of the atomic columns.
+
+        Returns:
+            np.array: The Voronoi integration of the atomic columns.
+        """
+        if self.params is None:
+            raise ValueError("Please initialize the parameters first.")
+        if self.fit_background:
+            image = (self.image - safe_convert_to_numpy(self.params["background"]))
+        else:
+            image = (self.image - self.init_background)
+        pos_x = self.params["pos_x"]
+        pos_y = self.params["pos_y"]
+        pos_x = safe_convert_to_numpy(pos_x)
+        pos_y = safe_convert_to_numpy(pos_y)
+        if max_radius is None:
+            max_radius = self.params["width"].max() * 5
+            max_radius = safe_convert_to_numpy(max_radius)
+        integrated_intensity, intensity_record, point_record = voronoi_integrate(
+            image, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
+        )
+        integrated_intensity = integrated_intensity * self.dx**2
+        intensity_record = intensity_record * self.dx**2
+        self._voronoi_volume = integrated_intensity
+        self._voronoi_map = intensity_record
+        self._voronoi_cell = point_record
+        if plot:
+            plt.imshow(intensity_record, cmap="viridis")
+            plt.colorbar(label="Voronoi Integrated Intensity")
+        if save:
+            plt.savefig("Voronoi Integrated Intensity.png", dpi=300)
+            plt.savefig("Voronoi Integrated Intensity.svg")
+
+        return integrated_intensity, intensity_record, point_record
+
     # parameters updates and convergence
     def convergence(self, params: dict, pre_params: dict, tol: float = 1e-2):
         """
@@ -1596,8 +1913,7 @@ class ImageFitting:
 
     def select_params(self, params: dict, mask: np.ndarray):
         select_params = {}
-        if self.fit_background:
-            select_params["background"] = params["background"]
+        select_params["background"] = params["background"]
         if self.same_width:
             if "width" in params:
                 select_params["width"] = params["width"]
@@ -1640,22 +1956,6 @@ class ImageFitting:
                     keras.ops.convert_to_tensor(value) # `value_np` contains values for the batch
                 )
                 
-        return params
-
-    def clip_params(self, params: dict):
-        for key, value in params.items():
-            if key == "pos_x":
-                params[key] = keras.ops.clip(value, 0, self.nx - 1)
-            elif key == "pos_y":
-                params[key] = keras.ops.clip(value, 0, self.ny - 1)
-            elif key == "height":
-                params[key] = keras.ops.clip(value, 0, self.image.max())
-            elif key == "width":
-                params[key] = keras.ops.clip(value, 1, min(self.nx, self.ny) / 2)
-            elif key == "ratio":
-                params[key] = keras.ops.clip(value, 0, 1)
-            elif key == "background":
-                params[key] = keras.ops.clip(value, 0, np.max(self.image))
         return params
 
     def update_coordinates(self):
@@ -1775,7 +2075,7 @@ class ImageFitting:
             )
         plt.legend()
 
-    def plot_fitting(self):
+    def plot_fitting(self,save = False):
         plt.figure(figsize=(15, 5))
         vmin = self.image.min()
         vmax = self.image.max()
@@ -1797,6 +2097,9 @@ class ImageFitting:
         plt.gca().set_aspect("equal", adjustable="box")
         plt.title("Residual")
         plt.tight_layout()
+        if save:
+            plt.savefig("fitting.png", dpi=300)
+            plt.savefig("fitting.svg")
 
     def plot_scs(
         self,
@@ -2003,6 +2306,13 @@ class ImageFitting:
         if save:
             plt.savefig("voronoi_scs.svg")
             plt.savefig("voronoi_scs.png", dpi=300)
+    def plot_voronoi_integration_intensity(self,plot = False, save=False):
+        if plot:
+            plt.imshow(self._voronoi_map, cmap="viridis")
+            plt.colorbar(label="Voronoi Integrated Intensity")
+        if save:
+            plt.savefig("Voronoi Integrated Intensity.png", dpi=300)
+            plt.savefig("Voronoi Integrated Intensity.svg")
 
     def estimate_atom_counts_with_gmm(
         self,
@@ -2036,7 +2346,7 @@ class ImageFitting:
         if not hasattr(self, 'params') or self.params is None:
             raise ValueError("Please run fitting first to obtain refined cross-sections")
         
-        from qem.gaussian_mixture_model import GaussianMixtureModel
+        from qem.analysis.gaussian_mixture_model import GaussianMixtureModel
         
         # Get refined cross-sections (volumes)
         cross_sections = self.volume.reshape(-1, 1)  # Reshape for GMM input
@@ -2307,29 +2617,264 @@ class ImageFitting:
         cbar = plt.colorbar()
         cbar.set_ticks(np.arange(self.regions.num_regions))  # type: ignore
         plt.title("Region Map")
-
-    def get_memory_usage(self) -> dict:
+    
+    # domain analysis
+    def estimate_complex_domains(
+        self,
+        domain_separation_method: str = "intensity_gradient",
+        min_domain_size: int = 200,
+        domain_threshold: int = 15,  # Percentile threshold for domain boundary detection
+        plot_analysis: bool = True,
+        vacuum_threshold: float = 0.05,  # Threshold for vacuum detection
+        polygon_enclosure: bool = True,  # Enable polygon enclosure
+    ):
         """
-        Get current memory usage statistics.
+        Enhanced peak position estimation for complex STO domains with comprehensive
+        domain analysis, polygon enclosure, and robust peak detection.
         
+        This enhanced method addresses several critical issues:
+        1. Separates vacuum from interface regions before gradient calculation
+        2. Creates continuous mask regions instead of lattice patterns
+        3. Automatically encloses each domain using polygons with indexing
+        4. Implements robust multi-scale algorithm for strong/weak peak detection
+        
+        Args:
+            domain_separation_method: Method to separate domains ('intensity_gradient', 'laplacian', 'sobel')
+            min_domain_size: Minimum size for a domain to be considered bulk
+            plot_analysis: Whether to plot the analysis results
+            vacuum_threshold: Threshold for vacuum region detection
+            polygon_enclosure: Whether to use automatic polygon enclosure
+            
         Returns:
-            Dictionary with memory usage information. Returns empty dict if monitoring is disabled.
+            dict: Dictionary containing enhanced peak coordinates, region classifications, and polygon data
         """
-        if self.memory_monitor is None:
-            return {}
-        return self.memory_monitor.get_memory_info()
+        
+        # Convert interface width from Angstroms to pixels
+        
+        # Step 1: Vacuum separation and preprocessing
+        vacuum_mask, clean_image = self._separate_vacuum_and_sample(
+            vacuum_threshold=vacuum_threshold
+        )
+        
+        
+        # Step 2: Enhanced domain boundary identification
+        sample_mask, boundary_strength, domain_regions, domain_label = self._identify_domain_boundaries(
+            method=domain_separation_method,
+            min_domain_size=min_domain_size,
+            domain_threshold=domain_threshold,
+            vacuum_mask=vacuum_mask,
+            clean_image=clean_image
+        )
+        
+        # Step 3: Automatic polygon enclosure with indexing
+        polygon_data = {}
+        if polygon_enclosure:
+            polygon_data = self._create_polygon_enclosures(domain_regions)        
 
-    def enable_memory_monitoring(self) -> None:
-        """Enable memory monitoring if it was disabled."""
-        if self.memory_monitor is None:
-            self.memory_monitor = MemoryMonitor()
-            logging.info("Memory monitoring enabled")
+        # Step 4: plotting
+        if plot_analysis:
+            self._plot_domain_analysis(vacuum_mask,  boundary_strength, polygon_data, domain_label)
+        
+        results = {
+            'bulk_mask': sample_mask,
+            'boundary_strength': boundary_strength,
+            'domain_regions': domain_regions,
+            'polygon_data': polygon_data,
+            'vacuum_mask': vacuum_mask
+        }
+        
+        
+        return results
 
-    def disable_memory_monitoring(self) -> None:
-        """Disable memory monitoring."""
-        if self.memory_monitor is not None:
-            self.memory_monitor = None
-            logging.info("Memory monitoring disabled")
+    def _separate_vacuum_and_sample(self, vacuum_threshold: float = 0.05):
+        """
+        Separate vacuum regions from interface regions using intensity-based thresholding.
+        
+        Args:
+            vacuum_threshold: Threshold for identifying vacuum regions (low intensity)
+            
+        Returns:
+            tuple: (vacuum_mask, clean_image) where vacuum_mask identifies vacuum regions
+                   and clean_image has vacuum regions masked out
+        """
+
+        
+        # Create intensity histogram to identify vacuum threshold
+        image_flat = self.image.flatten()
+        # Use median absolute deviation for robust threshold estimation
+        median_intensity = np.median(image_flat)
+        mad = np.median(np.abs(image_flat - median_intensity))
+        
+        vacuum_threshold_abs = np.percentile(image_flat, vacuum_threshold*100)
+        # Adaptive vacuum threshold based on image statistics
+        adaptive_threshold = min(vacuum_threshold_abs, median_intensity - 2 * mad)
+        
+        # Detect vacuum regions
+        vacuum_mask = self.image < adaptive_threshold
+        
+        # Clean up vacuum mask to remove noise
+        vacuum_mask = gaussian_filter(vacuum_mask.astype(float), 10) > 0.95
+        vacuum_mask = remove_small_objects(vacuum_mask)
+        # vacuum_mask = binary_dilation(vacuum_mask, iterations=5)
+
+        # Create clean image with vacuum masked out
+        clean_image = self.image.copy()
+        clean_image[vacuum_mask] = np.median(self.image[~vacuum_mask])
+        
+        return vacuum_mask, clean_image
+
+    def _identify_domain_boundaries(self, method="intensity_gradient", min_domain_size=50, domain_threshold = 15, vacuum_mask=None, clean_image=None):
+        """
+        Enhanced domain boundary identification with continuous regions and vacuum separation.
+        
+        Args:
+            method: Method for boundary detection
+            min_domain_size: Minimum size for bulk regions
+            vacuum_mask: Mask identifying vacuum regions
+            clean_image: Pre-processed image with vacuum removed
+            
+        Returns:
+            tuple: (bulk_mask, interface_mask, boundary_strength, domain_regions)
+        """
+
+        
+        if clean_image is None:
+            clean_image = self.image
+        
+        # Apply different boundary detection methods on clean image
+        if method == "intensity_gradient":
+            # Use gradient magnitude to identify boundaries
+            grad_x = sobel(gaussian_filter(clean_image, 2), axis=1)
+            grad_y = sobel(gaussian_filter(clean_image, 2), axis=0)
+            boundary_strength = np.sqrt(grad_x**2 + grad_y**2)
+            
+        elif method == "laplacian":
+            # Use Laplacian to identify rapid intensity changes
+            boundary_strength = np.abs(laplace(gaussian_filter(clean_image, 1.5)))
+            
+        elif method == "sobel":
+            # Use Sobel operator for edge detection
+            boundary_strength = sobel(gaussian_filter(clean_image, 2))
+            
+        else:
+            raise ValueError(f"Unknown boundary detection method: {method}")
+        
+        # Normalize boundary strength
+        boundary_strength = boundary_strength / boundary_strength.max()
+        boundary_strength = gaussian_filter(boundary_strength, sigma=20.0)
+
+
+        sample_threshold = np.percentile(gaussian_filter(self.image, 5), 5)
+        sample_mask = gaussian_filter(self.image, 5) > sample_threshold
+        sample_mask = gaussian_filter(remove_small_objects(sample_mask), 5) > 0.5
+        # # Create boundary mask using adaptive threshold
+        domain_threshold_abs = np.percentile(boundary_strength, domain_threshold)  
+        
+        domain_mask = (boundary_strength < domain_threshold_abs) & (~vacuum_mask) & sample_mask
+        domain_mask = remove_small_objects(domain_mask, min_size=min_domain_size)
+        
+        # Remove small bulk regions
+        domain_label = label(domain_mask)
+
+        # Identify continuous bulk regions
+        unique_regions = np.unique(domain_label)
+        unique_regions = unique_regions[unique_regions != 0]  # Remove background
+        
+        domain_regions = {}
+        
+        for region_id in unique_regions:
+            region_mask = domain_label == region_id
+            region_size = np.sum(region_mask)
+            
+            if region_size >= min_domain_size:
+                domain_regions[region_id] = {
+                    'mask': region_mask,
+                    'size': region_size,
+                    'centroid': np.array(np.where(region_mask)).mean(axis=1)
+                }
+        return sample_mask, boundary_strength, domain_regions, domain_label
+
+    def _create_polygon_enclosures(self, domain_regions):
+        """
+        Automatically create polygon enclosures for each identified domain.
+        
+        Args:
+            domain_regions: Dictionary of domain regions
+            interface_mask: Mask of interface regions
+            
+        Returns:
+            dict: Polygon data with indices and boundaries
+        """
+
+        
+        polygon_data = {}
+        
+        # Create polygon for each domain region
+        for region_id, region_info in domain_regions.items():
+            mask = region_info['mask']
+            
+            # Find contours for this region
+            contours = find_contours(mask.astype(float), 0.5)
+            
+            if len(contours) > 0:
+                # Use the largest contour
+                largest_contour = max(contours, key=len)
+                
+                # Create polygon path
+                polygon_path = Path(largest_contour)
+                
+                polygon_data[region_id] = {
+                    'vertices': largest_contour,
+                    'path': polygon_path,
+                    'centroid': region_info['centroid'],
+                    'area': region_info['size'],
+                }
+
+        return polygon_data
+
+    def _plot_domain_analysis(
+        self, vacuum_mask, boundary_strength, polygon_data, domain_label
+    ):
+        """
+        Enhanced plotting with polygon boundaries and region indices.
+        """
+        fig, axes = plt.subplots(1, 3, figsize=(24, 12))
+        
+        # Original image
+        axes[0].imshow(self.image, cmap='gray')
+        axes[0].set_title('Original Image')
+        axes[0].axis('off')
+        
+        # Boundary strength
+        im1 = axes[1].imshow(boundary_strength, cmap='viridis')
+        axes[1].set_title('Boundary Strength')
+        axes[1].axis('off')
+        plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+        
+        # Continuous domain separation
+        domain_map = domain_label.copy()
+        domain_map[vacuum_mask] = -1  # Background
+        axes[2].imshow(self.image, cmap='gray')
+        im2 = axes[2].imshow(domain_map, vmin=-1, vmax=domain_label.max(),alpha=0.3)
+        axes[2].set_title('Domain Map\n(-1=Background, 0=Bulk, >1=Domains)')
+        axes[2].axis('off')
+        plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+        
+        # Polygon boundaries
+        if polygon_data:
+            for region_id, region_info in polygon_data.items():
+                vertices = region_info['vertices']
+                axes[2].plot(vertices[:, 1], vertices[:, 0], linewidth=2)
+                centroid = region_info['centroid']
+                axes[2].text(centroid[1], centroid[0], str(region_id), 
+                              color='white', fontsize=8, ha='center', va='center')
+        axes[2].set_title('Polygon Boundaries')
+        axes[2].axis('off')
+        
+        plt.tight_layout()
+        plt.show()
+
+    # Properties
 
     @property
     def atom_types(self):
@@ -2361,6 +2906,16 @@ class ImageFitting:
 
     @property
     def region_column_labels(self):
+        coordinates = self.coordinates
+        atom_types = self.atom_types
+        mask = (
+            (coordinates[:, 0] >= 0)
+            & (coordinates[:, 0] < self.nx)
+            & (coordinates[:, 1] >= 0)
+            & (coordinates[:, 1] < self.ny)
+        )
+        self.coordinates = coordinates[mask]
+        self.atom_types = atom_types[mask]
         return self.regions.region_map[
             self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
         ]
@@ -2368,3 +2923,50 @@ class ImageFitting:
     @property
     def voronoi_volume(self):
         return self._voronoi_volume
+
+
+    @property
+    def window(self):
+        """
+        Returns the window used for fitting.
+
+        Returns:
+            numpy.ndarray: A Butterworth-style window used for fitting.
+        """
+        if self._window is None:
+            window = butterworth_window(self.image.shape, 0.5, 10)
+            self._window = window
+        return self._window
+
+    @property
+    def volume(self):
+        """Calculate the volume of each peak in the model.
+
+        Returns:
+            numpy.ndarray: Array of volumes for each peak.
+        """
+        if not self.params:
+            raise ValueError("Parameters not initialized. Call init_params first.")
+
+        # Update the model's pixel size
+        self.model.dx = self.dx
+
+        # Create parameters dict for volume calculation
+        params = self.params.copy()
+        if self.same_width:
+            params["width"] = params["width"][self.atom_types]
+            if "ratio" in params:
+                params["ratio"] = params["ratio"][self.atom_types]
+        volume = self.model.volume(params)
+        return safe_convert_to_numpy(volume)
+
+    @property
+    def scalebar(self):
+        scalebar = ScaleBar(
+            self.dx,
+            units="A",
+            location="lower right",
+            length_fraction=0.2,
+            font_properties={"size": 20},
+        )
+        return scalebar

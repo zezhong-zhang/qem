@@ -23,10 +23,10 @@ Import Core Classes
    import matplotlib.pyplot as plt
    
    # Import the main analysis class
-   from qem.image_fitting import ImageFitting
+   from qem.fit.image_fitting import ImageFitting
    
    # Models are automatically selected, but you can import specific ones
-   from qem.model import GaussianModel, LorentzianModel, VoigtModel
+   from qem.fit.model import GaussianModel, LorentzianModel, VoigtModel
 
 Load and Analyze an Image
 ^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -39,7 +39,7 @@ Load and Analyze an Image
    image = np.random.random((size, size)) + 0.1
    
    # Add some Gaussian peaks to simulate atomic columns
-   from qem.model import gaussian_2d_single
+   from qem.fit.model import gaussian_2d_single
    x, y = np.meshgrid(np.arange(size), np.arange(size))
    
    # Add peaks at specific positions

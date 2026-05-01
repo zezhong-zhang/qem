@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
 
-from qem.image_fitting import ImageFitting
+from qem.fit.image_fitting import ImageFitting
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Quantitative Electron Microscopy (QEM)")

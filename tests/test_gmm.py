@@ -14,7 +14,7 @@ from unittest.mock import patch, MagicMock
 sys.path.insert(0, '.')
 
 # Import the modules we want to test
-from qem.gaussian_mixture_model import GaussianMixtureModel, GaussianComponents, safe_ln
+from qem.analysis.gaussian_mixture_model import GaussianMixtureModel, GaussianComponents, safe_ln
 
 class TestGaussianMixtureModel:
     """Test cases for GaussianMixtureModel class."""
@@ -357,7 +357,7 @@ def setup_matplotlib():
 
 def test_import_successful():
     """Test that all required modules can be imported."""
-    from qem.gaussian_mixture_model import GaussianMixtureModel, GaussianComponents, safe_ln
+    from qem.analysis.gaussian_mixture_model import GaussianMixtureModel, GaussianComponents, safe_ln
     assert GaussianMixtureModel is not None
     assert GaussianComponents is not None
     assert safe_ln is not None

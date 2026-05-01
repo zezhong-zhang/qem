@@ -4,7 +4,7 @@ import copy
 
 import numpy as np
 
-from qem.utils import q_space_array
+from qem.processing import q_space_array
 
 
 class aberration:

@@ -90,7 +90,7 @@ To verify your installation:
 .. code-block:: python
 
    import qem
-   from qem.backend_utils import detect_available_backends
+   from qem.utils.backend import detect_available_backends
    
    print(f"QEM version: {qem.__version__}")
    print(f"Available backends: {detect_available_backends()}")

@@ -45,7 +45,7 @@ Step 1: Import Libraries and Load Data
 
    import numpy as np
    import matplotlib.pyplot as plt
-   from qem.image_fitting import ImageFitting
+   from qem.fit.image_fitting import ImageFitting
    from qem import io
    
    # Load example STO data
@@ -273,7 +273,7 @@ Advanced Tips
 .. code-block:: python
 
    # Interactive peak selection (in Jupyter)
-   from qem.gui_classes import InteractivePlot
+   from qem.select import InteractivePlot
    
    interactive = InteractivePlot(image)
    manual_coordinates = interactive.get_coordinates()

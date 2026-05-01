@@ -49,7 +49,11 @@ examples/dev.ipynb
 examples/superlattice_adf.h5
 examples/crystal_analyzer.ipynb
 examples/CTO-SRO.ipynb
+examples/STOonSTO.ipynb
+
 
 # docs
 docs/build/
 build/
+.kiro/
+

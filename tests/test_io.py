@@ -7,16 +7,16 @@ import pytest
 import os
 from pathlib import Path
 
-from qem.io import read_legacyInputStatSTEM
+from qem.io import read_statstem
 
 
 class TestReadLegacyInputStatSTEM:
-    """Test the read_legacyInputStatSTEM function for legacy StatSTEM .mat file support."""
+    """Test the read_statstem function for legacy StatSTEM .mat file support."""
     
     def test_file_not_found(self):
         """Test that FileNotFoundError is raised for non-existent files."""
         with pytest.raises(FileNotFoundError, match="nonexistent.mat not found"):
-            read_legacyInputStatSTEM("nonexistent.mat")
+            read_statstem("nonexistent.mat")
     
     def test_read_real_benchmark_files(self):
         """Test reading actual StatSTEM .mat files from benchmark directory."""
@@ -33,7 +33,7 @@ class TestReadLegacyInputStatSTEM:
         for filename in test_files:
             file_path = benchmark_dir / filename
             if file_path.exists():
-                result = read_legacyInputStatSTEM(str(file_path))
+                result = read_statstem(str(file_path))
                 
                 # Verify basic structure
                 assert isinstance(result, dict)
@@ -86,7 +86,7 @@ class TestReadLegacyInputStatSTEM:
             pytest.skip("No .mat files found in benchmark directory")
         
         test_file = mat_files[0]
-        result = read_legacyInputStatSTEM(str(test_file))
+        result = read_statstem(str(test_file))
         
         # Validate structure
         assert isinstance(result, dict)
@@ -115,7 +115,7 @@ class TestReadLegacyInputStatSTEM:
             pytest.skip("No .mat files found in benchmark directory")
         
         test_file = test_files[0]
-        result = read_legacyInputStatSTEM(str(test_file))
+        result = read_statstem(str(test_file))
         
         # Verify structure expected by Benchmark class
         assert isinstance(result, dict)
