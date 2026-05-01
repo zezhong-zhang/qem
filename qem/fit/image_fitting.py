@@ -42,6 +42,7 @@ from qem.utils.params import (
     safe_deepcopy_params,
     safe_stop_gradient,
 )
+from qem.utils.backend import release_backend_memory
 from qem.utils.arrays import get_random_indices_in_batches
 from qem.visualization.geometry import remove_close_coordinates
 from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
@@ -1168,69 +1169,85 @@ class ImageFitting:
         return diff
 
     # fitting
-    def linear_estimator(self, params: dict = None, non_negative: bool = False,device='cpu') -> dict:
+    def linear_estimator(
+        self,
+        params: dict = None,
+        non_negative: bool = False,
+        device: str = 'cpu',
+        best_effort: bool = False,
+    ) -> dict:
         """
         Perform linear estimation of peak heights using least squares fitting.
-        
-        This method builds a design matrix from the current peak model and solves
-        a linear system to estimate optimal height scaling factors. The implementation
-        uses modular components for better maintainability and error handling.
-        
+
+        Builds a sparse design matrix from the current peak model and solves
+        a linear system to estimate optimal height scaling factors.
+
         Args:
-            params: Model parameters dictionary. If None, uses self.params
-            non_negative: Whether to enforce non-negative height constraints
-            
+            params: Model parameters dictionary. If ``None``, uses ``self.params``.
+            non_negative: Whether to enforce non-negative height constraints.
+            device: Compute device hint passed through to the solver.
+            best_effort: If ``True``, log and swallow exceptions and return the
+                input parameters unchanged. Defaults to ``False`` so callers
+                see real failures (parameter validation errors, numerical
+                breakdowns, OOM) instead of getting silently stale results.
+
         Returns:
-            Updated parameters dictionary with refined height values
-            
+            Updated parameters dictionary with refined height values, or the
+            original parameters when ``best_effort`` swallows a failure.
+
         Raises:
-            Exception: If parameter validation or solving fails
+            ParameterError: If ``params`` fails validation.
+            QEMError: For backend / memory / numerical solver failures
+                (when ``best_effort=False``).
         """
         # Initialize parameters if needed
         if params is None:
             if self.params is None:
                 self.init_params()
             params = self.params
-        
+
         operation_context = (
-            self.memory_monitor.monitor_operation("linear_estimator") 
+            self.memory_monitor.monitor_operation("linear_estimator")
             if self.memory_monitor else nullcontext()
         )
-        
+
+        def _run() -> dict:
+            validated_params = ParameterValidator.validate_params(params)
+
+            matrix_builder = DesignMatrixBuilder(self.model, self.nx, self.ny)
+            peak_local, global_x, global_y, mask = matrix_builder.build_local_peaks(
+                validated_params, self.same_width, self.atom_types
+            )
+
+            background_2d_for_matrix = None
+            if self.background_estimator.use_2d_background:
+                background_2d_for_matrix = self.background_estimator.get_background_for_linear_estimation()
+
+            design_matrix = matrix_builder.build_sparse_matrix(
+                peak_local, global_x, global_y, mask,
+                self.fit_background, self.num_coordinates,
+                self.x_grid, self.y_grid,
+                background_2d_for_matrix,
+            )
+            target = self._prepare_target_vector(validated_params)
+            solver = LinearSystemSolver()
+            solution = solver.solve_system(design_matrix, target, non_negative)
+            return self._process_solution(solution, validated_params)
+
         with operation_context:
+            if not best_effort:
+                # Default path: surface real failures to the caller.
+                return _run()
             try:
-                # Validate input parameters
-                validated_params = ParameterValidator.validate_params(params)
-                
-                # Build design matrix components
-                matrix_builder = DesignMatrixBuilder(self.model, self.nx, self.ny)
-                peak_local, global_x, global_y, mask = matrix_builder.build_local_peaks(
-                    validated_params, self.same_width, self.atom_types
-                )
-                
-                # Create sparse design matrix
-                background_2d_for_matrix = None
-                if self.background_estimator.use_2d_background:
-                    background_2d_for_matrix = self.background_estimator.get_background_for_linear_estimation()
-                
-                design_matrix = matrix_builder.build_sparse_matrix(
-                    peak_local, global_x, global_y, mask, 
-                    self.fit_background, self.num_coordinates, 
-                    self.x_grid, self.y_grid,
-                    background_2d_for_matrix
-                )
-                # Prepare target vector
-                target = self._prepare_target_vector(validated_params)
-                # Solve linear system with automatic memory-aware strategy selection
-                solver = LinearSystemSolver()
-                solution = solver.solve_system(design_matrix, target, non_negative)
-                
-                # Process solution
-                return self._process_solution(solution, validated_params)
-                
+                return _run()
             except Exception as e:
-                logging.error(f"Linear estimation failed: {str(e)}")
-                return params  # Return original parameters on failure
+                # Opt-in best-effort behaviour for resilient outer loops
+                # (e.g. the stochastic fitter that pre-conditions params).
+                logging.warning(
+                    "linear_estimator failed in best_effort mode; "
+                    "returning input parameters unchanged: %s", e,
+                )
+                return params
     
     def _prepare_target_vector(self, params: dict) -> np.ndarray:
         """
@@ -1535,7 +1552,10 @@ class ImageFitting:
             if self.memory_monitor else nullcontext()
         )
         
-        params = self.linear_estimator(params)
+        # Pre-condition heights with a least-squares pass. The stochastic
+        # fitter is robust to a no-op pre-conditioning, so swallow failures
+        # here rather than aborting the whole run.
+        params = self.linear_estimator(params, best_effort=True)
 
         with operation_context:
             for epoch in tqdm(range(num_epoch), desc="Training epochs", leave=False):
@@ -1564,8 +1584,7 @@ class ImageFitting:
                             del prediction_from_others
                             del height_tensor
                             del update_values
-                            import torch
-                            torch.cuda.empty_cache() 
+                            release_backend_memory()
                     else:
                         local_target = self.image_tensor
 
@@ -1589,9 +1608,8 @@ class ImageFitting:
                         **optimizer_kwargs
                     )
                     if self.backend == "torch":
-                            del local_target
-                            import torch
-                            torch.cuda.empty_cache()
+                        del local_target
+                        release_backend_memory()
                     params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, select_params)

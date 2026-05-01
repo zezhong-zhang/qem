@@ -54,6 +54,31 @@ def safe_convert_to_tensor(array, dtype="float32"):
 
 
 
+def release_backend_memory():
+    """
+    Best-effort release of cached device memory for the active Keras backend.
+
+    Safe to call from backend-agnostic code: it's a no-op when the active
+    backend is not torch, when torch isn't importable, or when no GPU is
+    available. Use this instead of calling ``torch.cuda.empty_cache()``
+    directly so that CPU/MPS/JAX/TF code paths don't crash.
+    """
+    try:
+        import keras
+        if keras.backend.backend() != "torch":
+            return
+    except Exception:
+        return
+
+    try:
+        import torch
+    except ImportError:
+        return
+
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
 def safe_deepcopy_params(params):
     """
     Safely deep copy a parameter dictionary containing tensors.

@@ -14,6 +14,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve, lsqr, cg
 
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
+from qem.utils.backend import release_backend_memory
 from qem.utils.config import get_config, get_linear_solver_numpy_dtype, create_linear_solver_array
 from qem.schema.exceptions import ParameterError, DataError, ValidationError
 
@@ -673,12 +674,11 @@ class DesignMatrixBuilder:
         if fit_background:
             bg_rows = keras.ops.reshape(y_grid * self.nx + x_grid, (-1,))
             rows_tensor = keras.ops.concatenate([rows_tensor, keras.ops.cast(bg_rows, "int32")])
-            
+
             del bg_rows
-            import torch
-            torch.cuda.empty_cache()
-            
-            cols_tensor = keras.ops.concatenate([cols_tensor, 
+            release_backend_memory()
+
+            cols_tensor = keras.ops.concatenate([cols_tensor,
                 keras.ops.full((self.nx * self.ny,), num_coordinates, dtype="int32")])
             
             if background_2d is not None:
@@ -694,12 +694,11 @@ class DesignMatrixBuilder:
 
         else:
             shape = (self.nx * self.ny, num_coordinates)
-        # here the cuda out of memory
         sparse_matrix = self._create_sparse_matrix(data_tensor, rows_tensor, cols_tensor, shape)
         del rows_tensor
         del cols_tensor
         del data_tensor
-        torch.cuda.empty_cache()
+        release_backend_memory()
         return sparse_matrix
     
     def _create_sparse_matrix(self, data_tensor, rows_tensor, cols_tensor, shape,device='cpu'):
@@ -718,11 +717,9 @@ class DesignMatrixBuilder:
                         logging.warning("MPS backend detected, falling back to scipy sparse matrix for full compatibility")
                         #Always use scipy for MPS to avoid any sparse operation issues
                         indices = torch.stack([rows_tensor, cols_tensor])
-                        # here the cuda out of memory
                         sparse_tensor = torch.sparse_coo_tensor(indices, data_tensor, size=shape).coalesce()
                         del indices
-                        import torch
-                        torch.cuda.empty_cache()
+                        release_backend_memory()
                         return sparse_tensor
                 except RuntimeError as e:
                     error_msg = str(e)

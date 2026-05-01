@@ -2,6 +2,11 @@
 QEM - Quantitative Electron Microscopy Analysis Package
 
 A comprehensive package for analyzing atomic-resolution electron microscopy images.
+
+The Streamlit GUI lives in :mod:`qem.app` and is intentionally **not** imported
+here, so ``import qem`` is safe in headless, library, and docs-build contexts.
+Launch the GUI with the ``qem-app`` console script (see :mod:`qem.cli`) or
+``streamlit run -m qem.app``.
 """
 
 __version__ = "0.1.0"
@@ -18,12 +23,9 @@ from . import optimizers
 from . import utils
 from . import schema
 
-# Main application
-from .app import *
-
 __all__ = [
-    'data',
-    'fit', 
+    'ImageFitting',
+    'fit',
     'analysis',
     'visualization',
     'processing',
@@ -31,4 +33,5 @@ __all__ = [
     'optimizers',
     'utils',
     'schema',
+    'io',
 ]

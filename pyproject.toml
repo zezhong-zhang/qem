@@ -1,0 +1,112 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qem"
+version = "0.1.0"
+description = "Quantitative Electron Microscopy: atomic-resolution STEM image quantification."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [
+    { name = "Zezhong Zhang", email = "zezhong.zhang@uantwerpen.be" },
+]
+keywords = ["stem", "electron-microscopy", "atomic-resolution", "image-fitting"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+
+# Core runtime dependencies. Anything that is only needed for the GUI,
+# notebook, deep-learning, or specialised IO paths lives in extras below
+# so that headless library use stays installable.
+dependencies = [
+    "numpy>=1.23",
+    "scipy>=1.10",
+    "matplotlib>=3.6",
+    "matplotlib-scalebar>=0.8",
+    "Pillow>=9.0",
+    "h5py>=3.0",
+    "tqdm>=4.60",
+    "scikit-image>=0.20",
+    "scikit-learn>=1.2",
+    "shapely>=2.0",
+    "numba>=0.57",
+    "ase>=3.22",
+    "keras>=3.0",
+    "matscipy>=1.0",
+    "python-dotenv>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/zezhong-zhang/qem"
+Issues = "https://github.com/zezhong-zhang/qem/issues"
+
+[project.optional-dependencies]
+# GUI / Streamlit app entry point. Heavy and optional.
+gui = [
+    "streamlit>=1.30",
+    "plotly>=5.18",
+    "imageio>=2.31",
+]
+# Specialised IO formats that pull in heavy science stacks.
+io = [
+    "hyperspy>=2.0",
+    "rosettasciio>=0.4",
+]
+# Notebook / Jupyter usage.
+notebook = [
+    "jupyter>=1.0",
+    "jupyterlab>=4.0",
+    "ipywidgets>=8.0",
+]
+# Computer vision / image utilities used by some processing paths.
+cv = [
+    "opencv-python>=4.7",
+]
+# Backend-specific extras. Users pick exactly one (or none for CPU-only NumPy).
+torch = ["torch>=2.0"]
+jax = ["jax>=0.4", "jaxlib>=0.4"]
+tensorflow = ["tensorflow>=2.13"]
+# Documentation toolchain.
+docs = [
+    "sphinx>=7.0",
+    "sphinx_rtd_theme>=2.0",
+    "myst-parser>=2.0",
+]
+# Developer toolchain (tests, lint, build).
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "pytest-benchmark>=4.0",
+    "build>=1.0",
+    "black>=24.0",
+    "ruff>=0.5",
+]
+# Convenience meta-extra: install everything optional.
+all = [
+    "qem[gui,io,notebook,cv,docs,dev]",
+]
+
+[project.scripts]
+qem-app = "qem.cli:launch_app"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qem*"]
+exclude = ["tests*", "examples*", "docs*", "gallery*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
