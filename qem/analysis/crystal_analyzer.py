@@ -1378,3 +1378,61 @@ class CrystalAnalyzer:
             font_properties={"size": 20},
         )
         return scalebar
+
+    def update_atoms_from_gmm(self, atom_count_estimates: dict):
+        """Update atomic columns with atoms based on GMM estimation.
+        
+        The Z-spacing is automatically determined from the existing supercell 
+        lattice structure created during the crystal mapping process.
+        
+        Args:
+            atom_count_estimates: Dictionary mapping element names to atom count arrays
+            
+        Returns:
+            Updated atomic_columns object with additional atoms
+        """
+        if self.atomic_columns is None:
+            raise ValueError("Please run get_atomic_columns() first to create atomic columns")
+            
+        # Update the atomic columns with GMM estimates (Z-spacing auto-determined)
+        updated_lattice, updated_lattice_ref = self.atomic_columns.update_atoms_from_gmm(
+            atom_count_estimates
+        )
+        
+        # Create new atomic columns object with updated lattices
+        ref = {
+            "origin": self.origin,
+            "vector_a": self.a_vector["perfect"],
+            "vector_b": self.b_vector["perfect"],
+        }
+        
+        from qem.analysis.atomic_column import AtomicColumns
+        self.atomic_columns = AtomicColumns(
+            updated_lattice, updated_lattice_ref, self.elements, 
+            self.atomic_columns.tol, self.dx, ref
+        )
+        
+        # Update peak positions and atom types based on new lattice
+        self.atom_types = self.atomic_columns.atom_types
+        self.peak_positions = self.atomic_columns.positions_pixel
+        
+        return self.atomic_columns
+        
+    def integrate_gmm_results(self, gmm_results: dict):
+        """Integrate GMM estimation results into the crystal analysis.
+        
+        This is a convenience method that extracts atom count estimates from
+        GMM results and updates the atomic structure accordingly.
+        
+        Args:
+            gmm_results: Results from ImageFitting.estimate_atom_counts_with_gmm()
+            
+        Returns:
+            Updated atomic_columns object
+        """
+        if 'atom_count_estimates' not in gmm_results:
+            raise ValueError("GMM results must contain 'atom_count_estimates' key")
+            
+        atom_count_estimates = gmm_results['atom_count_estimates']
+        
+        return self.update_atoms_from_gmm(atom_count_estimates)

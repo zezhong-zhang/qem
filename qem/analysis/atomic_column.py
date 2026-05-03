@@ -193,3 +193,165 @@ class AtomicColumns:
         epsilon_xy = 0.5*(atomic_strain_2d[:, 0, 1] + atomic_strain_2d[:, 1, 0])
         omega_xy = 0.5*(atomic_strain_2d[:, 0, 1] - atomic_strain_2d[:, 1, 0])
         return epsilon_xx, epsilon_yy, epsilon_xy, omega_xy
+
+    def update_atoms_from_gmm(self, atom_count_estimates: dict):
+        """Update atomic lattice with atoms based on GMM estimation.
+        
+        The Z-spacing is automatically determined from the existing lattice structure,
+        which was created from the unit cell supercell mapping.
+        
+        Args:
+            atom_count_estimates: Dictionary mapping element names to atom count arrays
+            
+        Returns:
+            Updated lattice and lattice_ref with additional atoms
+        """
+        if not atom_count_estimates:
+            return self.lattice, self.lattice_ref
+            
+        # Determine Z-spacing from existing lattice structure
+        z_spacing = self._determine_z_spacing_from_lattice()
+        
+        new_lattice = self.lattice.copy()
+        new_lattice_ref = self.lattice_ref.copy()
+        
+        # Get unique columns based on 2D positions
+        unique_positions_2d, unique_indices = np.unique(
+            self.lattice.positions[:, :2], axis=0, return_index=True
+        )
+        
+        atoms_to_add = []
+        atoms_to_add_ref = []
+        
+        for column_idx, unique_idx in enumerate(unique_indices):
+            # Get the original atom at this column
+            original_atom = self.lattice[unique_idx]
+            original_atom_ref = self.lattice_ref[unique_idx]
+            
+            # Get element symbol
+            element_symbol = original_atom.symbol
+            
+            # Check if we have GMM estimates for this element
+            if element_symbol not in atom_count_estimates:
+                continue
+                
+            # Get the estimated atom count for this column
+            estimated_count = int(atom_count_estimates[element_symbol][column_idx])
+            
+            # Add additional atoms if count > 1
+            if estimated_count > 1:
+                additional_atoms = estimated_count - 1
+                
+                # Calculate symmetric Z positions around the original position
+                original_z = original_atom.position[2]
+                z_positions = self._calculate_symmetric_z_positions(
+                    original_z, additional_atoms, z_spacing
+                )
+                
+                # Add atoms at calculated Z positions
+                for z_pos in z_positions:
+                    # Create new atom at same X,Y but different Z
+                    new_position = [
+                        original_atom.position[0],
+                        original_atom.position[1], 
+                        z_pos
+                    ]
+                    new_position_ref = [
+                        original_atom_ref.position[0],
+                        original_atom_ref.position[1],
+                        z_pos  # Use same Z for reference
+                    ]
+                    
+                    atoms_to_add.append((element_symbol, new_position))
+                    atoms_to_add_ref.append((element_symbol, new_position_ref))
+        
+        # Add all new atoms to the lattices
+        for symbol, position in atoms_to_add:
+            new_lattice.append(symbol)
+            new_lattice.positions[-1] = position
+            
+        for symbol, position in atoms_to_add_ref:
+            new_lattice_ref.append(symbol)
+            new_lattice_ref.positions[-1] = position
+            
+        # Update the lattice objects
+        self.lattice = new_lattice
+        self.lattice_ref = new_lattice_ref
+        
+        return new_lattice, new_lattice_ref
+    
+    def _determine_z_spacing_from_lattice(self):
+        """Determine appropriate Z-spacing from the existing lattice structure.
+        
+        This extracts the typical Z-spacing from the unit cell used to create
+        the supercell lattice.
+        
+        Returns:
+            float: Z-spacing in Angstroms
+        """
+        if len(self.lattice) == 0:
+            return 2.0  # Default fallback
+            
+        # Get all Z positions
+        z_positions = self.lattice.positions[:, 2]
+        
+        if len(np.unique(z_positions)) == 1:
+            # All atoms at same Z - use unit cell c-axis if available
+            if hasattr(self.lattice, 'cell') and self.lattice.cell is not None:
+                cell_matrix = self.lattice.cell
+                c_axis_length = np.linalg.norm(cell_matrix[2])
+                return c_axis_length if c_axis_length > 0 else 2.0
+            else:
+                return 2.0  # Default spacing
+        else:
+            # Multiple Z levels - calculate typical spacing
+            unique_z = np.unique(z_positions)
+            if len(unique_z) > 1:
+                z_differences = np.diff(np.sort(unique_z))
+                # Use the most common spacing
+                return np.median(z_differences)
+            else:
+                return 2.0
+    
+    def _calculate_symmetric_z_positions(self, center_z: float, num_atoms: int, spacing: float):
+        """Calculate symmetric Z positions around a center position.
+        
+        For atomic columns, atoms are typically placed symmetrically around the
+        original atom position to maintain structural stability.
+        
+        Args:
+            center_z: Center Z position
+            num_atoms: Number of additional atoms to place
+            spacing: Spacing between atoms (from unit cell)
+            
+        Returns:
+            List of Z positions symmetrically distributed around center
+        """
+        if num_atoms == 0:
+            return []
+        elif num_atoms == 1:
+            # Single atom: place it at a small offset above center
+            return [center_z + spacing * 0.5]
+        else:
+            # Multiple atoms distributed symmetrically
+            positions = []
+            
+            # Calculate spacing to distribute atoms evenly
+            if num_atoms % 2 == 0:
+                # Even number of atoms: place pairs symmetrically around center
+                half_atoms = num_atoms // 2
+                for i in range(1, half_atoms + 1):
+                    offset = i * spacing * 0.5  # Smaller offset for tighter packing
+                    positions.append(center_z + offset)
+                    positions.append(center_z - offset)
+            else:
+                # Odd number of atoms: place one at center, rest symmetrically
+                positions.append(center_z)
+                remaining = num_atoms - 1
+                half_remaining = remaining // 2
+                for i in range(1, half_remaining + 1):
+                    offset = i * spacing * 0.5
+                    positions.append(center_z + offset)
+                    positions.append(center_z - offset)
+                    
+            return positions

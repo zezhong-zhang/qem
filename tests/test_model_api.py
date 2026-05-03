@@ -5,7 +5,7 @@ try:
     from qem.utils.backend import setup_test_backend
     setup_test_backend()
     
-    from keras import ops
+    from qem.utils.torch_compat import ops
     from qem.fit.model import GaussianModel
     from qem.utils import safe_convert_to_numpy
     

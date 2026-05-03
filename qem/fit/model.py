@@ -5,7 +5,7 @@ from dotenv import load_dotenv
 from numba import jit as njit
 
 load_dotenv()
-import keras
+from qem.utils import torch_compat as keras
 
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 
@@ -66,8 +66,15 @@ class ImageModel(keras.Model):
             "width": keras.ops.convert_to_tensor(self.width),
             "background": keras.ops.convert_to_tensor(self.background),
             "same_width": self.input_params.get('same_width', False),
-            "atom_types": keras.ops.convert_to_tensor(self.input_params['atom_types']) 
         }
+        # atom_types may not be present in all models (e.g., convolution model)
+        if 'atom_types' in self.input_params:
+            dict_params['atom_types'] = keras.ops.convert_to_tensor(self.input_params['atom_types'])
+        else:
+            # Default to zeros if not present
+            dict_params['atom_types'] = keras.ops.convert_to_tensor(
+                keras.ops.zeros_like(self.height, dtype='int32')
+            )
         if hasattr(self, 'ratio'):
             dict_params['ratio'] = keras.ops.convert_to_tensor(self.ratio)
         return dict_params
@@ -104,6 +111,9 @@ class ImageModel(keras.Model):
         Returns:
             array: A 2D array representing the rendered image of peaks plus background.
         """
+        x_grid = keras.ops.convert_to_tensor(x_grid, dtype="float32")
+        y_grid = keras.ops.convert_to_tensor(y_grid, dtype="float32")
+
         # Squeeze batch dimension for processing, if it exists.
         has_batch_dim = len(x_grid.shape) > 2
         if has_batch_dim:
@@ -171,38 +181,15 @@ class ImageModel(keras.Model):
             global_x_safe = keras.ops.clip(global_x, 0, w - 1)
             global_y_safe = keras.ops.clip(global_y, 0, h - 1)
 
-            # 8. Scatter the masked peaks onto the final canvas using backend-specific operations.
+            # 8. Scatter the masked peaks onto the canvas with PyTorch's scatter_add.
             total = keras.ops.zeros_like(x_grid, dtype='float32')
-            backend = keras.backend.backend()
+            masked_peaks_flat = keras.ops.reshape(masked_peaks, [-1])
+            g_y_flat = keras.ops.cast(keras.ops.reshape(global_y_safe, [-1]), 'int64')
+            g_x_flat = keras.ops.cast(keras.ops.reshape(global_x_safe, [-1]), 'int64')
+            indices = g_y_flat * w + g_x_flat
 
-            if backend == 'jax':
-                # JAX's `at[...].add` is the idiomatic way to perform indexed updates.
-                indices = (
-                    keras.ops.cast(global_y_safe, 'int32'),
-                    keras.ops.cast(global_x_safe, 'int32')
-                )
-                total = total.at[indices].add(masked_peaks)
-            else: # TensorFlow and PyTorch logic
-                # Flatten arrays for scatter operations in TF and Torch.
-                masked_peaks_flat = keras.ops.reshape(masked_peaks, [-1])
-                
-                if backend == 'tensorflow':
-                    import tensorflow as tf
-                    # TF requires stacking the indices into a (N, 2) tensor.
-                    indices = keras.ops.stack([
-                        keras.ops.cast(keras.ops.reshape(global_y_safe, [-1]), 'int32'),
-                        keras.ops.cast(keras.ops.reshape(global_x_safe, [-1]), 'int32')
-                    ], axis=-1)
-                    total = tf.tensor_scatter_nd_add(total, indices, masked_peaks_flat)
-                
-                else: # 'torch'
-                    # PyTorch requires flat 1D indices.
-                    g_y_flat = keras.ops.cast(keras.ops.reshape(global_y_safe, [-1]), 'int64')
-                    g_x_flat = keras.ops.cast(keras.ops.reshape(global_x_safe, [-1]), 'int64')
-                    indices = g_y_flat * w + g_x_flat
-                    
-                    total_flat = keras.ops.reshape(total, (-1,))
-                    total = total_flat.scatter_add(0, indices, masked_peaks_flat).reshape(total.shape)
+            total_flat = keras.ops.reshape(total, (-1,))
+            total = total_flat.scatter_add(0, indices, masked_peaks_flat).reshape(total.shape)
 
             result = total + self.background
 
@@ -227,7 +214,7 @@ class GaussianModel(ImageModel):
         return height * 2 * np.pi * width**2 * self.dx**2
 
     def model_fn(self, x, y, pos_x, pos_y, height, width, *args):
-        """Core computation for Gaussian model using Keras."""
+        """Core computation for Gaussian model using PyTorch."""
         return height * keras.ops.exp(
             -(keras.ops.square(x - pos_x) + keras.ops.square(y - pos_y)) / (2 * keras.ops.square(width))
         )
@@ -245,7 +232,7 @@ class LorentzianModel(ImageModel):
         return height * np.pi * width**2 * self.dx**2
 
     def model_fn(self, x, y, pos_x, pos_y, height, width, *args):
-        """Core computation for Lorentzian model using Keras."""
+        """Core computation for Lorentzian model using PyTorch."""
         return height / (
             1 + (keras.ops.square(x - pos_x) + keras.ops.square(y - pos_y)) / keras.ops.square(width)
         )
@@ -312,7 +299,7 @@ class VoigtModel(ImageModel):
         return ratio * gaussian_vol + (1 - ratio) * lorentzian_vol
 
     def model_fn(self, x, y, pos_x, pos_y, height, width, ratio):
-        """Core computation for Voigt model using Keras."""
+        """Core computation for Voigt model using PyTorch."""
         # Convert width to sigma and gamma
         sigma = width
         gamma = width / keras.ops.sqrt(2 * keras.ops.log(2.0))
@@ -332,11 +319,7 @@ class GaussianKernel:
     """Gaussian kernel implementation."""
 
     def __init__(self):
-        """Initialize the kernel.
-        
-        Args:
-            backend (str, optional): Backend to use ('tensorflow', 'pytorch', or 'jax'). Defaults to 'jax'.
-        """
+        """Initialize the kernel."""
 
     def gaussian_kernel(self, sigma):
         """Creates a 2D Gaussian kernel with the given sigma."""

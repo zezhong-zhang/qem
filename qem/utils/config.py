@@ -62,15 +62,15 @@ class PrecisionConfig:
         return self.SUPPORTED_PRECISIONS[self.linear_solver_precision]
     
     @property
-    def keras_dtype(self) -> str:
-        """Get Keras dtype string for general calculations."""
+    def torch_dtype(self) -> str:
+        """Get PyTorch dtype string for general calculations."""
         return self.precision
-    
+
     @property
-    def linear_solver_keras_dtype(self) -> str:
-        """Get Keras dtype string for linear solver calculations."""
+    def linear_solver_torch_dtype(self) -> str:
+        """Get PyTorch dtype string for linear solver calculations."""
         return self.linear_solver_precision
-    
+
     def get_numpy_array(self, data, dtype: str = None) -> np.ndarray:
         """Create numpy array with configured precision."""
         if dtype is None:
@@ -94,15 +94,11 @@ class PrecisionConfig:
     def is_float64_supported(self) -> bool:
         """Check if float64 is supported by current backend."""
         try:
-            import keras
-            backend = keras.backend.backend()
-            
-            if backend == "torch":
-                import torch
-                # Check if we're on MPS (Apple Silicon)
-                if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-                    # MPS doesn't support float64
-                    return False
+            import torch
+            # Check if we're on MPS (Apple Silicon)
+            if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+                # MPS doesn't support float64
+                return False
             
             return True
         except ImportError:

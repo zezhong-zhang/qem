@@ -11,27 +11,6 @@ Launch the GUI with the ``qem-app`` console script (see :mod:`qem.cli`) or
 
 __version__ = "0.1.0"
 
-# Select a Keras backend before any qem submodule imports keras. Without this,
-# Keras 3 defaults to TensorFlow and a bare ``pip install qem`` install raises
-# ``ModuleNotFoundError`` on ``import qem``. We respect any user-set
-# ``KERAS_BACKEND`` and otherwise pick the first installed accelerated backend,
-# falling back to the always-available NumPy backend so the import never fails.
-def _autoselect_keras_backend() -> None:
-    import os
-    import importlib.util
-
-    if os.environ.get("KERAS_BACKEND"):
-        return
-    for name in ("torch", "jax", "tensorflow"):
-        if importlib.util.find_spec(name) is not None:
-            os.environ["KERAS_BACKEND"] = name
-            return
-    os.environ["KERAS_BACKEND"] = "numpy"
-
-
-_autoselect_keras_backend()
-del _autoselect_keras_backend
-
 # Core modules - import these directly as they're commonly used
 from . import io
 from . import fit

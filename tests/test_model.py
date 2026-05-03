@@ -6,7 +6,7 @@ import pytest
 from qem.utils.backend import setup_test_backend
 setup_test_backend()
 
-from keras import ops
+from qem.utils.torch_compat import ops
 
 # Import the model classes
 from qem.fit.model import (

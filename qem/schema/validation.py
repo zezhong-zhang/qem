@@ -7,7 +7,7 @@ import logging
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
-import keras
+from qem.utils import torch_compat as keras
 
 
 class ValidationError(ValueError):

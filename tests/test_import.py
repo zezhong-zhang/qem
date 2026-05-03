@@ -1,9 +1,4 @@
-"""Headless / no-backend import regression tests.
-
-The package promises that ``import qem`` succeeds in any environment, even
-when no Keras backend (torch / jax / tensorflow) is installed. These tests
-exercise the auto-selection logic in ``qem/__init__.py``.
-"""
+"""Import regression tests for the PyTorch-native package."""
 from __future__ import annotations
 
 import os
@@ -32,51 +27,50 @@ def _run(env_overrides: dict[str, str | None], script: str) -> subprocess.Comple
     )
 
 
-def test_import_qem_without_keras_backend_env():
-    """Bare ``import qem`` must succeed when KERAS_BACKEND is unset."""
+def test_import_qem_uses_pytorch_backend():
+    """Bare ``import qem`` must succeed and expose the torch backend."""
     result = _run(
-        {"KERAS_BACKEND": None},
+        {"QEM_BACKEND": None},
         """
         import qem  # noqa: F401
-        import keras
-        print(keras.backend.backend())
+        from qem.utils.backend import get_best_backend
+        print(get_best_backend())
         """,
     )
     assert result.returncode == 0, result.stderr
-    assert _last_line(result.stdout) in {"torch", "jax", "tensorflow", "numpy"}
+    assert _last_line(result.stdout) == "torch"
 
 
-def test_import_qem_falls_back_to_numpy_backend():
-    """When no accelerated backend is importable, fall back to numpy."""
+def test_import_qem_reports_missing_torch():
+    """When PyTorch is not importable, backend selection reports the dependency."""
     result = _run(
-        {"KERAS_BACKEND": None},
+        {"QEM_BACKEND": None},
         """
         import importlib.util
         _real = importlib.util.find_spec
         def _stub(name, *a, **k):
-            if name in ('torch', 'jax', 'tensorflow'):
+            if name == 'torch':
                 return None
             return _real(name, *a, **k)
         importlib.util.find_spec = _stub
 
-        import qem  # noqa: F401
-        import keras
-        print(keras.backend.backend())
+        from qem.utils.backend import detect_available_backends
+        print(detect_available_backends())
         """,
     )
     assert result.returncode == 0, result.stderr
-    assert _last_line(result.stdout) == "numpy"
+    assert _last_line(result.stdout) == "[]"
 
 
-def test_user_keras_backend_is_respected():
-    """A user-set ``KERAS_BACKEND`` must not be overridden."""
+def test_legacy_keras_backend_env_is_ignored():
+    """A legacy KERAS_BACKEND setting no longer affects QEM."""
     result = _run(
         {"KERAS_BACKEND": "numpy"},
         """
         import qem  # noqa: F401
-        import keras
-        print(keras.backend.backend())
+        from qem.utils.backend import get_best_backend
+        print(get_best_backend())
         """,
     )
     assert result.returncode == 0, result.stderr
-    assert _last_line(result.stdout) == "numpy"
+    assert _last_line(result.stdout) == "torch"

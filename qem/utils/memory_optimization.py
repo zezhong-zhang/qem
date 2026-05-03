@@ -40,11 +40,7 @@ from qem.utils.logging_config import get_logger
 # Make logging available for testing
 import logging
 
-# Make keras import optional
-try:
-    import keras
-except ImportError:
-    keras = None
+from qem.utils import torch_compat as keras
 
 class MemoryMonitor:
     """
@@ -443,13 +439,6 @@ class BatchMemoryOptimizer:
         with self.memory_monitor.monitor_operation(operation_name):
             # Force garbage collection before operation
             gc.collect()
-            if keras is not None and hasattr(keras, 'backend') and keras.backend.backend() == "tensorflow":
-                try:
-                    import tensorflow as tf
-                    tf.keras.backend.clear_session()
-                except:
-                    pass
-            
             try:
                 yield
             finally:
@@ -502,14 +491,10 @@ class BatchMemoryOptimizer:
         optimized_params = {}
         
         for key, value in params.items():
-            # Handle Keras tensors (only if keras is available)
-            if keras is not None and hasattr(value, '__class__') and 'KerasTensor' in str(type(value)):
+            # Handle PyTorch tensors via the torch_compat shim.
+            if hasattr(value, "detach") and hasattr(value, "shape"):
                 try:
-                    # Use stop_gradient to prevent unnecessary gradient computation
-                    if hasattr(keras.ops, 'stop_gradient'):
-                        optimized_params[key] = keras.ops.stop_gradient(value)
-                    else:
-                        optimized_params[key] = value
+                    optimized_params[key] = keras.ops.stop_gradient(value)
                 except Exception:
                     # Fallback if optimization fails
                     optimized_params[key] = value

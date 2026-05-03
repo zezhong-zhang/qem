@@ -283,9 +283,18 @@ class InteractivePlot:
 
     @property
     def scalebar(self):
+        # ``matplotlib_scalebar`` only accepts SI-derived length units. The
+        # rest of QEM uses 'A' (Ångström) as the canonical unit, so convert
+        # transparently here so the legacy ``units='A'`` path keeps working.
+        if self.units in ("A", "Å"):
+            scale = self.dx * 1e-10
+            units = "m"
+        else:
+            scale = self.dx
+            units = self.units
         scalebar = ScaleBar(
-            self.dx,
-            units=self.units,
+            scale,
+            units=units,
             location="lower right",
             dimension=self.dimension,
             box_alpha=0.5,
