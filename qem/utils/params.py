@@ -1,5 +1,5 @@
 """
-Backend-safe utilities and I/O functions for QEM.
+PyTorch-safe utilities and I/O functions for QEM.
 """
 
 import numpy as np
@@ -21,50 +21,34 @@ def export_params(params, filename):
 # Backend-safe tensor conversion utilities
 def safe_convert_to_numpy(tensor):
     """
-    Safely convert a Keras tensor to numpy array, handling different backends.
+    Safely convert a tensor to a numpy array.
     
     Args:
-        tensor: Keras tensor or numpy array
+        tensor: PyTorch tensor or numpy array
         
     Returns:
         numpy.ndarray: The tensor converted to numpy array
     """
-    import keras
-    from keras import ops
-    
     if isinstance(tensor, np.ndarray):
         return tensor
-    
-    backend = keras.backend.backend()
-    
-    if backend == "torch":
-        # PyTorch backend requires detach().cpu().numpy()
-        if hasattr(tensor, 'detach'):
-            return tensor.cpu().detach().numpy()
-        else:
-            # Fallback to ops.convert_to_numpy for non-gradient tensors
-            return ops.convert_to_numpy(tensor)
-    elif backend == "jax":
-        # JAX backend can use ops.convert_to_numpy directly
-        return ops.convert_to_numpy(tensor)
-    else:
-        # TensorFlow backend
-        return ops.convert_to_numpy(tensor)
+    if hasattr(tensor, "detach"):
+        return tensor.detach().cpu().numpy()
+    return np.asarray(tensor)
 
 
 def safe_convert_to_tensor(array, dtype="float32"):
     """
-    Safely convert a numpy array to Keras tensor.
+    Safely convert a numpy array to PyTorch tensor.
     
     Args:
         array: numpy array or tensor
         dtype: target dtype for the tensor
         
     Returns:
-        Keras tensor
+        PyTorch tensor
     """
-    from keras import ops
-    return ops.convert_to_tensor(array, dtype=dtype)
+    from qem.utils import torch_compat as keras
+    return keras.ops.convert_to_tensor(array, dtype=dtype)
 
 def safe_stop_gradient(tensor):
     """
@@ -76,8 +60,8 @@ def safe_stop_gradient(tensor):
     Returns:
         Tensor with gradients stopped, or original value if not a tensor
     """
-    import keras
-    from keras import ops
+    from qem.utils import torch_compat as keras
+    ops = keras.ops
     
     # If it's a numpy scalar or doesn't have gradients, return as-is
     if isinstance(tensor, (int, float, np.integer, np.floating)):
@@ -108,23 +92,16 @@ def safe_deepcopy_params(params):
     Returns:
         Dictionary with safely copied parameters
     """
-    import keras
-    from keras import ops
     import copy
-    
-    backend = keras.backend.backend()
+    from qem.utils import torch_compat as keras
+    ops = keras.ops
     copied_params = {}
     
     for key, value in params.items():
         if hasattr(value, 'shape'):  # It's a tensor
-            if backend == "torch":
-                # For PyTorch, detach and clone to create a leaf tensor
-                if hasattr(value, 'detach'):
-                    copied_params[key] = value.detach().clone()
-                else:
-                    copied_params[key] = ops.convert_to_tensor(safe_convert_to_numpy(value))
+            if hasattr(value, 'detach'):
+                copied_params[key] = value.detach().clone()
             else:
-                # For JAX and TensorFlow, convert to tensor
                 copied_params[key] = ops.convert_to_tensor(safe_convert_to_numpy(value))
         else:
             # For non-tensors, use regular deepcopy

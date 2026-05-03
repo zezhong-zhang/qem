@@ -15,7 +15,7 @@ try:
     PHOTUTILS_AVAILABLE = True
 except ImportError:
     PHOTUTILS_AVAILABLE = False
-    logging.warning("photutils not available. Using fallback background methods.")
+    logging.debug("photutils is not installed; falling back to median/polynomial background methods.")
 
 from qem.utils.params import safe_convert_to_numpy
 

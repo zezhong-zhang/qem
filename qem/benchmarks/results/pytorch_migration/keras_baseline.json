@@ -1,0 +1,78 @@
+{
+  "implementation": "keras",
+  "python": "3.13.2",
+  "platform": "macOS-26.3.1-arm64-arm-64bit-Mach-O",
+  "device_info": {
+    "torch_version": "2.10.0",
+    "cuda_available": false,
+    "cuda_device_count": 0,
+    "mps_available": true,
+    "qem_model_device_note": "QEM benchmark path uses CPU tensors; current torch_compat converts tensors to CPU."
+  },
+  "forward": [
+    {
+      "scenario": "small",
+      "image_size": 128,
+      "peaks": 100,
+      "median_seconds": 0.0032577920355834067,
+      "peaks_per_second": 30695.63646412806,
+      "mpixels_per_second": 5.029173078282741,
+      "rss_before_mb": 693.40625,
+      "rss_after_mb": 693.78125,
+      "peak_rss_mb": 693.78125,
+      "output_mean": 0.17234566807746887
+    },
+    {
+      "scenario": "medium",
+      "image_size": 256,
+      "peaks": 1000,
+      "median_seconds": 0.005548958026338369,
+      "peaks_per_second": 180214.01410020707,
+      "mpixels_per_second": 11.810505628071171,
+      "rss_before_mb": 703.375,
+      "rss_after_mb": 703.46875,
+      "peak_rss_mb": 703.46875,
+      "output_mean": 0.40199464559555054
+    },
+    {
+      "scenario": "large_peaks",
+      "image_size": 512,
+      "peaks": 2500,
+      "median_seconds": 0.004652583040297031,
+      "peaks_per_second": 537335.9225073379,
+      "mpixels_per_second": 56.343755227905426,
+      "rss_before_mb": 717.359375,
+      "rss_after_mb": 717.46875,
+      "peak_rss_mb": 717.5,
+      "output_mean": 0.25913557410240173
+    }
+  ],
+  "training": [
+    {
+      "scenario": "epoch_256x256_500peaks",
+      "epochs": 3,
+      "seconds": 0.10682187497150153,
+      "seconds_per_epoch": 0.035607291657167174,
+      "rss_before_mb": 727.46875,
+      "peak_rss_mb": 746.59375
+    }
+  ],
+  "end_to_end": [
+    {
+      "scenario": "pipeline_256x256_500peaks",
+      "seconds": 0.02964095800416544,
+      "epochs": 1
+    }
+  ],
+  "large_image": [
+    {
+      "scenario": "1024x1024_1200peaks",
+      "seconds": 0.05064537504222244,
+      "peaks": 1200,
+      "image_size": 1024,
+      "peak_rss_mb": 770.25,
+      "rss_delta_mb": 7.625,
+      "output_mean": 0.048798803240060806
+    }
+  ]
+}

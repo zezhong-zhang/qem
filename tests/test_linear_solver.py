@@ -5,7 +5,7 @@ Tests for the linear_solver module.
 import numpy as np
 import pytest
 from scipy.sparse import coo_matrix
-import keras
+from qem.utils import torch_compat as keras
 
 from qem.schema.exceptions import ParameterError, DataError, ValidationError
 from qem.fit.linear_solver import (
@@ -52,6 +52,21 @@ class TestParameterValidator:
             "pos_x": keras.ops.convert_to_tensor([1.0, 2.0]),
             "pos_y": keras.ops.convert_to_tensor([1.0]),  # Different length
             "height": keras.ops.convert_to_tensor([1.0, 1.0]),
+            "width": keras.ops.convert_to_tensor([1.0, 1.0]),
+        }
+
+        with pytest.raises(
+            ParameterError, match="pos_x, pos_y, and height must have same length"
+        ):
+            ParameterValidator.validate_params(params)
+
+    def test_height_length_mismatch_caught(self):
+        """Regression: pos_x == pos_y but height differs — chained comparison
+        used to silently accept this; the validator must reject it."""
+        params = {
+            "pos_x": keras.ops.convert_to_tensor([1.0, 2.0]),
+            "pos_y": keras.ops.convert_to_tensor([1.0, 2.0]),
+            "height": keras.ops.convert_to_tensor([1.0]),  # Different length
             "width": keras.ops.convert_to_tensor([1.0, 1.0]),
         }
 

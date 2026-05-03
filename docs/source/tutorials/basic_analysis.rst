@@ -261,10 +261,11 @@ Advanced Tips
 
 .. code-block:: python
 
-   # Use preprocessing for better peak detection
-   from qem.processing import butterworth_filter
-   
-   filtered_image = butterworth_filter(image, high_cutoff=0.8)
+   # Use a Butterworth window to suppress high-frequency noise before peak finding.
+   from qem.processing.signal import butterworth_window
+
+   window = butterworth_window(image.shape, cutoff_radius_ftr=0.4, order=4)
+   filtered_image = image * window
    fitter_filtered = ImageFitting(filtered_image, dx, "gaussian")
    coordinates_improved = fitter_filtered.find_peaks(min_distance=8)
 
@@ -273,8 +274,8 @@ Advanced Tips
 .. code-block:: python
 
    # Interactive peak selection (in Jupyter)
-   from qem.select import InteractivePlot
-   
+   from qem.visualization.select import InteractivePlot
+
    interactive = InteractivePlot(image)
    manual_coordinates = interactive.get_coordinates()
 

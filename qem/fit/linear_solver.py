@@ -4,38 +4,36 @@ Provides memory-efficient sparse linear system solving with automatic strategy s
 """
 
 import logging
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple, Union, Protocol
+from typing import Dict, Optional, Tuple, Protocol
 
 import numpy as np
-import keras
+from qem.utils import torch_compat as keras
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve, lsqr, cg
 
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 from qem.utils.backend import release_backend_memory
-from qem.utils.config import get_config, get_linear_solver_numpy_dtype, create_linear_solver_array
-from qem.schema.exceptions import ParameterError, DataError, ValidationError
+from qem.utils.config import get_config
+from qem.schema.exceptions import ParameterError, DataError
 
 
 @dataclass
 class MemoryInfo:
-    """Memory information for a computing backend."""
+    """Memory information for the active compute device."""
     total_mb: float
     allocated_mb: float
     free_mb: float
-    backend: str
 
 
 class BackendSolver(Protocol):
-    """Protocol for backend-specific sparse linear solvers."""
-    
+    """Protocol for sparse linear solvers."""
+
     def solve_direct(self, A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
         """Solve using direct method (computes AtA)."""
         ...
-    
-    def solve_iterative(self, A, b: np.ndarray, non_negative: bool = False, 
+
+    def solve_iterative(self, A, b: np.ndarray, non_negative: bool = False,
                        max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
         """Solve using iterative method (avoids AtA computation)."""
         ...
@@ -218,125 +216,6 @@ class TorchSolver:
             return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
 
 
-class TensorFlowSolver:
-    """TensorFlow-specific sparse linear solver."""
-    
-    @staticmethod
-    def solve_direct(A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
-        import tensorflow as tf
-        if not isinstance(b, tf.Tensor):
-            b = tf.convert_to_tensor(b, dtype=A.dtype)
-        
-        AtA = tf.sparse.sparse_dense_matmul(tf.sparse.transpose(A), tf.sparse.to_dense(A))
-        Atb = tf.sparse.sparse_dense_matmul(tf.sparse.transpose(A), tf.expand_dims(b, 1))
-        Atb = tf.squeeze(Atb, axis=1)
-        
-        reg = 1e-8 * tf.linalg.trace(AtA) / tf.cast(tf.shape(AtA)[0], AtA.dtype)
-        AtA += reg * tf.eye(tf.shape(AtA)[0], dtype=AtA.dtype)
-        
-        try:
-            solution = tf.linalg.solve(AtA, Atb)
-        except Exception:
-            solution = tf.linalg.lstsq(AtA, Atb)
-        
-        if non_negative:
-            solution = tf.maximum(solution, 0.0)
-        return solution.numpy()
-    
-    @staticmethod
-    def solve_iterative(A, b: np.ndarray, non_negative: bool = False, 
-                       max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
-        import tensorflow as tf
-        if not isinstance(b, tf.Tensor):
-            b = tf.convert_to_tensor(b, dtype=A.dtype)
-        
-        x = tf.Variable(tf.zeros([A.dense_shape[1]], dtype=A.dtype))
-        r = tf.sparse.sparse_dense_matmul(tf.sparse.transpose(A), tf.expand_dims(b, 1))
-        r = tf.squeeze(r, axis=1)
-        p = tf.Variable(r)
-        rsold = tf.reduce_sum(r * r)
-        
-        for i in range(max_iter):
-            Ap = tf.sparse.sparse_dense_matmul(A, tf.expand_dims(p, 1))
-            AtAp = tf.sparse.sparse_dense_matmul(tf.sparse.transpose(A), Ap)
-            AtAp = tf.squeeze(AtAp, axis=1)
-            
-            alpha = rsold / tf.reduce_sum(p * AtAp)
-            x.assign_add(alpha * p)
-            r.assign_sub(alpha * AtAp)
-            rsnew = tf.reduce_sum(r * r)
-            
-            if tf.sqrt(rsnew) < tol:
-                break
-            
-            p.assign(r + (rsnew / rsold) * p)
-            rsold = rsnew
-        
-        if non_negative:
-            x.assign(tf.maximum(x, 0.0))
-        return x.numpy()
-
-
-class JAXSolver:
-    """JAX-specific sparse linear solver."""
-    
-    @staticmethod
-    def solve_direct(A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
-        import jax.numpy as jnp
-        if not isinstance(b, jnp.ndarray):
-            b = jnp.array(b)
-        
-        AtA = (A.T @ A).todense()
-        Atb = A.T @ b
-        
-        reg = 1e-8 * jnp.trace(AtA) / AtA.shape[0]
-        AtA += reg * jnp.eye(AtA.shape[0])
-        
-        try:
-            solution = jnp.linalg.solve(AtA, Atb)
-        except Exception:
-            solution = jnp.linalg.lstsq(AtA, Atb)[0]
-        
-        if non_negative:
-            solution = jnp.maximum(solution, 0.0)
-        return np.array(solution)
-    
-    @staticmethod
-    def solve_iterative(A, b: np.ndarray, non_negative: bool = False, 
-                       max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
-        import jax.numpy as jnp
-        from jax import jit
-        
-        if not isinstance(b, jnp.ndarray):
-            b = jnp.array(b)
-        
-        @jit
-        def cg_step(x, r, p, rsold):
-            Ap = A @ p
-            AtAp = A.T @ Ap
-            alpha = rsold / jnp.dot(p, AtAp)
-            x_new = x + alpha * p
-            r_new = r - alpha * AtAp
-            rsnew = jnp.dot(r_new, r_new)
-            beta = rsnew / rsold
-            p_new = r_new + beta * p
-            return x_new, r_new, p_new, rsnew
-        
-        x = jnp.zeros(A.shape[1])
-        r = A.T @ b
-        p = r
-        rsold = jnp.dot(r, r)
-        
-        for i in range(max_iter):
-            x, r, p, rsold = cg_step(x, r, p, rsold)
-            if jnp.sqrt(rsold) < tol:
-                break
-        
-        if non_negative:
-            x = jnp.maximum(x, 0.0)
-        return np.array(x)
-
-
 class SciPySolver:
     """SciPy-specific sparse linear solver."""
     
@@ -405,36 +284,24 @@ class SciPySolver:
 
 class LinearSystemSolver:
     """
-    Memory-aware sparse linear system solver with automatic backend detection.
-    
-    This class provides a unified interface for solving sparse linear systems
-    across different backends (PyTorch, TensorFlow, JAX, SciPy) with automatic
-    memory management and strategy selection.
+    Memory-aware sparse linear system solver for the PyTorch backend.
+
+    Uses ``TorchSolver`` for native dense/sparse paths and falls back to
+    ``SciPySolver`` whenever PyTorch reports a memory or device-compatibility
+    error.
     """
-    
-    # Backend-specific thresholds for memory usage (fraction of available memory)
-    MEMORY_THRESHOLDS = {
-        'torch': 0.4,      # 40% of available memory
-        'tensorflow': 0.25, # 25% (more conservative)
-        'jax': 0.2,        # 20% (most conservative)  
-        'numpy': 0.5       # 50% for CPU
-    }
-    
-    # Backend solver registry
-    SOLVERS = {
-        'torch': TorchSolver,
-        'tensorflow': TensorFlowSolver,
-        'jax': JAXSolver,
-        'numpy': SciPySolver
-    }
-    
+
+    # Fraction of free memory we are willing to spend on AtA before falling
+    # back to the iterative solver. CUDA memory accounting is reliable, CPU
+    # estimates are conservative.
+    DIRECT_SOLVER_MEMORY_FRACTION = 0.4
+
     def __init__(self):
-        self.backend = keras.backend.backend()
-        self.solver = self.SOLVERS.get(self.backend, SciPySolver)
-    
+        self.solver = TorchSolver
+
     def get_memory_info(self, device=None) -> MemoryInfo:
-        """Get available memory information for the current backend."""
-        if self.backend == "torch" and device is not None:
+        """Get available memory information for the active device."""
+        if device is not None:
             import torch
             if device.type == 'cuda':
                 try:
@@ -445,37 +312,34 @@ class LinearSystemSolver:
                         total_mb=total / (1024 * 1024),
                         allocated_mb=allocated / (1024 * 1024),
                         free_mb=(total - reserved) / (1024 * 1024),
-                        backend=self.backend
                     )
                 except Exception:
                     pass
-        
-        # Conservative fallbacks
-        return MemoryInfo(
-            total_mb=4000, allocated_mb=1000, free_mb=3000, backend=self.backend
-        )
-    
+
+        # Conservative CPU/MPS fallback.
+        return MemoryInfo(total_mb=4000, allocated_mb=1000, free_mb=3000)
+
     def choose_strategy(self, n_cols: int, device=None) -> tuple[str, MemoryInfo]:
         """
         Choose optimal solving strategy based on problem size and available memory.
-        
+
         Args:
             n_cols: Number of columns in the design matrix
             device: Computing device (for GPU memory detection)
-            
+
         Returns:
             Tuple of (strategy, memory_info) where strategy is 'direct' or 'iterative'
         """
         ata_memory_mb = (n_cols * n_cols * 4) / (1024 * 1024)  # float32
         memory_info = self.get_memory_info(device)
-        
-        threshold = self.MEMORY_THRESHOLDS.get(self.backend, 0.3)
-        
+
+        threshold = self.DIRECT_SOLVER_MEMORY_FRACTION
+
         # Be more conservative if we're close to memory limits
         if memory_info.free_mb < 1000:  # Less than 1GB free
             threshold *= 0.5  # Use only half the normal threshold
             logging.warning(f"Low memory detected ({memory_info.free_mb:.1f}MB free), using conservative threshold")
-        
+
         max_memory = memory_info.free_mb * threshold
         
         # Force iterative solver for very large problems or low memory
@@ -614,7 +478,6 @@ class DesignMatrixBuilder:
         self.model = model
         self.nx = nx
         self.ny = ny
-        self.backend = keras.backend.backend()
     
     def build_local_peaks(self, params: Dict, same_width: bool, atom_types: np.ndarray) -> Tuple:
         """Build local peak representations."""
@@ -701,50 +564,25 @@ class DesignMatrixBuilder:
         release_backend_memory()
         return sparse_matrix
     
-    def _create_sparse_matrix(self, data_tensor, rows_tensor, cols_tensor, shape,device='cpu'):
-        """Create sparse matrix in the appropriate backend format."""
-        if self.backend == "torch":
-            import torch
-            # Check if we're on MPS device - always fallback to scipy for MPS
-            if device =='cpu':
-                return coo_matrix((safe_convert_to_numpy(data_tensor),
-                                (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
-                                shape=shape)
-            else:
-                try:
-                    device = getattr(data_tensor, 'device', torch.device('cpu'))
-                    if hasattr(torch.backends, 'mps') and (str(device).startswith('mps') or torch.backends.mps.is_available()):
-                        logging.warning("MPS backend detected, falling back to scipy sparse matrix for full compatibility")
-                        #Always use scipy for MPS to avoid any sparse operation issues
-                        indices = torch.stack([rows_tensor, cols_tensor])
-                        sparse_tensor = torch.sparse_coo_tensor(indices, data_tensor, size=shape).coalesce()
-                        del indices
-                        release_backend_memory()
-                        return sparse_tensor
-                except RuntimeError as e:
-                    error_msg = str(e)
-                    if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS","CUDA out of memory"]):
-                        logging.warning(f"PyTorch sparse tensor creation failed: {e}")
-                        logging.info("Falling back to scipy sparse matrix")
-                        # Fallback to scipy sparse matrix
-                        return coo_matrix((safe_convert_to_numpy(data_tensor),
-                                        (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
-                                        shape=shape)
-                    else:
-                        raise
-                    
-        elif self.backend == "tensorflow":
-            import tensorflow as tf
-            indices = tf.stack([rows_tensor, cols_tensor], axis=1)
-            return tf.sparse.reorder(tf.sparse.SparseTensor(indices, data_tensor, dense_shape=shape))
-        elif self.backend == "jax":
-            import jax.numpy as jnp
-            from jax.experimental import sparse as jsparse
-            return jsparse.BCOO((data_tensor, jnp.stack([rows_tensor, cols_tensor])), shape=shape)
-        else:
-            return coo_matrix((safe_convert_to_numpy(data_tensor),
-                             (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor))),
-                            shape=shape)
+    def _create_sparse_matrix(self, data_tensor, rows_tensor, cols_tensor, shape, device: str = 'cpu'):
+        """Build a SciPy COO design matrix from PyTorch tensors.
+
+        We always materialise design matrices on CPU as ``scipy.sparse.coo_matrix``
+        because the downstream solvers (``SciPySolver`` and the SciPy fallback in
+        ``TorchSolver``) operate on SciPy matrices, and PyTorch sparse tensors on
+        MPS/CUDA do not support all the operations we need.
+        """
+        if device != 'cpu':
+            logging.debug(
+                "DesignMatrixBuilder: forcing CPU/SciPy sparse matrix (requested device=%s)", device
+            )
+        return coo_matrix(
+            (
+                safe_convert_to_numpy(data_tensor),
+                (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor)),
+            ),
+            shape=shape,
+        )
 
 
 class ParameterValidator:
@@ -763,8 +601,13 @@ class ParameterValidator:
         
         # Validate shapes and values
         pos_x, pos_y, height = params["pos_x"], params["pos_y"], params["height"]
-        
-        if keras.ops.shape(pos_x)[0] != keras.ops.shape(pos_y)[0] != keras.ops.shape(height)[0]:
+
+        lengths = {
+            keras.ops.shape(pos_x)[0],
+            keras.ops.shape(pos_y)[0],
+            keras.ops.shape(height)[0],
+        }
+        if len(lengths) != 1:
             raise ParameterError("pos_x, pos_y, and height must have same length")
         
         # Check for invalid values

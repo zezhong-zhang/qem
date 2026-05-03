@@ -45,7 +45,8 @@ Load and Analyze an Image
    # Add peaks at specific positions
    peaks = [(25, 25), (75, 25), (50, 75)]
    for px, py in peaks:
-       image += gaussian_2d_single((x, y), px, py, 1.0, 2.0)
+       # Args: xy meshgrid, pos_x, pos_y, height, width, background
+       image += gaussian_2d_single((x, y), px, py, 1.0, 2.0, 0.0).reshape(size, size)
 
 Initialize Image Fitting
 ^^^^^^^^^^^^^^^^^^^^^^^^^

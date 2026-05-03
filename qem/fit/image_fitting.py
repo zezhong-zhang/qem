@@ -64,7 +64,7 @@ from qem.utils.memory_optimization import (
 )
 
 from qem.optimizers.lbfgs import LBFGSOptimizer
-import keras
+from qem.utils import torch_compat as keras
 import h5py
 
 # Only configure logging if not already configured
@@ -134,7 +134,6 @@ class ImageFitting:
         self.pbc = pbc
         self.fit_background = fit_background
         self.monitor_memory = monitor_memory
-        self.backend = keras.backend.backend()
         
         # Initialize memory monitoring
         if self.monitor_memory:
@@ -1152,10 +1151,7 @@ class ImageFitting:
             The computed loss value.
         """
         diff = y_true - y_pred
-        if keras.backend.backend() == "torch":
-            window = keras.ops.convert_to_tensor(self.window, dtype="float32")
-        else:
-            window = self.window
+        window = keras.ops.convert_to_tensor(self.window, dtype="float32")
         diff = keras.ops.multiply(diff, window)
         mse = keras.ops.sqrt(keras.ops.mean(keras.ops.square(diff)))
         # l1 = keras.ops.mean(keras.ops.abs(diff))
@@ -1378,15 +1374,13 @@ class ImageFitting:
         if not model.built:
             model.build()
 
-        print(f"Using {optimizer} optimizer for fitting.")
-        # Backend-specific input preparation
-        if self.backend == "torch":
-            image_tensor = keras.ops.expand_dims(image_tensor, 0)
-            x_grid = keras.ops.expand_dims(self.x_grid, 0)
-            y_grid = keras.ops.expand_dims(self.y_grid, 0)
-            model_inputs = [x_grid, y_grid]
-        else:
-            model_inputs = [self.x_grid, self.y_grid]
+        if verbose:
+            print(f"Using {optimizer} optimizer for fitting.")
+        # PyTorch expects a leading batch dimension on inputs.
+        image_tensor = keras.ops.expand_dims(image_tensor, 0)
+        x_grid = keras.ops.expand_dims(self.x_grid, 0)
+        y_grid = keras.ops.expand_dims(self.y_grid, 0)
+        model_inputs = [x_grid, y_grid]
         
         operation_context = (
             self.memory_monitor.monitor_operation("optimize") 
@@ -1396,9 +1390,6 @@ class ImageFitting:
         with operation_context:
             # Choose optimizer based on type
             if optimizer.lower() == "lbfgs":
-                # Try L-BFGS with PyTorch, fall back to AdamW if not available
-                assert (self.backend == "torch", "L-BFGS requires PyTorch backend")
-                # import torch.nn.functional as F
 
                 lbfgs_optimizer = LBFGSOptimizer(
                     learning_rate=step_size,
@@ -1568,8 +1559,9 @@ class ImageFitting:
                         # in cuda
                         params_without_batch = safe_deepcopy_params(params)
                         height_tensor = params_without_batch['height']
-                        update_indices = keras.ops.expand_dims(batch_indices, axis=-1)
-                        update_values = keras.ops.zeros(keras.ops.shape(batch_indices))
+                        batch_indices_tensor = keras.ops.convert_to_tensor(batch_indices, dtype="int64")
+                        update_indices = keras.ops.expand_dims(batch_indices_tensor, axis=-1)
+                        update_values = keras.ops.zeros(keras.ops.shape(batch_indices_tensor))
                         params_without_batch['height'] = keras.ops.scatter_update(
                             height_tensor, update_indices, update_values)
                         params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
@@ -1579,12 +1571,11 @@ class ImageFitting:
                         prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
                         local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
 
-                        if self.backend == "torch":
-                            del params_without_batch
-                            del prediction_from_others
-                            del height_tensor
-                            del update_values
-                            release_backend_memory()
+                        del params_without_batch
+                        del prediction_from_others
+                        del height_tensor
+                        del update_values
+                        release_backend_memory()
                     else:
                         local_target = self.image_tensor
 
@@ -1607,9 +1598,8 @@ class ImageFitting:
                         verbose=verbose,
                         **optimizer_kwargs
                     )
-                    if self.backend == "torch":
-                        del local_target
-                        release_backend_memory()
+                    del local_target
+                    release_backend_memory()
                     params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, select_params)
@@ -1766,20 +1756,11 @@ class ImageFitting:
             }
             return optimized_param, index
 
-# Parallel execution (using jax.vmap or plain Python for now)
         converged = False
         pre_params = safe_deepcopy_params(self.params)
         current_params = safe_deepcopy_params(self.params)
-        if keras.backend.backend() == "jax":
-            # conver the params to numpy array
-            current_params = {
-                key: safe_convert_to_numpy(value)
-                for key, value in current_params.items()
-            }
-            pre_params = {
-                key: safe_convert_to_numpy(value) for key, value in pre_params.items()
-            }
-        
+
+
         operation_context = (
             self.memory_monitor.monitor_operation("fit_voronoi") 
             if self.memory_monitor else nullcontext()
@@ -1948,8 +1929,8 @@ class ImageFitting:
             else:
                 # --- Logic for per-atom parameters ---
                 # This part uses the robust scatter_update function.
-                update_indices = np.where(mask)[0]
-                
+                update_indices = keras.ops.convert_to_tensor(np.where(mask)[0], dtype="int64")
+
                 params[key] = keras.ops.scatter_update(
                     params[key],
                     keras.ops.expand_dims(update_indices, axis=-1),
@@ -2962,9 +2943,12 @@ class ImageFitting:
 
     @property
     def scalebar(self):
+        from qem.utils.scalebar import to_scalebar_units
+
+        scale, units = to_scalebar_units(self.dx, self.units)
         scalebar = ScaleBar(
-            self.dx,
-            units="A",
+            scale,
+            units=units,
             location="lower right",
             length_fraction=0.2,
             font_properties={"size": 20},

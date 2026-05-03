@@ -1,7 +1,5 @@
-import jax
-import jax.numpy as jnp
-import jax.random as random
 import numpy as np
+from scipy.special import factorial
 
 
 def add_poisson_noise(image, key_id: int = 0):
@@ -15,9 +13,8 @@ def add_poisson_noise(image, key_id: int = 0):
     Returns:
     - noisy_image: The image with Poisson noise applied.
     """
-    key = random.PRNGKey(key_id)
-    noisy_image = random.poisson(key, image)
-    return noisy_image
+    rng = np.random.default_rng(key_id)
+    return rng.poisson(image)
 
 
 def compute_fim(model_func, params):
@@ -45,7 +42,8 @@ def compute_fim(model_func, params):
     for i in range(num_params):
         # small perturb of the parameter
         delta = 1e-6
-        params_perturb = params.at[i].set(params[i] + delta)
+        params_perturb = np.array(params, copy=True)
+        params_perturb[i] = params_perturb[i] + delta
         grad = (model_func(params_perturb) - model_func_vals) / delta
         grads_list.append(grad)
     grads = np.array(grads_list)
@@ -95,11 +93,11 @@ def joint_probability_2d(observations, params, model_func):
     # Compute the individual probabilities for each pixel
     individual_probs = (
         (lambda_k**observations)
-        * jnp.exp(-lambda_k)
-        / jax.scipy.special.factorial(observations)
+        * np.exp(-lambda_k)
+        / factorial(observations)
     )
 
     # Compute the joint probability by taking the product of all pixel probabilities
-    joint_prob = jnp.prod(individual_probs)
+    joint_prob = np.prod(individual_probs)
 
     return joint_prob

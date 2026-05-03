@@ -7,8 +7,8 @@ import pytest
 from qem.utils.backend import setup_test_backend
 backend = setup_test_backend()
 
-from keras import ops
-import keras
+from qem.utils.torch_compat import ops
+from qem.utils import torch_compat as keras
 
 from qem.fit.image_fitting import ImageFitting
 from qem.fit.model import GaussianModel, LorentzianModel, VoigtModel

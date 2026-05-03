@@ -6,8 +6,8 @@ import pytest
 from qem.utils.backend import setup_test_backend, detect_available_backends
 setup_test_backend()
 
-import keras
-from keras import ops
+from qem.utils import torch_compat as keras
+from qem.utils.torch_compat import ops
 
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor, safe_deepcopy_params
 
@@ -105,6 +105,40 @@ def test_backend_compatibility():
     
     # Restore original backend
     configure_backend(original_backend, force=True)
+
+
+@pytest.mark.parametrize(
+    "dtype_input, expected_torch_dtype_attr",
+    [
+        ("bool", "bool"),
+        (bool, "bool"),
+        (np.bool_, "bool"),
+        (np.dtype("bool"), "bool"),
+        ("int64", "int64"),
+        (np.int32, "int32"),
+        ("float64", "float64"),
+    ],
+)
+def test_torch_compat_dtype_translation(dtype_input, expected_torch_dtype_attr):
+    """torch_compat must translate Python/NumPy dtype identifiers, including
+    Python ``bool`` and ``np.bool_`` (regression for HYP-27 review item 4)."""
+    import torch
+
+    from qem.utils.torch_compat import _dtype
+
+    expected = getattr(torch, expected_torch_dtype_attr)
+    assert _dtype(dtype_input) is expected
+
+
+def test_torch_compat_ones_dtype_bool_returns_bool_tensor():
+    """``ops.ones(..., dtype=bool)`` must return a torch.bool tensor."""
+    import torch
+
+    tensor = ops.ones((3,), dtype=bool)
+    assert tensor.dtype == torch.bool
+
+    tensor_str = ops.ones((3,), dtype="bool")
+    assert tensor_str.dtype == torch.bool
 
 
 def test_gradient_handling():

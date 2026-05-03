@@ -64,6 +64,78 @@ class aberration:
             )
 
 
+class Aberration(aberration):
+    """Compatibility wrapper accepting both compact and full aberration args."""
+
+    def __init__(self, *args):
+        if len(args) == 4:
+            amplitude, angle, n, m = args
+            super().__init__("", "", "", amplitude, angle, n, m)
+        else:
+            super().__init__(*args)
+
+
+class Probe:
+    """Small probe wrapper used by CTF helpers."""
+
+    def __init__(
+        self,
+        eV,
+        aperture=20.0,
+        df=0.0,
+        aberrations=None,
+        aperture_units="mrad",
+        Cc=None,
+        deltaE=None,
+        df_spread=None,
+        source_size=None,
+    ):
+        self.eV = eV
+        self.aperture = aperture
+        self.df = df
+        self.aberrations = aberrations or []
+        self.aperture_units = aperture_units
+        self.Cc = Cc
+        self.deltaE = deltaE
+        self.df_spread = df_spread
+        self.source_size = source_size
+        self.lam = 1.0 / wavev(eV)
+
+    def chi(self, q, qphi):
+        return chi(q, qphi, self.lam, self.df, self.aberrations)
+
+    def partial_coherence_envelope(self, q_mag):
+        return self.temporal_coherence_envelope(q_mag) * self.spatial_coherence_envelope(q_mag)
+
+    def temporal_coherence_envelope(self, q_mag):
+        q_mag = np.asarray(q_mag, dtype=float)
+        if self.df_spread is not None:
+            df_spread = self.df_spread
+        elif self.Cc is not None and self.deltaE is not None:
+            df_spread = self.Cc * self.deltaE / self.eV
+        else:
+            return np.ones_like(q_mag, dtype=float)
+        return np.exp(-0.5 * (np.pi * self.lam * df_spread * q_mag**2) ** 2)
+
+    def spatial_coherence_envelope(self, q_mag):
+        q_mag = np.asarray(q_mag, dtype=float)
+        if self.source_size is None:
+            return np.ones_like(q_mag, dtype=float)
+        sigma = self.source_size
+        return np.exp(-0.5 * (q_mag * sigma) ** 2)
+
+    def make_ctf(self, pix_dim, real_dim):
+        return make_contrast_transfer_function(
+            pix_dim,
+            real_dim,
+            self.eV,
+            self.aperture,
+            df=self.df,
+            aberrations=self.aberrations,
+            app_units=self.aperture_units,
+        )
+
+
 def depth_of_field(eV, alpha):
     """
     Calculate the probe depth of field (z-resolution) for a probe.

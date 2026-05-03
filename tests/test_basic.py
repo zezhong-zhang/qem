@@ -6,7 +6,7 @@ import pytest
 from qem.utils.backend import setup_test_backend
 backend = setup_test_backend()
 
-from keras import ops
+from qem.utils.torch_compat import ops
 from qem.fit.model import GaussianModel
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 from qem.fit.image_fitting import ImageFitting
@@ -124,20 +124,6 @@ def test_pytorch_specific():
     result = safe_convert_to_numpy(tensor)
     np.testing.assert_array_almost_equal(result, [1.0, 2.0, 3.0])
 
-
-@pytest.mark.skipif(backend != 'jax', reason="JAX-specific test")
-def test_jax_specific():
-    """Test JAX-specific functionality."""
-    import jax.numpy as jnp
-    
-    # Test JAX array creation
-    array = jnp.array([1.0, 2.0, 3.0])
-    
-    # Test safe conversion
-    result = safe_convert_to_numpy(array)
-    np.testing.assert_array_almost_equal(result, [1.0, 2.0, 3.0])
-
-
 if __name__ == "__main__":
     # Run basic tests
     test_backend_detection()
@@ -147,7 +133,4 @@ if __name__ == "__main__":
     
     if backend == 'torch':
         test_pytorch_specific()
-    elif backend == 'jax':
-        test_jax_specific()
-    
     print("All basic tests passed!")
