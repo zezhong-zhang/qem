@@ -17,7 +17,6 @@ from .detector import Calibrate_Detector, Calibrate_Dose, Detector
 from .probe import (
     Aberration,
     Probe,
-    aberration,
     aberration_starter_pack,
     chi,
     convert_deltaE,
@@ -37,7 +36,6 @@ __all__ = [
     # Probe / aberration
     "Probe",
     "Aberration",
-    "aberration",
     "aberration_starter_pack",
     "chi",
     "make_contrast_transfer_function",

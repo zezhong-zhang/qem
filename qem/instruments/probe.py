@@ -7,7 +7,7 @@ import numpy as np
 from qem.processing import q_space_array
 
 
-class aberration:
+class Aberration:
     """A class describing electron lens aberrations."""
 
     def __init__(self, Krivanek, Haider, Description, amplitude, angle, n, m):
@@ -64,7 +64,7 @@ class aberration:
             )
 
 
-class Aberration(aberration):
+class Aberration(Aberration):
     """Compatibility wrapper accepting both compact and full aberration args."""
 
     def __init__(self, *args):
@@ -104,10 +104,15 @@ class Probe:
     def chi(self, q, qphi):
         return chi(q, qphi, self.lam, self.df, self.aberrations)
 
-    def partial_coherence_envelope(self, q_mag):
-        return self.temporal_coherence_envelope(q_mag) * self.spatial_coherence_envelope(q_mag)
+    def partial_coherence_envelope(self, q_mag, qphi=None):
+        return self.temporal_coherence_envelope(q_mag) * self.spatial_coherence_envelope(
+            q_mag, qphi=qphi
+        )
 
     def temporal_coherence_envelope(self, q_mag):
+        # Match abtem.transfer.TemporalEnvelope:
+        #     exp(-((π/(2λ)) · focal_spread · α²)²)
+        # with α = q·λ.  Equivalent to exp(-(π λ Δ k²)² / 4).
         q_mag = np.asarray(q_mag, dtype=float)
         if self.df_spread is not None:
             df_spread = self.df_spread
@@ -115,14 +120,27 @@ class Probe:
             df_spread = self.Cc * self.deltaE / self.eV
         else:
             return np.ones_like(q_mag, dtype=float)
-        return np.exp(-0.5 * (np.pi * self.lam * df_spread * q_mag**2) ** 2)
+        return np.exp(-((0.5 * np.pi * self.lam * df_spread * q_mag**2) ** 2))
 
-    def spatial_coherence_envelope(self, q_mag):
+    def spatial_coherence_envelope(self, q_mag, qphi=None):
+        # Match abtem.transfer.SpatialEnvelope (quasi-coherent approximation):
+        #     exp(-sign(σ_α) · (σ_α/2)² · (|∂χ/∂k|² + |∂χ/∂φ|²))
+        # with σ_α the source angular spread in radians.
+        # source_size is taken as the angular spread σ_α in mrad (matching
+        # abtem's `angular_spread` parameter).
         q_mag = np.asarray(q_mag, dtype=float)
-        if self.source_size is None:
+        if self.source_size is None or self.source_size == 0.0:
             return np.ones_like(q_mag, dtype=float)
-        sigma = self.source_size
-        return np.exp(-0.5 * (q_mag * sigma) ** 2)
+        if qphi is None:
+            qphi = np.zeros_like(q_mag)
+        else:
+            qphi = np.asarray(qphi, dtype=float)
+        angular_spread = self.source_size * 1e-3  # mrad → rad
+        alpha = q_mag * self.lam  # semi-angle in rad
+        dchi_dk, dchi_dphi = _chi_gradients(alpha, qphi, self.lam, self.df, self.aberrations)
+        return np.exp(
+            -np.sign(angular_spread) * (angular_spread / 2.0) ** 2 * (dchi_dk**2 + dchi_dphi**2)
+        )
 
     def make_ctf(self, pix_dim, real_dim):
         return make_contrast_transfer_function(
@@ -157,26 +175,31 @@ def depth_of_field(eV, alpha):
 def aberration_starter_pack():
     """Create the set of aberrations up to fifth order."""
     aberrations = []
-    aberrations.append(aberration("C10", "C1", "Defocus          ", 0.0, 0.0, 1, 0))
-    aberrations.append(aberration("C12", "A1", "2-Fold astig.    ", 0.0, 0.0, 1, 2))
-    aberrations.append(aberration("C23", "A2", "3-Fold astig.    ", 0.0, 0.0, 2, 3))
-    aberrations.append(aberration("C21", "B2", "Axial coma       ", 0.0, 0.0, 2, 1))
-    aberrations.append(aberration("C30", "C3", "3rd order spher. ", 0.0, 0.0, 3, 0))
-    aberrations.append(aberration("C34", "A3", "4-Fold astig.    ", 0.0, 0.0, 3, 4))
-    aberrations.append(aberration("C32", "S3", "Axial star aber. ", 0.0, 0.0, 3, 2))
-    aberrations.append(aberration("C45", "A4", "5-Fold astig.    ", 0.0, 0.0, 4, 5))
-    aberrations.append(aberration("C43", "D4", "3-Lobe aberr.    ", 0.0, 0.0, 4, 3))
-    aberrations.append(aberration("C41", "B4", "4th order coma   ", 0.0, 0.0, 4, 1))
-    aberrations.append(aberration("C50", "C5", "5th order spher. ", 0.0, 0.0, 5, 0))
-    aberrations.append(aberration("C56", "A5", "6-Fold astig.    ", 0.0, 0.0, 5, 6))
-    aberrations.append(aberration("C52", "S5", "5th order star   ", 0.0, 0.0, 5, 2))
-    aberrations.append(aberration("C54", "R5", "5th order rosette", 0.0, 0.0, 5, 4))
+    aberrations.append(Aberration("C10", "C1", "Defocus          ", 0.0, 0.0, 1, 0))
+    aberrations.append(Aberration("C12", "A1", "2-Fold astig.    ", 0.0, 0.0, 1, 2))
+    aberrations.append(Aberration("C23", "A2", "3-Fold astig.    ", 0.0, 0.0, 2, 3))
+    aberrations.append(Aberration("C21", "B2", "Axial coma       ", 0.0, 0.0, 2, 1))
+    aberrations.append(Aberration("C30", "C3", "3rd order spher. ", 0.0, 0.0, 3, 0))
+    aberrations.append(Aberration("C34", "A3", "4-Fold astig.    ", 0.0, 0.0, 3, 4))
+    aberrations.append(Aberration("C32", "S3", "Axial star aber. ", 0.0, 0.0, 3, 2))
+    aberrations.append(Aberration("C45", "A4", "5-Fold astig.    ", 0.0, 0.0, 4, 5))
+    aberrations.append(Aberration("C43", "D4", "3-Lobe aberr.    ", 0.0, 0.0, 4, 3))
+    aberrations.append(Aberration("C41", "B4", "4th order coma   ", 0.0, 0.0, 4, 1))
+    aberrations.append(Aberration("C50", "C5", "5th order spher. ", 0.0, 0.0, 5, 0))
+    aberrations.append(Aberration("C56", "A5", "6-Fold astig.    ", 0.0, 0.0, 5, 6))
+    aberrations.append(Aberration("C52", "S5", "5th order star   ", 0.0, 0.0, 5, 2))
+    aberrations.append(Aberration("C54", "R5", "5th order rosette", 0.0, 0.0, 5, 4))
     return aberrations
 
 
 def chi(q, qphi, lam, df=0.0, aberrations=None):
     r"""
     Calculate the aberration function, chi.
+
+    The convention matches abtem: positive ``df`` (and abtem's ``defocus``)
+    corresponds to under-focus, and is internally equivalent to a negative
+    Krivanek ``C10``.  An aberration with ``Krivanek == "C10"`` in
+    ``aberrations`` is treated as the lens coefficient (no sign flip).
 
     Parameters
     ----------
@@ -187,7 +210,8 @@ def chi(q, qphi, lam, df=0.0, aberrations=None):
     lam : float
         Wavelength of electron (Inverse angstroms).
     df : float, optional
-        Defocus in Angstrom
+        Defocus in Angstrom (positive = under-focus, matching abtem's
+        ``defocus`` property).
     aberrations : list, optional
         A list containing a set of the class aberration, pass an empty list for
         an unaberrated contrast transfer function.
@@ -200,7 +224,9 @@ def chi(q, qphi, lam, df=0.0, aberrations=None):
     if aberrations is None:
         aberrations = []
     qlam = q * lam
-    chi_ = qlam ** 2 / 2 * df
+    # df is the user-facing "defocus" (under-focus positive).  abtem stores
+    # this as C10 = -defocus in the chi expansion, so flip the sign here.
+    chi_ = -qlam ** 2 / 2 * df
     for ab in aberrations:
         chi_ += (
             qlam ** (ab.n + 1)
@@ -209,6 +235,94 @@ def chi(q, qphi, lam, df=0.0, aberrations=None):
             * np.cos(ab.m * (qphi - float(ab.angle)))
         )
     return 2 * np.pi * chi_ / lam
+
+
+def _chi_gradients(alpha, phi, lam, df=0.0, aberrations=None):
+    r"""Compute (\partial\chi/\partial k, \partial\chi/\partial\phi).
+
+    Mirrors the closed-form expansion in
+    abtem.transfer.SpatialEnvelope._evaluate_from_angular_grid.
+
+    Parameters
+    ----------
+    alpha : array_like
+        Semi-angle in radians (= q * lam).
+    phi : array_like
+        Azimuth in radians.
+    lam : float
+        Electron wavelength in Angstrom.
+    df : float, optional
+        User-facing defocus (positive = under-focus); contributes
+        ``C10 = -df`` to the aberration polynomial.
+    aberrations : list of aberration, optional
+        Aberration objects (Krivanek-tagged).  Coefficients with the same
+        ``Krivanek`` symbol are summed.
+    """
+    p = {k: 0.0 for k in (
+        "C10", "C12", "phi12",
+        "C21", "phi21", "C23", "phi23",
+        "C30", "C32", "phi32", "C34", "phi34",
+        "C41", "phi41", "C43", "phi43", "C45", "phi45",
+        "C50", "C52", "phi52", "C54", "phi54", "C56", "phi56",
+    )}
+    # Defocus enters as C10 = -df (matches abtem's defocus = -C10 convention).
+    p["C10"] = -float(df)
+    if aberrations:
+        for ab in aberrations:
+            sym = getattr(ab, "Krivanek", None)
+            if sym in p:
+                p[sym] = p[sym] + float(ab.amplitude)
+                # Phase symbol (e.g. phi12 for C12) – store as `angle` field
+                phi_sym = "phi" + sym[1:]
+                if phi_sym in p:
+                    p[phi_sym] = float(getattr(ab, "angle", 0.0))
+            else:
+                # Fall back to (n,m) classification for non-Krivanek labels.
+                _accumulate_by_nm(p, ab)
+    pre = 2.0 * np.pi / lam
+    dchi_dk = pre * (
+        ((p["C12"] * np.cos(2 * (phi - p["phi12"])) + p["C10"]) * alpha)
+        + ((p["C23"] * np.cos(3 * (phi - p["phi23"]))
+            + p["C21"] * np.cos(phi - p["phi21"])) * alpha**2)
+        + ((p["C30"]
+            + p["C32"] * np.cos(2 * (phi - p["phi32"]))
+            + p["C34"] * np.cos(4 * (phi - p["phi34"]))) * alpha**3)
+        + ((p["C45"] * np.cos(5 * (phi - p["phi45"]))
+            + p["C43"] * np.cos(3 * (phi - p["phi43"]))
+            + p["C41"] * np.cos(phi - p["phi41"])) * alpha**4)
+        + ((p["C56"] * np.cos(6 * (phi - p["phi56"]))
+            + p["C54"] * np.cos(4 * (phi - p["phi54"]))
+            + p["C52"] * np.cos(2 * (phi - p["phi52"])) + p["C50"]) * alpha**5)
+    )
+    dchi_dphi = -pre * (
+        0.5 * (2.0 * p["C12"] * np.sin(2 * (phi - p["phi12"]))) * alpha
+        + (1.0 / 3.0) * (
+            3.0 * p["C23"] * np.sin(3 * (phi - p["phi23"]))
+            + p["C21"] * np.sin(phi - p["phi21"])) * alpha**2
+        + (1.0 / 4.0) * (
+            4.0 * p["C34"] * np.sin(4 * (phi - p["phi34"]))
+            + 2.0 * p["C32"] * np.sin(2 * (phi - p["phi32"]))) * alpha**3
+        + (1.0 / 5.0) * (
+            5.0 * p["C45"] * np.sin(5 * (phi - p["phi45"]))
+            + 3.0 * p["C43"] * np.sin(3 * (phi - p["phi43"]))
+            + p["C41"] * np.sin(phi - p["phi41"])) * alpha**4
+        + (1.0 / 6.0) * (
+            6.0 * p["C56"] * np.sin(6 * (phi - p["phi56"]))
+            + 4.0 * p["C54"] * np.sin(4 * (phi - p["phi54"]))
+            + 2.0 * p["C52"] * np.sin(2 * (phi - p["phi52"]))) * alpha**5
+    )
+    return dchi_dk, dchi_dphi
+
+
+def _accumulate_by_nm(p, ab):
+    """Map an aberration's (n, m) onto the polar Cnm symbol when Krivanek tag is missing."""
+    n, m = int(ab.n), int(ab.m)
+    sym = f"C{n}{m}"
+    if sym in p:
+        p[sym] = p[sym] + float(ab.amplitude)
+        phi_sym = f"phi{n}{m}"
+        if phi_sym in p:
+            p[phi_sym] = float(getattr(ab, "angle", 0.0))
 
 
 def make_contrast_transfer_function(

@@ -9,7 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from qem.instruments.ctf import SSB_CTF, ADF_CTF
+from qem.instruments.ctf import SSB_CTF, ADF_CTF, create_aberration_list
 from qem.instruments.probe import Probe
 
 
@@ -37,20 +37,32 @@ def plot_envelope_comparison():
     ax.grid(True, alpha=0.3)
     ax.set_ylim([0, 1.05])
 
-    # Spatial coherence envelope
+    # Spatial coherence envelope.  The quasi-coherent formula
+    # exp(-(σ_α/2)² · |∇χ|²) is identically 1 for an unaberrated probe
+    # because ∇χ = 0; aberrations are required to see source-size damping.
+    # Use a representative uncorrected STEM: defocus = 50 Å, Cs = 1 mm.
     ax = axes[1]
+    df_demo = 50.0  # Å
+    cs_demo = 1e7   # Å (= 1 mm, typical uncorrected STEM)
+    aberrations_demo = create_aberration_list(
+        defocus=df_demo,
+        spherical_aberration=cs_demo,
+    )
     for source_size in [None, 0.05, 0.1, 0.2]:
         if source_size is None:
             label = "No spatial damping"
         else:
             label = f"Source size = {source_size} mrad"
-        probe = Probe(eV=60e3, source_size=source_size)
+        probe = Probe(eV=60e3, aberrations=aberrations_demo, source_size=source_size)
         E_spatial = probe.spatial_coherence_envelope(q)
         ax.plot(q, E_spatial, label=label, linewidth=2)
 
     ax.set_xlabel("Spatial frequency q (1/Å)")
     ax.set_ylabel("Envelope E(q)")
-    ax.set_title("Spatial Coherence Envelope\n(Finite source size)")
+    ax.set_title(
+        "Spatial Coherence Envelope\n"
+        f"(Source size; defocus = {df_demo:g} Å, Cs = {cs_demo / 1e7:g} mm)"
+    )
     ax.legend()
     ax.grid(True, alpha=0.3)
     ax.set_ylim([0, 1.05])
@@ -65,29 +77,48 @@ def plot_combined_envelope():
 
     q = np.linspace(0, 0.5, 200)
 
+    # All probes share aberrations so the (aberration-dependent) spatial
+    # envelope is non-trivial.  ∇χ = 0 ⇒ spatial envelope ≡ 1.
+    df_demo = 50.0
+    cs_demo = 1e7
+    src = 0.1  # mrad
+    aberrations_demo = create_aberration_list(
+        defocus=df_demo, spherical_aberration=cs_demo
+    )
+
     # No coherence
-    probe_no = Probe(eV=60e3)
+    probe_no = Probe(eV=60e3, aberrations=aberrations_demo)
     E_no = probe_no.partial_coherence_envelope(q)
     ax.plot(q, E_no, 'k--', label="No damping", linewidth=2)
 
     # Temporal only
-    probe_temp = Probe(eV=60e3, Cc=2e7, deltaE=0.5)
+    probe_temp = Probe(
+        eV=60e3, aberrations=aberrations_demo, Cc=2e7, deltaE=0.5
+    )
     E_temp = probe_temp.partial_coherence_envelope(q)
     ax.plot(q, E_temp, 'b-', label="Temporal only (Cc=2mm, ΔE=0.5eV)", linewidth=2)
 
     # Spatial only
-    probe_spat = Probe(eV=60e3, source_size=0.1)
+    probe_spat = Probe(
+        eV=60e3, aberrations=aberrations_demo, source_size=src
+    )
     E_spatial = probe_spat.partial_coherence_envelope(q)
-    ax.plot(q, E_spatial, 'r-', label="Spatial only (src=0.1mrad)", linewidth=2)
+    ax.plot(q, E_spatial, 'r-', label=f"Spatial only (src={src} mrad)", linewidth=2)
 
     # Combined
-    probe_both = Probe(eV=60e3, Cc=2e7, deltaE=0.5, source_size=0.1)
+    probe_both = Probe(
+        eV=60e3, aberrations=aberrations_demo, Cc=2e7, deltaE=0.5, source_size=src
+    )
     E_both = probe_both.partial_coherence_envelope(q)
     ax.plot(q, E_both, 'g-', label="Combined", linewidth=2.5)
 
     ax.set_xlabel("Spatial frequency q (1/Å)", fontsize=12)
     ax.set_ylabel("Envelope E(q)", fontsize=12)
-    ax.set_title("Combined Partial Coherence Envelope", fontsize=14)
+    ax.set_title(
+        f"Combined Partial Coherence Envelope\n"
+        f"(defocus = {df_demo:g} Å, Cs = {cs_demo / 1e7:g} mm)",
+        fontsize=14,
+    )
     ax.legend(fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.set_ylim([0, 1.05])
@@ -198,21 +229,35 @@ def plot_ctf_with_envelope():
     pix_dim = (256, 256)
     real_dim = (20.0, 20.0)
 
-    # Get q-space
+    # Get q-space (with azimuth so the spatial-coherence envelope can use ∇χ).
     from qem.processing import q_space_array
     q = q_space_array(pix_dim, real_dim)
     q_mag = np.sqrt(q[0]**2 + q[1]**2)
+    qphi = np.arctan2(q[0], q[1])
+
+    df_demo = 50.0
+    cs_demo = 1e7
+    src = 0.1
+    aberrations_demo = create_aberration_list(
+        defocus=df_demo, spherical_aberration=cs_demo
+    )
 
     # Get radial profile of CTF
-    ctf_no = SSB_CTF(alpha=20.0, eV=60e3)
+    ctf_no = SSB_CTF(alpha=20.0, eV=60e3, aberrations=aberrations_demo)
     ctf_array_no = ctf_no.calculate_ctf(pix_dim, real_dim)
 
-    ctf_yes = SSB_CTF(alpha=20.0, eV=60e3, Cc=2e7, deltaE=0.5, source_size=0.1)
+    ctf_yes = SSB_CTF(
+        alpha=20.0, eV=60e3, aberrations=aberrations_demo,
+        Cc=2e7, deltaE=0.5, source_size=src,
+    )
     ctf_array_yes = ctf_yes.calculate_ctf(pix_dim, real_dim)
 
     # Apply envelope for comparison
-    probe_env = Probe(eV=60e3, Cc=2e7, deltaE=0.5, source_size=0.1)
-    envelope = probe_env.partial_coherence_envelope(q_mag)
+    probe_env = Probe(
+        eV=60e3, aberrations=aberrations_demo,
+        Cc=2e7, deltaE=0.5, source_size=src,
+    )
+    envelope = probe_env.partial_coherence_envelope(q_mag, qphi=qphi)
     ctf_with_env = ctf_array_yes * envelope
 
     # Get radial profiles (average over angles)
@@ -250,15 +295,18 @@ def plot_ctf_with_envelope():
     # Plot envelope
     ax = axes[1]
     q_1d = np.linspace(0, 0.5, 100)
-    probe_all = Probe(eV=60e3, Cc=2e7, deltaE=0.5, source_size=0.1)
+    probe_all = Probe(
+        eV=60e3, aberrations=aberrations_demo,
+        Cc=2e7, deltaE=0.5, source_size=src,
+    )
     env_1d = probe_all.partial_coherence_envelope(q_1d)
 
     # Temporal component
-    probe_t = Probe(eV=60e3, Cc=2e7, deltaE=0.5)
+    probe_t = Probe(eV=60e3, aberrations=aberrations_demo, Cc=2e7, deltaE=0.5)
     env_temp = probe_t.temporal_coherence_envelope(q_1d)
 
-    # Spatial component
-    probe_s = Probe(eV=60e3, source_size=0.1)
+    # Spatial component (aberrations required, otherwise ≡ 1)
+    probe_s = Probe(eV=60e3, aberrations=aberrations_demo, source_size=src)
     env_spatial = probe_s.spatial_coherence_envelope(q_1d)
 
     ax.plot(q_1d, env_temp, 'b--', label="Temporal envelope", linewidth=2)

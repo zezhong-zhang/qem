@@ -323,21 +323,32 @@ class TestSpatialCoherenceEnvelope:
         assert envelope[0] == pytest.approx(1.0)
 
     def test_envelope_decreases_with_frequency(self):
-        """Test that envelope decreases with spatial frequency."""
+        """Spatial envelope must decrease with frequency for an aberrated probe.
+
+        For an unaberrated probe ∇χ = 0, so the quasi-coherent spatial
+        envelope is exactly 1 at every frequency.  Source size only affects
+        the image once aberrations broaden the wavefront.
+        """
         q = np.linspace(0, 2, 100)
-        probe = Probe(eV=60e3, source_size=0.1)
+        probe = Probe(eV=60e3, df=50.0, source_size=1.0)
         envelope = probe.spatial_coherence_envelope(q)
-        # Envelope should be monotonically decreasing
         assert np.all(np.diff(envelope) <= 0)
 
     def test_larger_source_size_gives_narrower_envelope(self):
-        """Test that larger source size gives narrower envelope."""
+        """Larger source size gives narrower envelope (for aberrated probe)."""
         q = np.array([1.0])
-        probe_small = Probe(eV=60e3, source_size=0.05)
-        probe_large = Probe(eV=60e3, source_size=0.2)
+        probe_small = Probe(eV=60e3, df=50.0, source_size=0.5)
+        probe_large = Probe(eV=60e3, df=50.0, source_size=2.0)
         envelope_small = probe_small.spatial_coherence_envelope(q)
         envelope_large = probe_large.spatial_coherence_envelope(q)
         assert envelope_small[0] > envelope_large[0]
+
+    def test_unaberrated_probe_has_unit_envelope(self):
+        """Spatial envelope is identically 1 for an aberration-free probe."""
+        q = np.linspace(0, 2, 50)
+        probe = Probe(eV=60e3, source_size=0.1)
+        envelope = probe.spatial_coherence_envelope(q)
+        assert np.allclose(envelope, 1.0)
 
 
 class TestPartialCoherenceEnvelope:

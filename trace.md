@@ -92,3 +92,73 @@ Applied stash f649c14 onto fresh feat/pytorch-migration commit. Four files confl
 - `qem/fit/__init__.py`: kept upstream's explicit-import structure but added the stash's still-valid extra re-exports (point_potential helpers, `OptimizationResult`, `fit_ssb_ptychography`, `fit_adf_image`, `GaussianKernel`, `voronoi_point_record`).
 - `qem/instruments/__init__.py`: kept upstream's structure and added stash's valid extras (`detector` module, `chi`/`make_contrast_transfer_function`/`wavev` re-exports, `tilt_from_affine`).
 - `image_fitting.py` and `model.py` auto-merged cleanly — no manual work.
+
+### EARS — Progress (2026-05-03 22:46)
+<!-- concepts: ctf, aberrations, partial-coherence -->
+Debugging qem/instruments CTF/aberration/envelope code against ~/code/abtem reference.
+Numerical comparison (test script /tmp/compare_qem_abtem.py) confirmed three concrete bugs:
+
+1. **Defocus sign convention** — qem `df=+50` produces chi opposite sign of abtem
+   `defocus=+50` (abtem stores `defocus = -C10`). qem currently matches abtem's
+   internal `C10` sign, but the user-facing `df` parameter has the opposite
+   sign of abtem's `defocus` property. Likely the visible "aberration looks wrong"
+   complaint.
+
+2. **Temporal envelope** off by factor of 2 in exponent. qem:
+   `exp(-(πλΔk²)²/2)`; abtem (Kirkland 1/e half-width form):
+   `exp(-(πλΔk²)²/4)`. At α=30 mrad, qem→0.22 vs abtem→0.47 — qem decays √2× too
+   fast. Same numerical input.
+
+3. **Spatial envelope** is fundamentally wrong. qem applies a flat
+   `exp(-(σq)²/2)` Gaussian that ignores aberrations entirely and is
+   dimensionally inconsistent (treats `source_size` in mrad as if it were Å).
+   Correct quasi-coherent formula uses `|∇χ|²` and is exactly 1 for an
+   unaberrated probe; qem currently damps even a pure-aperture probe.
+
+Fix in progress in `qem/instruments/probe.py`:
+- Negate `df` in `chi()` so `df` matches abtem's `defocus` sign
+- Replace temporal envelope with `exp(-((πλΔk²)/2)²)`
+- Replace spatial envelope with `|∇χ|²` formula (needs a `_chi_gradients`
+  helper and `qphi` to be plumbed through `CTF.get_psf`)
+- Update `create_aberration_list(defocus=X)` to map to `Aberration(C10, -X)`
+
+Affected tests: `test_larger_source_size_gives_narrower_envelope` no longer
+makes sense for unaberrated probes — must be updated to include defocus or
+Cs.
+
+### EARS — Progress (2026-05-03 23:03)
+<!-- concepts: ctf, adf-imaging, partial-coherence, demos -->
+Followup from the abtem-alignment fix in qem/instruments. User reported
+two new issues with examples/partial_coherence_demo.py:
+
+1. **Spatial envelope flat at 1**: After the `|∇χ|²` fix, an unaberrated
+   probe correctly gives envelope = 1 (matches abtem). The demo creates
+   probes with no `df`/aberrations, so the spatial curve is identically 1.
+   This is correct physics but uninformative. Need to update the demo to
+   add realistic defocus / Cs so the spatial envelope shows non-trivial
+   damping.
+
+2. **ADF PSF blank**: `ADF_CTF.calculate_ctf` had a fundamental design bug:
+   it computed |probe(q)|² (only nonzero inside aperture, q ≤ 20 mrad)
+   then masked by detector geometry (q ≥ 50 mrad). Empty intersection →
+   identically zero. Fixed by replacing with the standard incoherent ADF
+   PSF: |probe(r)|² in real space (Z-contrast, thin specimen). Detector
+   inner/outer angles are kept for API compat but only affect overall
+   signal scaling, not PSF shape.
+
+### EARS — Progress (2026-05-03 23:13)
+<!-- concepts: ctf, adf-imaging, fft-conventions -->
+Wrapping up the abtem-alignment fixes. Final state:
+- ADF_CTF rewritten to use the standard incoherent ADF model
+  (PSF = |probe(r)|² in real space). Old code masked |probe(q)|² inside the
+  aperture by the detector annulus, giving identically zero PSFs whenever
+  aperture < detector_inner.
+- ADF_CTF.get_psf overridden with clean FFT conventions; the base-class
+  ifft2(ifftshift(...)) round-trip only happens to work for symmetric CTFs.
+- partial_coherence_demo.py now uses representative uncorrected STEM
+  (defocus = 50 Å, Cs = 1 mm) so the spatial envelope shows non-trivial
+  damping. With ∇χ = 0 the abtem-style envelope is exactly 1, which is
+  correct physics but uninformative without aberrations.
+- Cleaning up duplicate `Aberration` import that the linter introduced in
+  qem/instruments/__init__.py when it auto-renamed `class aberration` →
+  `class Aberration`.

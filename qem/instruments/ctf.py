@@ -373,7 +373,8 @@ class ContrastTransferFunction(ABC):
         if self.Cc is not None or self.deltaE is not None or self.df_spread is not None or self.source_size is not None:
             q = q_space_array(pix_dim, real_dim)
             q_mag = np.sqrt(q[0] ** 2 + q[1] ** 2)
-            envelope = self._probe.partial_coherence_envelope(q_mag)
+            qphi = np.arctan2(q[0], q[1])
+            envelope = self._probe.partial_coherence_envelope(q_mag, qphi=qphi)
             ctf = ctf * envelope
 
         psf = np.real(ifft2(ifftshift(ctf)))
@@ -522,91 +523,61 @@ class ADF_CTF(ContrastTransferFunction):
         pix_dim: Tuple[int, int],
         real_dim: Tuple[float, float],
     ) -> np.ndarray:
+        """Q-space transfer function for ADF imaging.
+
+        For a thin specimen and a HAADF detector that captures the bulk of
+        the elastically scattered intensity, the ADF "PSF" is just the
+        probe intensity in real space, ``|ψ_probe(r)|²``.  The
+        corresponding q-space transfer function is its Fourier transform —
+        equivalent to the autocorrelation of the probe wave function in q.
+
+        Aberrations and defocus shape the probe and therefore the PSF.
+        ``detector_inner``/``detector_outer`` only affect the absolute
+        signal scaling, not the PSF shape, so they are not used here.
+
+        Returned in **fft-natural order** (DC at index ``[0, 0]``), matching
+        the convention of ``q_space_array`` and the other CTF classes.
         """
-        Calculate ADF CTF (probe intensity).
-
-        For ADF, the CTF is essentially the probe wavefunction squared,
-        integrated over the detector angles.
-
-        Parameters
-        ----------
-        pix_dim : tuple (ny, nx)
-            Pixel dimensions of the grid
-        real_dim : tuple (dy, dx)
-            Real space dimensions in Angstroms
-
-        Returns
-        -------
-        ctf : np.ndarray (float)
-            Real, non-negative CTF for incoherent ADF imaging
-        """
-        # Create a clean probe (no aberrations) for basic ADF PSF
         adf_probe = Probe(
             eV=self.eV,
             aperture=self.alpha,
             df=self.df,
-            aberrations=[],
+            aberrations=self.aberrations,
         )
-        ctf = adf_probe.make_ctf(pix_dim=pix_dim, real_dim=real_dim)
-
-        # For incoherent imaging, we square the amplitude
-        # The detector integration is handled by the angular range
-        ctf_adf = np.abs(ctf) ** 2
-
-        # Apply detector geometry (simple binary mask for now)
-        # A more sophisticated implementation would integrate over
-        # the detector angular range
-        q = q_space_array(pix_dim, real_dim)
-        q_mag = np.sqrt(q[0] ** 2 + q[1] ** 2)
-
-        # Convert detector angles to inverse Angstroms
-        inner_invA = self.detector_inner * 1e-3 * self.k
-        outer_invA = self.detector_outer * 1e-3 * self.k
-
-        # Detector mask (1 within detector range, 0 outside)
-        detector_mask = (q_mag >= inner_invA) & (q_mag <= outer_invA)
-
-        # Normalize by detector area
-        if np.any(detector_mask):
-            ctf_adf *= detector_mask
-            # Normalize to unit sum
-            total = np.sum(ctf_adf)
-            if total > 0:
-                ctf_adf = ctf_adf / total * np.prod(pix_dim)
-
-        return ctf_adf.astype(np.float64)
+        probe_q = adf_probe.make_ctf(pix_dim=pix_dim, real_dim=real_dim)
+        probe_r = np.fft.ifft2(probe_q)
+        psf_r = np.abs(probe_r) ** 2
+        psf_sum = psf_r.sum()
+        if psf_sum > 0:
+            psf_r = psf_r / psf_sum
+        return np.fft.fft2(psf_r).astype(complex)
 
     def get_psf(
         self,
         pix_dim: Tuple[int, int],
         real_dim: Tuple[float, float],
     ) -> np.ndarray:
-        """
-        Get ADF PSF.
+        """Real-space ADF PSF = |probe(r)|², centered, partial-coherence applied.
 
-        The ADF PSF is the squared magnitude of the probe wavefunction,
-        which is always positive (Gaussian-like shape).
-
-        Parameters
-        ----------
-        pix_dim : tuple (ny, nx)
-            Pixel dimensions of the grid
-        real_dim : tuple (dy, dx)
-            Real space dimensions in Angstroms
-
-        Returns
-        -------
-        psf : np.ndarray (float)
-            Real, positive PSF for ADF imaging
+        Bypasses the base-class ``ifft2(ifftshift(...))`` pipeline (which
+        only round-trips correctly for rotationally-symmetric CTFs) and
+        applies clean FFT conventions appropriate for ADF.
         """
         ctf = self.calculate_ctf(pix_dim, real_dim)
-        psf = np.real(ifft2(ifftshift(ctf)))
-        psf = fftshift(psf)
-
-        # Ensure PSF is non-negative (clip small FFT artifacts)
-        psf = np.maximum(psf, 0)
-
-        return psf
+        if (
+            self.Cc is not None
+            or self.deltaE is not None
+            or self.df_spread is not None
+            or self.source_size is not None
+        ):
+            q = q_space_array(pix_dim, real_dim)
+            q_mag = np.sqrt(q[0] ** 2 + q[1] ** 2)
+            qphi = np.arctan2(q[0], q[1])
+            envelope = self._probe.partial_coherence_envelope(q_mag, qphi=qphi)
+            ctf = ctf * envelope
+        psf = np.real(np.fft.ifft2(ctf))
+        psf = np.fft.fftshift(psf)
+        return np.maximum(psf, 0.0)
 
 
 class ePIE_CTF(ContrastTransferFunction):
@@ -1007,7 +978,9 @@ def create_aberration_list(
     aberrations = []
 
     if defocus != 0:
-        aberrations.append(Aberration("C10", "C1", "Defocus", defocus, 0.0, 1, 0))
+        # abtem stores defocus = -C10, so a positive "defocus" (under-focus)
+        # maps to a negative Krivanek C10 coefficient.
+        aberrations.append(Aberration("C10", "C1", "Defocus", -defocus, 0.0, 1, 0))
 
     if two_fold_astigmatism != 0:
         aberrations.append(Aberration("C12", "A1", "2-Fold astig.", two_fold_astigmatism, two_fold_angle, 1, 2))
