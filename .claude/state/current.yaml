@@ -1,0 +1,71 @@
+schema_version: '2.1'
+session_id: s-1777819079-d8c4bc
+role: standalone
+status: active
+started_at: '2026-05-03T14:37:59Z'
+last_heartbeat: '2026-05-03T16:28:02Z'
+branch: master
+cwd: /Users/zhangzz/code/qem
+current_task: ''
+decisions: []
+blockers: []
+artifacts: []
+metrics:
+  edits: 62
+  commits: 0
+  errors_fixed: 0
+  decisions_made: 0
+plan:
+  current_step_index: 0
+  steps:
+  - index: 0
+    action: 'Phase 0a: Delete qem/archive/'
+    active_form: Deleting archive
+    status: in_progress
+    expected_outcome: null
+    result: null
+  - index: 1
+    action: 'Phase 0b: Move qem/instruments/optics/*.py to qem/optics/*.py + update consumers'
+    active_form: Moving optics to top level
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 2
+    action: 'Phase 0c: Delete qem/instruments/_legacy.py + migrate tests/examples/fit to new API'
+    active_form: Deleting _legacy.py
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 3
+    action: 'Phase 0d: Bump Python floor to 3.11 in pyproject.toml + add ruff config'
+    active_form: Bumping Python floor
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 4
+    action: 'Phase 0e: Verify all tests pass + commit Phase 0'
+    active_form: Verifying + committing Phase 0
+    status: pending
+    expected_outcome: null
+    result: null
+active_simulation_id: null
+prediction_error_history: []
+detour_tracker:
+  active_detours:
+  - id: det_1777820962480_0e104a
+    title: Thrashing on partial_coherence_demo.py
+    target_signature: edit:/Users/zhangzz/code/qem/examples/partial_coherence_demo.py
+    started_at: '2026-05-03T15:09:22Z'
+    attempt_count: 6
+    failed_attempts: []
+    status: active
+  - id: det_1777825590233_92e709
+    title: Thrashing on 2026-05-04-repo-modernization-design.md
+    target_signature: edit:/Users/zhangzz/code/qem/docs/superpowers/specs/2026-05-04-repo-modernization-design.md
+    started_at: '2026-05-03T16:26:30Z'
+    attempt_count: 6
+    failed_attempts: []
+    status: active
+  closed_detours_count: 0
+eureka_candidates: []
+error_signatures: {}

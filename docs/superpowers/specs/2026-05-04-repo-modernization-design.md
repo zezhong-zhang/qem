@@ -71,24 +71,28 @@ Each phase ends with **all tests green**, a **single commit**, and
 - Delete `qem/instruments/_legacy.py` and update tests/examples to use
   the new optics API directly.  Now that we're committing to "no
   back-compat", the shim earns its keep no longer.
-- **Flatten `qem/instruments/optics/*.py` up into `qem/instruments/`**
-  so every module is at most two levels deep.  After:
+- **Promote optics to a top-level package** at `qem/optics/`, separate
+  from `qem/instruments/` (hardware-specific models).  After:
   ```
-  qem/instruments/
-    __init__.py
-    aberrations.py     (was optics/aberrations.py)
-    aperture.py        (was optics/aperture.py)
-    chi.py             (was optics/chi.py)
-    constants.py       (was optics/constants.py)
-    detector.py        (unchanged)
-    envelopes.py       (was optics/envelopes.py)
-    grid.py            (was optics/grid.py)
-    probe.py           (was optics/probe.py — name reused)
-    psf.py             (was optics/psf.py)
-    tilt.py            (unchanged)
-    wave.py            (unchanged)
+  qem/
+    optics/                  (new top-level — math of electron propagation)
+      __init__.py
+      aberrations.py         (was qem/instruments/optics/aberrations.py)
+      aperture.py            (was qem/instruments/optics/aperture.py)
+      chi.py                 (was qem/instruments/optics/chi.py)
+      constants.py           (was qem/instruments/optics/constants.py)
+      envelopes.py           (was qem/instruments/optics/envelopes.py)
+      grid.py                (was qem/instruments/optics/grid.py)
+      probe.py               (was qem/instruments/optics/probe.py)
+      psf.py                 (was qem/instruments/optics/psf.py)
+    instruments/             (hardware models only)
+      __init__.py
+      detector.py
+      tilt.py
+      wave.py                (numpy multislice helpers — kept here for now)
   ```
-  All ~10 internal consumers (`qem/fit/*`, tests, examples) updated.
+  All ~10 internal consumers (`qem/fit/*`, tests, examples) updated:
+  ``from qem.instruments.optics import …`` → ``from qem.optics import …``.
 - Bump the project Python floor to 3.11 in `pyproject.toml`.
 - Add a pre-commit config: `ruff check`, `ruff format`, `mypy --strict`
   on the modules we'll touch in later phases (gradual rollout).
@@ -151,10 +155,9 @@ qem/fit/
 
 - Every file ≤ 700 lines.
 - Class rename: `ImageFitting` → `Fitter`.  File rename:
-  `image_fitting.py` → `fitter.py`.  `qem.fit.ImageFitting` re-exported
-  for one-line back-compat (the design doc says "drop backward
-  support", but `Fitter` is short enough that not having an alias
-  isn't painful — re-export removed at end of phase 5).
+  `image_fitting.py` → `fitter.py`.  **No transitional alias** — every
+  consumer is updated in the same PR (clean break, per the
+  zero-back-compat decision).
 - `dict`-of-tensor parameter bags become a `FitParameters` dataclass
   with named fields: `pos_x`, `pos_y`, `height`, `width`, `background`,
   optional `bg_2d_*`.
@@ -174,7 +177,7 @@ To keep names short and roles clear:
 
 | Old | New | Phase |
 |---|---|---|
-| `qem/instruments/optics/*.py` | `qem/instruments/*.py` | 0 |
+| `qem/instruments/optics/*.py` | `qem/optics/*.py` (top-level) | 0 |
 | `qem/instruments/_legacy.py` | (deleted) | 0 |
 | `qem/utils/torch_compat.py` | (deleted) | 1 |
 | `qem/utils/backend.py` | `qem/utils/tensors.py` | 1 |
