@@ -66,8 +66,15 @@ class ImageModel(keras.Model):
             "width": keras.ops.convert_to_tensor(self.width),
             "background": keras.ops.convert_to_tensor(self.background),
             "same_width": self.input_params.get('same_width', False),
-            "atom_types": keras.ops.convert_to_tensor(self.input_params['atom_types']) 
         }
+        # atom_types may not be present in all models (e.g., convolution model)
+        if 'atom_types' in self.input_params:
+            dict_params['atom_types'] = keras.ops.convert_to_tensor(self.input_params['atom_types'])
+        else:
+            # Default to zeros if not present
+            dict_params['atom_types'] = keras.ops.convert_to_tensor(
+                keras.ops.zeros_like(self.height, dtype='int32')
+            )
         if hasattr(self, 'ratio'):
             dict_params['ratio'] = keras.ops.convert_to_tensor(self.ratio)
         return dict_params

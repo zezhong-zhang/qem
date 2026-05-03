@@ -83,3 +83,12 @@ Pending: rerun pytest after the scalebar/instruments changes, smoke-run `introdu
 <!-- concepts: branch-wrap-up, stash-merging, git-workflow -->
 - Task: Commit current changes on feat/pytorch-migration, merge stash f649c14441, then merge to master.
 - Why: User wants to consolidate in-flight pytorch-migration work (current dirty tree + stashed WIP) and integrate it into the main branch.
+
+### EARS — Progress (2026-05-03 22:15)
+<!-- concepts: stash-merging, conflict-resolution, public-api-surface -->
+Applied stash f649c14 onto fresh feat/pytorch-migration commit. Four files conflicted; resolutions:
+- `qem/instruments/probe.py`: stash had a parallel rewrite (different big Probe class, removed `chi` / `make_contrast_transfer_function`, renamed `class aberration` → `class Aberration`). Restored entirely from HEAD — upstream design (small Probe + free CTF helpers) supersedes.
+- `examples/introduction.ipynb`: 11 conflict blocks in cell JSON. Restored from HEAD — too risky to merge manually, upstream version reflects the migrated state.
+- `qem/fit/__init__.py`: kept upstream's explicit-import structure but added the stash's still-valid extra re-exports (point_potential helpers, `OptimizationResult`, `fit_ssb_ptychography`, `fit_adf_image`, `GaussianKernel`, `voronoi_point_record`).
+- `qem/instruments/__init__.py`: kept upstream's structure and added stash's valid extras (`detector` module, `chi`/`make_contrast_transfer_function`/`wavev` re-exports, `tilt_from_affine`).
+- `image_fitting.py` and `model.py` auto-merged cleanly — no manual work.

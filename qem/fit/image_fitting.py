@@ -158,6 +158,14 @@ class ImageFitting:
         self._atom_types = np.array([])  
         self._coordinates = np.array([])
         self.coordinates_history = dict()
+        
+        # Initialize boundary penalty settings (disabled by default)
+        self.use_boundary_penalty = False
+        self.boundary_margin = 2.0
+        self.boundary_strength = 0.01
+        
+        # Initialize adaptive edge loss settings (disabled by default)
+        self.use_adaptive_edge_loss = False
         self.coordinates_state = 0
         self.init_background = 0.0
         self.prediction = np.zeros_like(self.image)
@@ -389,6 +397,19 @@ class ImageFitting:
             model = LorentzianModel(dx=float(self.dx))
         elif self.model_type == "voigt":
             model = VoigtModel(dx=float(self.dx))
+        elif self.model_type == "convolution":
+            # For convolution model, PSF kernel must be set before model selection
+            # This is used by PtychographyFitting which overrides _select_model
+            if not hasattr(self, '_psf_kernel') or self._psf_kernel is None:
+                raise ValueError(
+                    "Convolution model requires PSF kernel. "
+                    "Use PtychographyFitting instead of ImageFitting directly."
+                )
+            from qem.fit.point_potential import ConvolutionImageModel
+            model = ConvolutionImageModel(
+                psf_kernel=self._psf_kernel,
+                dx=float(self.dx),
+            )
         else:
             raise ValueError(f"Model type {self.model_type} not supported.")
         return model
@@ -507,6 +528,228 @@ class ImageFitting:
         self.background_estimator.disable_2d_background()
         logging.info("2D background estimation disabled")
     
+    def enable_boundary_penalty(self, margin: float = 2.0, strength: float = 0.01):
+        """
+        Enable soft boundary penalty to improve edge atom fitting.
+        
+        This adds a smooth penalty term to the loss function that gently pushes
+        atoms back when they get too close to image boundaries, without hard clipping
+        that would zero out gradients.
+        
+        Args:
+            margin: Distance from edge (in pixels) where penalty starts. Default 2.0
+            strength: Penalty strength multiplier. Higher = stronger constraint. Default 0.01
+                     Recommended range: 0.001 to 0.1
+        
+        Example:
+            >>> fitter.enable_boundary_penalty(margin=3.0, strength=0.01)
+            >>> fitter.fit_global()  # Edge atoms will be constrained
+        """
+        self.use_boundary_penalty = True
+        self.boundary_margin = margin
+        self.boundary_strength = strength
+        
+        logging.info(f"Boundary penalty enabled: margin={margin}, strength={strength}")
+    
+    def disable_boundary_penalty(self):
+        """Disable boundary penalty constraint."""
+        self.use_boundary_penalty = False
+        
+        logging.info("Boundary penalty disabled")
+    
+    def enable_adaptive_edge_loss(self):
+        """
+        Enable adaptive gradient boosting for edge peaks.
+        
+        This amplifies the gradient signal for peaks with low visibility
+        (near or outside image boundaries), helping the optimizer converge
+        to the correct position even when most of the peak is invisible.
+        
+        Example:
+            >>> fitter.enable_adaptive_edge_loss()
+            >>> fitter.fit_global()  # Gradient boosting active for edge peaks
+        """
+        self.use_adaptive_edge_loss = True
+        
+        logging.info("Adaptive edge loss enabled (gradient boosting for edge peaks)")
+    
+    def disable_adaptive_edge_loss(self):
+        """Disable adaptive edge loss."""
+        self.use_adaptive_edge_loss = False
+        
+        logging.info("Adaptive edge loss disabled")
+    
+    def fit_with_edge_correction(self, maxiter=300, step_size=0.01, verbose=True):
+        """
+        Two-stage fitting optimized for edge peaks.
+        
+        Stage 1: Fit with positions constrained inside to get height/width estimates
+        Stage 2: Boost parameters and refit with positions allowed outside
+        
+        This addresses the initialization bias for edge peaks where height and
+        width are underestimated when initialized from clipped positions.
+        
+        Args:
+            maxiter: Maximum iterations per stage
+            step_size: Learning rate
+            verbose: Whether to print progress
+            
+        Returns:
+            Optimized parameters
+            
+        Example:
+            >>> fitter.coordinates = edge_coordinates
+            >>> fitter.disable_edge_window()
+            >>> params = fitter.fit_with_edge_correction()
+        """
+        if verbose:
+            logging.info("Starting two-stage edge-corrected fitting")
+        
+        # Stage 1: Constrained fit (positions stay inside)
+        if verbose:
+            logging.info("Stage 1: Fitting with positions constrained inside")
+        
+        # Temporarily disable boundary penalty
+        original_boundary_state = getattr(self, 'use_boundary_penalty', False)
+        self.use_boundary_penalty = False
+        
+        params_stage1 = self.fit_global(
+            maxiter=maxiter//2,
+            step_size=step_size,
+            verbose=False
+        )
+        
+        # Stage 2: Correct parameters and refit unconstrained
+        if verbose:
+            logging.info("Stage 2: Correcting parameters and refitting unconstrained")
+        
+        # Detect edge peaks (within 5 pixels of boundary)
+        h, w = self.image.shape
+        pos_x = safe_convert_to_numpy(params_stage1['pos_x'])
+        pos_y = safe_convert_to_numpy(params_stage1['pos_y'])
+        
+        edge_mask = (pos_x < 5) | (pos_x > w-5) | (pos_y < 5) | (pos_y > h-5)
+        
+        if np.any(edge_mask):
+            # Boost height and width for edge peaks
+            height = safe_convert_to_numpy(params_stage1['height'])
+            width = safe_convert_to_numpy(params_stage1['width'])
+            
+            height[edge_mask] *= 2.0  # Double height
+            width[edge_mask] *= 1.8   # Increase width by 80%
+            
+            params_stage1['height'] = safe_convert_to_tensor(height)
+            params_stage1['width'] = safe_convert_to_tensor(width)
+            
+            if verbose:
+                n_edge = np.sum(edge_mask)
+                logging.info(f"Corrected {n_edge} edge peak(s): height×2.0, width×1.8")
+        
+        # Enable boundary penalty for Stage 2
+        self.use_boundary_penalty = True
+        self.boundary_strength = 0.001
+        
+        params_final = self.fit_global(
+            params=params_stage1,
+            maxiter=maxiter,
+            step_size=step_size,
+            verbose=False
+        )
+        
+        # Restore original boundary penalty state
+        self.use_boundary_penalty = original_boundary_state
+        
+        if verbose:
+            logging.info("Two-stage fitting complete")
+        
+        self.params = params_final
+        self.prediction = safe_convert_to_numpy(self.predict(params_final, local=True))
+        
+        return params_final
+    
+    def calculate_peak_visibility(self, pos_x, pos_y, width):
+        """
+        Calculate what fraction of each peak is visible in the image.
+        
+        For a Gaussian, ~99.7% of intensity is within 3*sigma of center.
+        We check how much of this region overlaps with the image.
+        
+        Args:
+            pos_x: Peak center x positions (tensor or array)
+            pos_y: Peak center y positions (tensor or array)
+            width: Peak widths (sigma) (tensor or array)
+            
+        Returns:
+            visibility: Fraction of peak visible (0.01 to 1) for each peak
+        """
+        h, w = self.image.shape
+        
+        # Define the "effective region" as 3*sigma around center
+        radius = 3.0 * width
+        
+        # Calculate overlap with image bounds for each dimension
+        x_min = keras.ops.maximum(pos_x - radius, 0.0)
+        x_max = keras.ops.minimum(pos_x + radius, w - 1)
+        y_min = keras.ops.maximum(pos_y - radius, 0.0)
+        y_max = keras.ops.minimum(pos_y + radius, h - 1)
+        
+        # Visible width and height
+        visible_width = keras.ops.maximum(x_max - x_min, 0.0)
+        visible_height = keras.ops.maximum(y_max - y_min, 0.0)
+        
+        # Total width and height of effective region
+        total_width = 2 * radius
+        total_height = 2 * radius
+        
+        # Visibility as fraction of area
+        visibility = (visible_width * visible_height) / (total_width * total_height)
+        
+        # Clamp to [0.01, 1.0] to avoid division by zero and extreme values
+        visibility = keras.ops.clip(visibility, 0.01, 1.0)
+        
+        return visibility
+    
+    def calculate_boundary_penalty(self, pos_x, pos_y, width, max_distance=3.0):
+        """
+        Calculate soft boundary penalty for positions near or outside image edges.
+        
+        This penalty allows peaks to be outside the image by up to max_distance * width,
+        but applies a smooth quadratic penalty for positions beyond that.
+        
+        Args:
+            pos_x: Peak x positions (tensor or array)
+            pos_y: Peak y positions (tensor or array)
+            width: Peak widths (tensor or array)
+            max_distance: Maximum allowed distance outside (in units of sigma). Default 3.0
+            
+        Returns:
+            penalty: Scalar penalty value
+        """
+        h, w = self.image.shape
+        
+        # Calculate how far outside the boundary each peak is
+        # Negative means inside, positive means outside
+        dist_left = -pos_x
+        dist_right = pos_x - (w - 1)
+        dist_top = -pos_y
+        dist_bottom = pos_y - (h - 1)
+        
+        # Maximum allowed distance for each peak
+        allowed = max_distance * width
+        
+        # Penalty only when exceeding allowed distance
+        # Use smooth quadratic penalty
+        penalty_left = keras.ops.maximum(dist_left - allowed, 0.0) ** 2
+        penalty_right = keras.ops.maximum(dist_right - allowed, 0.0) ** 2
+        penalty_top = keras.ops.maximum(dist_top - allowed, 0.0) ** 2
+        penalty_bottom = keras.ops.maximum(dist_bottom - allowed, 0.0) ** 2
+        
+        total_penalty = keras.ops.sum(
+            penalty_left + penalty_right + penalty_top + penalty_bottom
+        )
+        
+        return total_penalty
+    
     def get_current_background(self) -> np.ndarray:
         """
         Get the current background (2D or scalar).
@@ -610,8 +853,10 @@ class ImageFitting:
         # Initialize position and height parameters
         pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
         pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
-        pos_x = np.clip(pos_x, 0, self.image.shape[0] - 1)
-        pos_y = np.clip(pos_y, 0, self.image.shape[1] - 1)
+        
+        # Note: We intentionally do NOT clip positions here to allow edge peaks
+        # to be initialized at their detected positions (which may be at x=0 or y=0).
+        # The fitting process will handle positions outside bounds if needed.
 
         # Initialize background using robust estimation
         if self.fit_background:
@@ -1134,7 +1379,7 @@ class ImageFitting:
         # self.prediction = safe_convert_to_numpy(prediction)
         return prediction
 
-    def loss(self, y_true, y_pred):
+    def loss(self, y_true, y_pred, use_adaptive_edge_loss=None):
         """
         Compute the loss value between the image and the prediction.
 
@@ -1144,17 +1389,64 @@ class ImageFitting:
             The original image tensor (ground truth).
         y_pred : np.ndarray
             The predicted image tensor (model output).
+        use_adaptive_edge_loss : bool, optional
+            If True, use adaptive gradient boosting for edge peaks.
+            If None, uses self.use_adaptive_edge_loss. Default None.
 
         Returns:
         --------
         float
             The computed loss value.
         """
+        # Use instance variable if not explicitly specified
+        if use_adaptive_edge_loss is None:
+            use_adaptive_edge_loss = getattr(self, 'use_adaptive_edge_loss', False)
+        
         diff = y_true - y_pred
         window = keras.ops.convert_to_tensor(self.window, dtype="float32")
         diff = keras.ops.multiply(diff, window)
+        
+        # Base MSE loss
         mse = keras.ops.sqrt(keras.ops.mean(keras.ops.square(diff)))
-        # l1 = keras.ops.mean(keras.ops.abs(diff))
+        
+        # Optionally use adaptive edge loss for better gradient signal
+        if use_adaptive_edge_loss:
+            # Use the model currently being optimized (if available)
+            model = getattr(self, '_optimization_model', self.model)
+            if model is not None:
+                # Get current parameters
+                params = model.get_params()
+                pos_x = params['pos_x']
+                pos_y = params['pos_y']
+                width = params['width']
+                
+                # Calculate visibility and apply gradient boost
+                visibility = self.calculate_peak_visibility(pos_x, pos_y, width)
+                boost_factor = 1.0 / keras.ops.sqrt(visibility)
+                avg_boost = keras.ops.mean(boost_factor)
+                mse = mse * avg_boost
+        
+        # Add soft boundary penalty if enabled
+        if hasattr(self, 'use_boundary_penalty') and self.use_boundary_penalty:
+            # Use the model currently being optimized (if available)
+            model = getattr(self, '_optimization_model', self.model)
+            if model is not None:
+                # Get current parameters
+                params = model.get_params()
+                pos_x = params['pos_x']
+                pos_y = params['pos_y']
+                width = params['width']
+                
+                # Calculate soft boundary penalty
+                boundary_penalty = self.calculate_boundary_penalty(
+                    pos_x, pos_y, width, max_distance=3.0
+                )
+                
+                # Apply penalty with strength factor
+                penalty_weight = getattr(self, 'boundary_strength', 0.01)
+                penalty_term = penalty_weight * boundary_penalty
+                mse = mse + penalty_term
+        
         return mse 
 
     def residual(self, params: dict):
@@ -1373,6 +1665,9 @@ class ImageFitting:
         # Build the model if not already built
         if not model.built:
             model.build()
+        
+        # Store reference to model being optimized so loss function can access it
+        self._optimization_model = model
 
         if verbose:
             print(f"Using {optimizer} optimizer for fitting.")
@@ -1449,6 +1744,9 @@ class ImageFitting:
                     callbacks=[early_stopping, reduce_on_plateau],
                     batch_size=batch_size,
                 )
+        
+        # Clean up model reference
+        self._optimization_model = None
                 
         optimized_params = model.get_params()
         return optimized_params
@@ -2918,6 +3216,22 @@ class ImageFitting:
             window = butterworth_window(self.image.shape, 0.5, 10)
             self._window = window
         return self._window
+    
+    def disable_edge_window(self):
+        """
+        Disable edge dampening window for better edge peak fitting.
+        
+        The default Butterworth window dampens edge pixels to reduce
+        Fourier artifacts, but this makes fitting edge peaks harder.
+        Call this method to use uniform weighting across the image.
+        
+        Example:
+            >>> fitter.disable_edge_window()
+            >>> fitter.enable_boundary_penalty()
+            >>> fitter.fit_global()  # Better edge peak fitting
+        """
+        self._window = np.ones_like(self.image)
+        logging.info("Edge window dampening disabled (uniform weighting)")
 
     @property
     def volume(self):
