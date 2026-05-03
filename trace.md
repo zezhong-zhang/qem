@@ -162,3 +162,22 @@ Wrapping up the abtem-alignment fixes. Final state:
 - Cleaning up duplicate `Aberration` import that the linter introduced in
   qem/instruments/__init__.py when it auto-renamed `class aberration` →
   `class Aberration`.
+
+### EARS — Progress (2026-05-03 23:24)
+<!-- concepts: ctf, refactor, optics-architecture -->
+Brainstorming a from-first-principles refactor of qem/instruments/{probe,ctf}.py.
+User asked for high clarity + high performance, breaking changes OK, drop tech debt.
+
+Scoped at "Option B" (instruments/ + CTF surface in qem/fit/). Deferred broader
+refactor of image_fitting.py (3372 lines) and convolve_fitting.py to a separate
+task — too much surface area for one pass.
+
+Picked Option 1 from the architecture menu: functional core + dataclass shells.
+Pure-function PSF builders (ssb_psf, adf_psf, icom_psf, epie_psf) over a
+Probe + Aberrations + Grid data triple. Drops ProbeParameters / kwargs
+factories / ABC + 4 leaky subclasses / dual sign-convention path. PyTorch
+backend so PSFs compose with the existing torch fit loops without
+host↔device round-trips.
+
+Spec written to docs/superpowers/specs/2026-05-03-instruments-optics-refactor-design.md.
+Awaiting user review before kicking off the implementation plan.
