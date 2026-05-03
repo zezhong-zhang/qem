@@ -6,7 +6,6 @@ from .params import *
 from .logging_config import *
 from .backend import *
 from .arrays import *
-from .periodic_table import *
 from .memory_optimization import *
 
 __all__ = [

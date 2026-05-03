@@ -7,7 +7,7 @@ import pytest
 from scipy.sparse import coo_matrix
 from qem.utils import torch_compat as keras
 
-from qem.schema.exceptions import ParameterError, DataError, ValidationError
+from qem.exceptions import ParameterError, DataError, ValidationError
 from qem.fit.linear_solver import (
     ParameterValidator,
     DesignMatrixBuilder,

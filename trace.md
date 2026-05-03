@@ -245,3 +245,25 @@ Each phase is its own commit, ends with all tests green. ~8 days total,
 
 Awaiting explicit go-ahead per auto-mode rule "destructive actions need
 explicit user confirmation". Started with Phase 0 since lowest risk.
+
+### EARS — Progress (2026-05-04 00:50)
+<!-- concepts: refactor, phase-0, optics-promotion, schema-flatten -->
+Phase 0 of the repo modernization in flight. User authorized "yes proceed
+until all phases implemented" with the constraint "zero aliases".
+
+Discovered three in-flight files I'd missed in the original survey:
+qem/backend_utils.py (203 lines, uses `import keras`),
+qem/linear_solver.py (441 lines, separate from qem/fit/linear_solver.py),
+and qem/fusion/ (~684 lines, multi-modal ADF+EDX+EELS analysis).
+The fusion code expects a flat `qem.exceptions` module that doesn't exist;
+3 tests fail at collection. Folding qem/schema/ flatten into Phase 0
+(exceptions.py + validation.py up to top level) to unblock those tests
+and align with flat-layout rule.
+
+Steps so far:
+- 0a (done): deleted qem/archive/ (untracked dead code)
+- 0b (in progress): git mv'd qem/instruments/optics/* → qem/optics/*;
+  rewrote qem/instruments/__init__.py to drop optics re-exports.
+  Next: delete _legacy.py, migrate consumers (fit/, tests/, examples/),
+  drop tests/test_ctf.py (will write new tests/test_psf.py against the
+  functional API).

@@ -24,7 +24,7 @@ from typing import Optional, Tuple, Union, List
 import numpy as np
 from qem.utils import torch_compat as keras
 
-from qem.instruments.optics import (
+from qem.optics import (
     Aberrations,
     Grid,
     Probe,
@@ -304,53 +304,6 @@ class ConvolutionFitting(ImageFitting):
         else:
             raise ValueError(f"Unknown CTF type: {self.ctf_type}")
         return psf.detach().cpu().numpy()
-
-    # ------------------------------------------------------------------
-    # Legacy method preserved so external code calling `_create_ctf` still
-    # works.  Returns a thin object whose ``get_psf`` proxies to the new
-    # functional API.
-    # ------------------------------------------------------------------
-    def _create_ctf(self):
-        """Build a legacy-style CTF object backed by the new optics core."""
-        from qem.instruments._legacy import (
-            SSB_CTF as _SSB,
-            ADF_CTF as _ADF,
-            ePIE_CTF as _EPIE,
-            iCoM_CTF as _ICOM,
-        )
-        p = self.probe_params
-        if self.ctf_type == "SSB":
-            return _SSB(
-                alpha=p.alpha,
-                eV=p.eV,
-                df=p.df,
-                aberrations=p.aberrations,
-            )
-        elif self.ctf_type == "ADF":
-            if p.detector_inner is None or p.detector_outer is None:
-                raise ValueError(
-                    "ADF requires detector_inner and detector_outer angles"
-                )
-            return _ADF(
-                alpha=p.alpha,
-                eV=p.eV,
-                detector_inner=p.detector_inner,
-                detector_outer=p.detector_outer,
-                df=p.df,
-                aberrations=p.aberrations,
-            )
-        elif self.ctf_type == "ePIE":
-            return _EPIE(alpha=p.alpha, eV=p.eV, df=p.df)
-        elif self.ctf_type == "iCoM":
-            return _ICOM(
-                alpha=p.alpha,
-                eV=p.eV,
-                high_pass_cutoff=p.high_pass_cutoff,
-                df=p.df,
-                aberrations=p.aberrations,
-            )
-        else:
-            raise ValueError(f"Unknown CTF type: {self.ctf_type}")
 
     def _select_model(self):
         """Create convolution model."""

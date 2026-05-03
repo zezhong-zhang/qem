@@ -53,7 +53,7 @@ from qem.fit.linear_solver import (
     LinearSystemSolver,
     SolutionProcessor,
 )
-from qem.schema.validation import ImageFittingValidator, FittingParameterValidator
+from qem.validation import ImageFittingValidator, FittingParameterValidator
 from qem.utils.memory_optimization import (
     BatchMemoryOptimizer,
     ChunkedProcessor,

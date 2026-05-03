@@ -1,28 +1,42 @@
 """Numpy wave-function helpers for multislice / coherent-imaging code.
 
-This module contains the multislice-adjacent helpers that used to live
-in ``qem/instruments/probe.py`` (focused-probe constructors, plane-wave
-illumination, and the chromatic-aberration averaging machinery).
-
-These functions are kept on numpy because they're not in any optimisation
-hot path and are typically called once per simulation.  For PSFs and
-fitting use :mod:`qem.instruments.optics` instead.
+Multislice-adjacent helpers (focused-probe constructors, plane-wave
+illumination, chromatic-aberration averaging).  Kept on numpy because
+they're not on the optimisation hot path; for PSFs and fitting use
+:mod:`qem.optics` instead.
 """
 
 from __future__ import annotations
 
 import copy
+import math
 
 import numpy as np
+import torch
 
+from qem.optics import Aberrations, chi as _chi, wavelength, wavev
 from qem.processing import q_space_array
 
-from ._legacy import chi as _legacy_chi
-from .optics import (
-    relativistic_mass_correction,  # noqa: F401  (re-exported)
-    wavelength,                     # noqa: F401  (re-exported)
-    wavev,
-)
+
+def _chi_numpy(q, qphi, lam: float, df: float, aberrations: Aberrations | None) -> np.ndarray:
+    """Adapter: evaluate :func:`qem.optics.chi` for numpy q-grids."""
+    if aberrations is None:
+        ab = Aberrations(defocus=df) if df else Aberrations()
+    else:
+        # Add user-facing defocus on top of any C10 already in the dataclass.
+        if df:
+            ab = Aberrations(C10=aberrations.C10 - float(df), **{
+                k: getattr(aberrations, k)
+                for k in ("C12","phi12","C21","phi21","C23","phi23","C30",
+                          "C32","phi32","C34","phi34","C41","phi41","C43",
+                          "phi43","C45","phi45","C50","C52","phi52","C54",
+                          "phi54","C56","phi56")
+            })
+        else:
+            ab = aberrations
+    alpha_t = torch.as_tensor(np.asarray(q, dtype=float) * lam)
+    phi_t = torch.as_tensor(np.asarray(qphi, dtype=float))
+    return _chi(alpha_t, phi_t, wavelength=lam, aberrations=ab).cpu().numpy()
 
 
 def depth_of_field(eV: float, alpha: float) -> float:
@@ -95,7 +109,7 @@ def make_contrast_transfer_function(
     mask = qarray2 <= app_ ** 2
     ctf = np.zeros(pix_dim, dtype=complex)
     ctf[mask] = np.exp(
-        -1j * _legacy_chi(qarray1[mask], qphi[mask], 1.0 / k, df, aberrations)
+        -1j * _chi_numpy(qarray1[mask], qphi[mask], 1.0 / k, df, aberrations)
     )
     return ctf
 

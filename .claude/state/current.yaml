@@ -3,7 +3,7 @@ session_id: s-1777819079-d8c4bc
 role: standalone
 status: active
 started_at: '2026-05-03T14:37:59Z'
-last_heartbeat: '2026-05-03T16:28:02Z'
+last_heartbeat: '2026-05-03T16:59:41Z'
 branch: master
 cwd: /Users/zhangzz/code/qem
 current_task: ''
@@ -11,40 +11,82 @@ decisions: []
 blockers: []
 artifacts: []
 metrics:
-  edits: 62
+  edits: 91
   commits: 0
   errors_fixed: 0
   decisions_made: 0
 plan:
-  current_step_index: 0
+  current_step_index: 3
   steps:
   - index: 0
     action: 'Phase 0a: Delete qem/archive/'
     active_form: Deleting archive
-    status: in_progress
+    status: completed
     expected_outcome: null
     result: null
   - index: 1
     action: 'Phase 0b: Move qem/instruments/optics/*.py to qem/optics/*.py + update consumers'
     active_form: Moving optics to top level
-    status: pending
+    status: completed
     expected_outcome: null
     result: null
   - index: 2
-    action: 'Phase 0c: Delete qem/instruments/_legacy.py + migrate tests/examples/fit to new API'
+    action: 'Phase 0c: Delete qem/instruments/_legacy.py + migrate fit/tests/examples'
     active_form: Deleting _legacy.py
-    status: pending
+    status: completed
     expected_outcome: null
     result: null
   - index: 3
-    action: 'Phase 0d: Bump Python floor to 3.11 in pyproject.toml + add ruff config'
+    action: 'Phase 0d: Flatten qem/schema/{exceptions,validation}.py to qem/{exceptions,validation}.py'
+    active_form: Flattening qem/schema/
+    status: in_progress
+    expected_outcome: null
+    result: null
+  - index: 4
+    action: 'Phase 0e: Bump Python floor to 3.11 in pyproject.toml + add ruff config'
     active_form: Bumping Python floor
     status: pending
     expected_outcome: null
     result: null
-  - index: 4
-    action: 'Phase 0e: Verify all tests pass + commit Phase 0'
+  - index: 5
+    action: 'Phase 0f: Verify all tests pass + commit Phase 0'
     active_form: Verifying + committing Phase 0
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 6
+    action: 'Phase 1: drop keras shim'
+    active_form: Dropping keras shim
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 7
+    action: 'Phase 1.5: reconcile linear_solver duplication'
+    active_form: Reconciling linear_solver
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 8
+    action: 'Phase 2: decompose ImageFitting'
+    active_form: Decomposing ImageFitting
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 9
+    action: 'Phase 3: trim utils + viz renames'
+    active_form: Trimming utils/viz
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 10
+    action: 'Phase 4: modernize io/dm.py style'
+    active_form: Modernizing io/dm.py
+    status: pending
+    expected_outcome: null
+    result: null
+  - index: 11
+    action: 'Phase 5: polish'
+    active_form: Polishing
     status: pending
     expected_outcome: null
     result: null
@@ -63,6 +105,13 @@ detour_tracker:
     title: Thrashing on 2026-05-04-repo-modernization-design.md
     target_signature: edit:/Users/zhangzz/code/qem/docs/superpowers/specs/2026-05-04-repo-modernization-design.md
     started_at: '2026-05-03T16:26:30Z'
+    attempt_count: 6
+    failed_attempts: []
+    status: active
+  - id: det_1777827209942_d1bc1e
+    title: Thrashing on ptychography_optimization.py
+    target_signature: edit:/Users/zhangzz/code/qem/qem/fit/ptychography_optimization.py
+    started_at: '2026-05-03T16:53:29Z'
     attempt_count: 6
     failed_attempts: []
     status: active

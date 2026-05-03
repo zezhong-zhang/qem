@@ -266,7 +266,7 @@ class MultiModalDataset:
             raise DataError("concentrations must have shape (height, width, elements)")
 
         if adf_weights is None:
-            from qem.periodic_table import chemical_symbols
+            from qem.elements import chemical_symbols
 
             lookup = {symbol: index for index, symbol in enumerate(chemical_symbols)}
             weights = np.array([lookup.get(element, 1) for element in elements], dtype=np.float64)

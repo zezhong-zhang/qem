@@ -13,8 +13,8 @@ or ``Aberrations(C10=-50)`` interchangeably; both store the same C10.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
-from typing import Iterable, Mapping
+from dataclasses import dataclass, fields
+from typing import Mapping
 
 
 # Symbol → (n, m) order pairs.  Magnitudes (`Cnm`) carry units of Å,
@@ -169,33 +169,6 @@ class Aberrations:
     @classmethod
     def from_mapping(cls, params: Mapping[str, float]) -> "Aberrations":
         return cls(**dict(params))
-
-    @classmethod
-    def from_legacy_list(
-        cls, ablist: Iterable, df: float = 0.0
-    ) -> "Aberrations":
-        """Convert the old-style ``[Aberration(...), ...]`` list + ``df``.
-
-        ``df`` follows the post-fix convention (``df = -C10``).  Each
-        legacy aberration object is identified by its ``(n, m)`` tuple
-        or, if available, its ``Krivanek`` tag.
-        """
-        kwargs: dict[str, float] = {}
-        if df:
-            kwargs["defocus"] = float(df)
-        for ab in ablist or ():
-            sym = getattr(ab, "Krivanek", "") or f"C{int(ab.n)}{int(ab.m)}"
-            sym = sym.strip()
-            if sym not in MAGNITUDE_SYMBOLS:
-                raise ValueError(
-                    f"Unknown aberration symbol {sym!r} in legacy list "
-                    f"(n={ab.n}, m={ab.m})."
-                )
-            kwargs[sym] = kwargs.get(sym, 0.0) + float(ab.amplitude)
-            if int(ab.m) > 0:
-                phi_sym = "phi" + sym[1:]
-                kwargs[phi_sym] = float(getattr(ab, "angle", 0.0))
-        return cls(**kwargs)
 
     def __repr__(self) -> str:
         nz = self.coefficients()

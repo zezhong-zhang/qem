@@ -19,11 +19,14 @@ import numpy as np
 import torch
 from qem.utils import torch_compat as keras
 
-from qem.instruments._legacy import (
-    SSB_CTF,
-    ADF_CTF,
-    ePIE_CTF,
-    iCoM_CTF,
+from qem.optics import (
+    Aberrations,
+    Grid,
+    Probe,
+    adf_psf,
+    epie_psf,
+    icom_psf,
+    ssb_psf,
 )
 from qem.processing.psf import calculate_psf_width
 from qem.fit.point_potential import (
@@ -356,23 +359,15 @@ class PtychographyOptimizer:
         self.ctf_type = ctf_type
         self.real_dim = (self.ny, self.nx)  # Assuming pixel size = 1 Angstrom
 
-        # Create CTF calculator
-        self.ctf = self._create_ctf(
-            ctf_type,
-            alpha,
-            eV,
-            df,
-            aberrations,
-            detector_inner,
-            detector_outer,
-            high_pass_cutoff,
-        )
-
-        # Get PSF
+        # Build PSF directly via the new optics API
+        self.ctf = None  # legacy attr; PSF is what downstream code consumes
         if psf_kernel is not None:
             self.psf = psf_kernel
         else:
-            self.psf = self.ctf.get_psf((self.ny, self.nx), self.real_dim)
+            self.psf = self._compute_psf(
+                ctf_type, alpha, eV, df, aberrations,
+                detector_inner, detector_outer, high_pass_cutoff,
+            )
 
         self.psf_width = calculate_psf_width(self.psf)
 
@@ -382,7 +377,7 @@ class PtychographyOptimizer:
         # Create Keras model
         self.model = ConvolutionModel(self.psf, self.potential_model)
 
-    def _create_ctf(
+    def _compute_psf(
         self,
         ctf_type: str,
         alpha: float,
@@ -392,20 +387,34 @@ class PtychographyOptimizer:
         detector_inner: Optional[float],
         detector_outer: Optional[float],
         high_pass_cutoff: Optional[float],
-    ):
-        """Create CTF calculator based on type."""
+    ) -> np.ndarray:
+        """Build a real-space PSF for the requested STEM imaging mode."""
+        if aberrations is None or len(aberrations) == 0:
+            ab = Aberrations(defocus=df) if df else Aberrations()
+        elif isinstance(aberrations, Aberrations):
+            ab = aberrations  # already the new dataclass
+        else:
+            raise TypeError(
+                f"aberrations must be an Aberrations dataclass or empty, "
+                f"got {type(aberrations).__name__}"
+            )
+        probe = Probe(energy=eV, aperture=alpha, aberrations=ab)
+        grid = Grid(pixels=(self.ny, self.nx), extent=tuple(self.real_dim))
         if ctf_type == "SSB":
-            return SSB_CTF(alpha, eV, df, aberrations)
+            psf = ssb_psf(grid, probe)
         elif ctf_type == "ADF":
             if detector_inner is None or detector_outer is None:
-                raise ValueError("ADF requires detector_inner and detector_outer angles")
-            return ADF_CTF(alpha, eV, detector_inner, detector_outer, df, aberrations)
+                raise ValueError(
+                    "ADF requires detector_inner and detector_outer angles"
+                )
+            psf = adf_psf(grid, probe)
         elif ctf_type == "ePIE":
-            return ePIE_CTF(alpha, eV, df)
+            psf = epie_psf(grid, probe)
         elif ctf_type == "iCoM":
-            return iCoM_CTF(alpha, eV, high_pass_cutoff, df=df, aberrations=aberrations)
+            psf = icom_psf(grid, probe, high_pass_mrad=high_pass_cutoff)
         else:
             raise ValueError(f"Unknown CTF type: {ctf_type}")
+        return psf.detach().cpu().numpy()
 
     def _loss_function(self, y_true, y_pred):
         """
@@ -657,9 +666,21 @@ class ADFConvolutionFitting:
         self.image = image.astype(np.float32)
         self.ny, self.nx = image.shape
 
-        # Create ADF CTF
-        self.ctf = ADF_CTF(alpha, eV, detector_inner, detector_outer, df, aberrations)
-        self.psf = self.ctf.get_psf((self.ny, self.nx), (self.ny, self.nx))
+        # Remember construction params so :meth:`fit` can pass them through
+        self.alpha = alpha
+        self.eV = eV
+        self.df = df
+        self.aberrations = aberrations
+        self.detector_inner = detector_inner
+        self.detector_outer = detector_outer
+
+        # Build ADF PSF directly via the new optics API
+        ab = aberrations if isinstance(aberrations, Aberrations) else (
+            Aberrations(defocus=df) if df else Aberrations()
+        )
+        probe = Probe(energy=eV, aperture=alpha, aberrations=ab)
+        grid = Grid(pixels=(self.ny, self.nx), extent=(self.ny, self.nx))
+        self.psf = adf_psf(grid, probe).detach().cpu().numpy()
         self.potential_model = PointPotentialModel()
 
     def fit(
@@ -694,12 +715,12 @@ class ADFConvolutionFitting:
         optimizer = PtychographyOptimizer(
             target_image=self.image,
             ctf_type="ADF",
-            alpha=self.ctf.alpha,
-            eV=self.ctf.eV,
-            df=self.ctf.df,
-            aberrations=self.ctf.aberrations,
-            detector_inner=self.ctf.detector_inner,
-            detector_outer=self.ctf.detector_outer,
+            alpha=self.alpha,
+            eV=self.eV,
+            df=self.df,
+            aberrations=self.aberrations,
+            detector_inner=self.detector_inner,
+            detector_outer=self.detector_outer,
             psf_kernel=self.psf,
         )
 

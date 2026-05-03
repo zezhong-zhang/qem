@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 import torch
 
-from qem.instruments.optics import (
+from qem.optics import (
     Aberrations,
     Grid,
     Probe,
@@ -311,5 +311,5 @@ def test_probe_wave_normalized_and_centered(fp64_setup):
 
 
 def probe_wave_real_space(grid, probe):
-    from qem.instruments.optics import probe_wave  # late import to keep top tidy
+    from qem.optics import probe_wave  # late import to keep top tidy
     return probe_wave(grid, probe)

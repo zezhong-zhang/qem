@@ -200,12 +200,13 @@ class ConvolutionImageModel(ImageModel):
 
     To use this model with ImageFitting:
     ```python
-    from qem.instruments import SSB_CTF
+    from qem.optics import Aberrations, Grid, Probe, ssb_psf
     from qem.fit.point_potential import ConvolutionImageModel
 
-    # Create PSF from microscope parameters
-    ctf = SSB_CTF(alpha=20, eV=60e3, df=0)
-    psf = ctf.get_psf((ny, nx), (ny, nx))
+    # Build PSF from microscope parameters
+    probe = Probe(energy=60e3, aperture=20, aberrations=Aberrations())
+    grid = Grid(pixels=(ny, nx), extent=(ny, nx))
+    psf = ssb_psf(grid, probe).cpu().numpy()
 
     # Create model
     model = ConvolutionImageModel(psf_kernel=psf, dx=1.0)
