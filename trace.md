@@ -222,3 +222,26 @@ qem/processing/psf.py — they're image-analysis utilities, not optics.
 Next: migrate qem/fit/ consumers off the deprecated CTF classes and the
 ProbeParameters/create_probe_parameters/calculate_psf_width imports from
 qem.instruments. Then delete old probe.py + ctf.py.
+
+### EARS — Progress (2026-05-04 00:20)
+<!-- concepts: refactor-planning, repo-modernization, phasing -->
+User asked to refactor the entire qem/ repo (22,445 LoC across 11 subpackages)
+for modern Python, clear architecture, PyTorch-only. Drop keras shim.
+
+Couldn't proceed without phasing — single mega-PR would be unreviewable.
+Wrote design doc at docs/superpowers/specs/2026-05-04-repo-modernization-design.md
+proposing 6 phases (0-5):
+ - Phase 0: cleanup, ground rules, drop _legacy.py, Python 3.11 floor
+ - Phase 1: drop keras shim (~16 files affected, 2 days)
+ - Phase 2: decompose ImageFitting (3372 lines, 89 methods, 1 class) into
+   ~9 modules under qem/fit/image_fitting/
+ - Phase 3: trim memory_optimization (761→200) + logging_config (341→80)
+ - Phase 4: modernize io/dm.py style (no logic changes — gated by absence
+   of DM3/DM4 regression tests)
+ - Phase 5: polish
+
+Each phase is its own commit, ends with all tests green. ~8 days total,
+~1600 LoC reduction net.
+
+Awaiting explicit go-ahead per auto-mode rule "destructive actions need
+explicit user confirmation". Started with Phase 0 since lowest risk.
