@@ -9,8 +9,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from qem.instruments.ctf import SSB_CTF, ADF_CTF, create_aberration_list
-from qem.instruments.probe import Probe
+from qem.instruments import SSB_CTF, ADF_CTF, create_aberration_list
+from qem.instruments import LegacyProbe as Probe
 
 
 def plot_envelope_comparison():

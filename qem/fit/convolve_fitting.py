@@ -24,15 +24,107 @@ from typing import Optional, Tuple, Union, List
 import numpy as np
 from qem.utils import torch_compat as keras
 
-from qem.instruments.ctf import (
-    SSB_CTF,
-    ADF_CTF,
-    ePIE_CTF,
-    iCoM_CTF,
-    calculate_psf_width,
-    ProbeParameters,
-    create_probe_parameters,
+from qem.instruments.optics import (
+    Aberrations,
+    Grid,
+    Probe,
+    adf_psf,
+    epie_psf,
+    focal_spread_from_chromatic,
+    icom_psf,
+    ssb_psf,
 )
+from qem.processing.psf import calculate_psf_width
+
+
+# Light-weight replacement for the legacy ProbeParameters dataclass.
+# Kept as a public name in this module so callers that pass a dict to
+# ConvolutionFitting(...) can still do so, but new code should pass
+# `Probe`/`Aberrations` directly via the `probe` keyword.
+class ProbeParameters:
+    """Adapter: holds CTF-mode-specific probe parameters as plain attrs.
+
+    Wraps the optics :class:`~qem.instruments.optics.Probe` plus a few
+    extras (``high_pass_cutoff``, ``detector_inner``/``outer``) that
+    don't belong on the Probe itself.
+    """
+
+    def __init__(
+        self,
+        alpha=20.0,
+        eV=60e3,
+        df=0.0,
+        aberrations=None,
+        detector_inner=None,
+        detector_outer=None,
+        high_pass_cutoff=None,
+        Cc=None,
+        deltaE=None,
+        df_spread=None,
+        source_size=None,
+    ):
+        self.alpha = alpha
+        self.eV = eV
+        self.df = df
+        self.aberrations = aberrations
+        self.detector_inner = detector_inner
+        self.detector_outer = detector_outer
+        self.high_pass_cutoff = high_pass_cutoff
+        self.Cc = Cc
+        self.deltaE = deltaE
+        self.df_spread = df_spread
+        self.source_size = source_size
+
+    @classmethod
+    def from_dict(cls, params: dict) -> "ProbeParameters":
+        return cls(**{k: v for k, v in params.items()
+                      if k in cls.__init__.__code__.co_varnames})
+
+    def to_probe(self) -> Probe:
+        ab_obj = (
+            self.aberrations
+            if isinstance(self.aberrations, Aberrations)
+            else Aberrations.from_legacy_list(self.aberrations or [], df=self.df)
+        )
+        if self.df_spread is not None:
+            fs = float(self.df_spread)
+        elif self.Cc is not None and self.deltaE is not None:
+            fs = focal_spread_from_chromatic(self.Cc, self.deltaE, self.eV)
+        else:
+            fs = 0.0
+        return Probe(
+            energy=self.eV,
+            aperture=self.alpha,
+            aberrations=ab_obj,
+            focal_spread=fs,
+            angular_spread=float(self.source_size or 0.0),
+        )
+
+
+def create_probe_parameters(**kwargs) -> ProbeParameters:
+    """Compact constructor preserved for back-compat with legacy callers."""
+    defocus = kwargs.pop("defocus", None)
+    if defocus is not None:
+        kwargs["df"] = defocus
+    # Keep individual aberration kwargs out of ProbeParameters; bundle
+    # them into an Aberrations object instead.
+    ab_keys = {
+        "spherical_aberration", "two_fold_astigmatism", "two_fold_angle",
+        "three_fold_astigmatism", "three_fold_angle", "coma", "coma_angle",
+    }
+    ab_specific = {k: kwargs.pop(k) for k in list(kwargs) if k in ab_keys}
+    if ab_specific and "aberrations" not in kwargs:
+        ab = Aberrations(
+            Cs=ab_specific.get("spherical_aberration", 0.0) or 0.0,
+            astigmatism=ab_specific.get("two_fold_astigmatism", 0.0) or 0.0,
+            astigmatism_angle=ab_specific.get("two_fold_angle", 0.0) or 0.0,
+            trefoil=ab_specific.get("three_fold_astigmatism", 0.0) or 0.0,
+            trefoil_angle=ab_specific.get("three_fold_angle", 0.0) or 0.0,
+            coma=ab_specific.get("coma", 0.0) or 0.0,
+            coma_angle=ab_specific.get("coma_angle", 0.0) or 0.0,
+        )
+        kwargs["aberrations"] = ab
+    return ProbeParameters(**kwargs)
 from qem.fit.point_potential import (
     PointPotentialModel,
     ConvolutionImageModel,
@@ -168,13 +260,13 @@ class ConvolutionFitting(ImageFitting):
         else:
             self.probe_params = probe_params
 
-        # Get or create PSF
+        # Get or create PSF using the new optics functional API.
         if psf_kernel is not None:
             self.psf = psf_kernel
             self.ctf = None
         else:
-            self.ctf = self._create_ctf()
-            self.psf = self.ctf.get_psf((self.ny, self.nx), self.real_dim)
+            self.ctf = None  # legacy attribute kept for back-compat
+            self.psf = self._compute_psf()
 
         self.psf_width = calculate_psf_width(self.psf)
 
@@ -191,12 +283,44 @@ class ConvolutionFitting(ImageFitting):
             **kwargs
         )
 
-    def _create_ctf(self):
-        """Create CTF calculator based on type and probe parameters."""
+    def _compute_psf(self) -> np.ndarray:
+        """Build the PSF for the current ``ctf_type`` + ``probe_params``."""
         p = self.probe_params
+        probe = p.to_probe()
+        grid = Grid(pixels=(self.ny, self.nx), extent=tuple(self.real_dim))
 
         if self.ctf_type == "SSB":
-            return SSB_CTF(
+            psf = ssb_psf(grid, probe)
+        elif self.ctf_type == "ADF":
+            if p.detector_inner is None or p.detector_outer is None:
+                raise ValueError(
+                    "ADF requires detector_inner and detector_outer angles"
+                )
+            psf = adf_psf(grid, probe)
+        elif self.ctf_type == "ePIE":
+            psf = epie_psf(grid, probe)
+        elif self.ctf_type == "iCoM":
+            psf = icom_psf(grid, probe, high_pass_mrad=p.high_pass_cutoff)
+        else:
+            raise ValueError(f"Unknown CTF type: {self.ctf_type}")
+        return psf.detach().cpu().numpy()
+
+    # ------------------------------------------------------------------
+    # Legacy method preserved so external code calling `_create_ctf` still
+    # works.  Returns a thin object whose ``get_psf`` proxies to the new
+    # functional API.
+    # ------------------------------------------------------------------
+    def _create_ctf(self):
+        """Build a legacy-style CTF object backed by the new optics core."""
+        from qem.instruments._legacy import (
+            SSB_CTF as _SSB,
+            ADF_CTF as _ADF,
+            ePIE_CTF as _EPIE,
+            iCoM_CTF as _ICOM,
+        )
+        p = self.probe_params
+        if self.ctf_type == "SSB":
+            return _SSB(
                 alpha=p.alpha,
                 eV=p.eV,
                 df=p.df,
@@ -204,8 +328,10 @@ class ConvolutionFitting(ImageFitting):
             )
         elif self.ctf_type == "ADF":
             if p.detector_inner is None or p.detector_outer is None:
-                raise ValueError("ADF requires detector_inner and detector_outer angles")
-            return ADF_CTF(
+                raise ValueError(
+                    "ADF requires detector_inner and detector_outer angles"
+                )
+            return _ADF(
                 alpha=p.alpha,
                 eV=p.eV,
                 detector_inner=p.detector_inner,
@@ -214,13 +340,9 @@ class ConvolutionFitting(ImageFitting):
                 aberrations=p.aberrations,
             )
         elif self.ctf_type == "ePIE":
-            return ePIE_CTF(
-                alpha=p.alpha,
-                eV=p.eV,
-                df=p.df,
-            )
+            return _EPIE(alpha=p.alpha, eV=p.eV, df=p.df)
         elif self.ctf_type == "iCoM":
-            return iCoM_CTF(
+            return _ICOM(
                 alpha=p.alpha,
                 eV=p.eV,
                 high_pass_cutoff=p.high_pass_cutoff,

@@ -3,15 +3,15 @@
 import numpy as np
 import pytest
 
-from qem.instruments.ctf import (
-    SSB_CTF,
+from qem.instruments import (
     ADF_CTF,
-    ePIE_CTF,
-    iCoM_CTF,
+    SSB_CTF,
     calculate_psf_width,
+    ePIE_CTF,
     extract_psf_from_atom_image,
+    iCoM_CTF,
 )
-from qem.instruments.probe import Probe
+from qem.instruments import LegacyProbe as Probe
 
 
 class TestSSB_CTF:

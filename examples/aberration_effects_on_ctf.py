@@ -10,11 +10,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 
-from qem.instruments.ctf import (
+from qem.instruments import (
     SSB_CTF,
+    Aberration,
     create_aberration_list,
 )
-from qem.instruments.probe import Aberration
 
 
 def plot_aberration_effects_on_ctf():
@@ -246,7 +246,7 @@ def plot_aberration_effects_on_psf():
 
         # Handle full aberration set
         if config["aberrations"] is None:
-            from qem.instruments.probe import aberration_starter_pack
+            from qem.instruments import aberration_starter_pack
             ab_list = aberration_starter_pack()
             # Set some non-zero values for demonstration
             for ab in ab_list:
@@ -426,7 +426,7 @@ def plot_aberration_phase_maps():
     real_dim = (32.0, 32.0)
 
     from qem.processing import q_space_array
-    from qem.instruments.probe import Probe
+    from qem.instruments import LegacyProbe as Probe
     q = q_space_array(pix_dim, real_dim)
     q_mag = np.sqrt(q[0]**2 + q[1]**2)
     qphi = np.arctan2(q[0], q[1])

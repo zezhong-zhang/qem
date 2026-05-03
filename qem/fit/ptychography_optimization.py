@@ -19,13 +19,13 @@ import numpy as np
 import torch
 from qem.utils import torch_compat as keras
 
-from qem.instruments.ctf import (
+from qem.instruments._legacy import (
     SSB_CTF,
     ADF_CTF,
     ePIE_CTF,
     iCoM_CTF,
-    calculate_psf_width,
 )
+from qem.processing.psf import calculate_psf_width
 from qem.fit.point_potential import (
     PointPotentialModel,
     correlation_coefficient,

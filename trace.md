@@ -181,3 +181,44 @@ host↔device round-trips.
 
 Spec written to docs/superpowers/specs/2026-05-03-instruments-optics-refactor-design.md.
 Awaiting user review before kicking off the implementation plan.
+
+### EARS — Progress (2026-05-03 23:34)
+<!-- concepts: optics-refactor, aberrations, dataclass-design -->
+Implementing the optics refactor approved at 23:24. Bottom-up: constants.py
+done, aberrations.py done. Aberrations is a frozen dataclass with named
+polar-coefficient fields (C10, C12, phi12, ...) plus an aliasing __init__
+that accepts friendlier names (defocus → -C10, Cs → C30, etc.). One sign
+convention: defocus = -C10, abtem-aligned. from_legacy_list() handles the
+back-compat shim path. Stripped per-instance string metadata (Krivanek,
+Haider, Description) — that was class info masquerading as instance state.
+
+Next: chi.py and grad_chi.py PyTorch primitives.
+
+### EARS — Progress (2026-05-03 23:45)
+<!-- concepts: optics-refactor, psf-builders, abtem-equivalence -->
+optics/ package fully built: constants, aberrations, chi, envelopes,
+aperture, grid, probe, psf, __init__. Smoke-tested end-to-end — all four
+PSFs (ssb, adf, icom, epie) produce centered, normalized output with
+sensible values for both unaberrated and severely-aberrated probes.
+
+Test suite tests/test_optics_vs_abtem.py written: parameterized chi,
+temporal envelope, spatial envelope tests against abtem reference (closed
+forms inlined since abtem needs Python 3.11+). Plus finite-difference
+gradient check, sign-convention sanity, and probe wave normalisation/
+centering.
+
+Next: run tests, build _legacy shim, migrate qem/fit/, then delete old
+probe.py + ctf.py.
+
+### EARS — Progress (2026-05-04 00:04)
+<!-- concepts: optics-refactor, legacy-shim, fft-conventions -->
+Optics package + legacy shim wired into qem/instruments/__init__.py.
+All 35 legacy CTF tests + 20 new abtem-equivalence tests pass; full
+test suite at 155 passed / 1 skipped.
+
+PSF helpers (calculate_psf_width, extract_psf_from_atom_image) moved to
+qem/processing/psf.py — they're image-analysis utilities, not optics.
+
+Next: migrate qem/fit/ consumers off the deprecated CTF classes and the
+ProbeParameters/create_probe_parameters/calculate_psf_width imports from
+qem.instruments. Then delete old probe.py + ctf.py.
