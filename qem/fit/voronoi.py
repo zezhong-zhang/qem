@@ -155,8 +155,12 @@ def voronoi_integrate(
     return integrated_intensity, intensity_record, point_record
 
 def voronoi_point_record(image, points, max_radius, pbc=False, box=None):
-    """
-    Fast Voronoi cell assignment using cKDTree.
+    """Voronoi cell assignment via scipy cKDTree.
+
+    Tested torch ``cdist + argmin`` on this — even on MPS the brute-
+    force O(P·N) pairwise distance loses to scipy's O(P·log N) k-d
+    tree (242ms scipy vs 447ms MPS vs 1467ms CPU torch on 256×256
+    image with ~3000 atoms). k-d tree wins on this access pattern.
 
     Parameters
     ----------
@@ -169,12 +173,12 @@ def voronoi_point_record(image, points, max_radius, pbc=False, box=None):
     pbc : bool, optional
         Whether to use periodic boundary conditions.
     box : tuple or None
-        Box size for PBC, e.g., (height, width). Required if pbc=True.
+        Box size for PBC. Required if pbc=True.
 
     Returns
     -------
     point_record : 2D numpy array
-        Voronoi array where equal values belong to the same Voronoi cell.
+        Voronoi array where equal values belong to the same cell.
     """
     shape = image.shape if hasattr(image, "shape") else image
     points = np.asarray(points)
@@ -182,7 +186,6 @@ def voronoi_point_record(image, points, max_radius, pbc=False, box=None):
         raise ValueError("points should have shape (2, N)")
     points_xy = np.column_stack((points[0], points[1]))
 
-    # Setup KDTree (with PBC if requested)
     if pbc:
         if box is None:
             box = shape
@@ -194,10 +197,8 @@ def voronoi_point_record(image, points, max_radius, pbc=False, box=None):
     grid_points = np.column_stack((grid_y.ravel(), grid_x.ravel()))
 
     dist, idx = tree.query(grid_points, distance_upper_bound=max_radius)
-    idx[dist >= max_radius] = -1  # Mark as outside any cell
-
-    point_record = idx.reshape(shape) + 1  # To match calculate_point_record (0 = background)
-    return point_record
+    idx[dist >= max_radius] = -1
+    return idx.reshape(shape) + 1
 
 def calculate_point_record(image, points, max_radius, pbc=False):
     """
