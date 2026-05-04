@@ -577,31 +577,42 @@ def _fit_voronoi_batched(
     x_off = cx - max_radius   # may be negative; we clip below
     y_off = cy - max_radius
 
-    # Build (N, k, k) batched crops and masks, padded with zeros.
+    # Vectorised (N, k, k) crops + masks build via scatter. Replaces a
+    # Python loop that did `point_record == i + 1` once per atom —
+    # O(P·N) full-image scans → O(P) one pass over assigned pixels.
     crops = np.zeros((N, k, k), dtype=np.float32)
     masks = np.zeros((N, k, k), dtype=bool)
-    local_min = np.zeros(N, dtype=np.float32)
-    valid = np.zeros(N, dtype=bool)
+    local_min = np.full(N, np.inf, dtype=np.float32)
 
-    for i in range(N):
-        cell_mask = point_record == i + 1
-        if not cell_mask.any():
-            continue
-        # Source slice on the image, dest slice on the (k, k) crop.
-        src_y = slice(int(y0[i]), int(y1[i]))
-        src_x = slice(int(x0[i]), int(x1[i]))
-        dst_y = slice(int(y0[i] - y_off[i]), int(y1[i] - y_off[i]))
-        dst_x = slice(int(x0[i] - x_off[i]), int(x1[i] - x_off[i]))
-        sub_mask = cell_mask[src_y, src_x]
-        if not sub_mask.any():
-            continue
-        sub_img = image_np[src_y, src_x] * sub_mask
-        masks[i, dst_y, dst_x] = sub_mask
-        # Subtract local min (over masked region only).
-        lm = float(image_np[src_y, src_x][sub_mask].min())
-        local_min[i] = lm
-        crops[i, dst_y, dst_x] = (sub_img - lm) * sub_mask
-        valid[i] = True
+    # All assigned pixel-atom pairs (point_record stores atom_id+1, 0=bg).
+    assigned = point_record - 1
+    pix_y, pix_x = np.where(assigned >= 0)
+    atom_ids = assigned[pix_y, pix_x]
+    pix_vals = image_np[pix_y, pix_x].astype(np.float32)
+
+    # Per-pixel destination in the (k, k) window.
+    dst_y_pix = pix_y - y_off[atom_ids]
+    dst_x_pix = pix_x - x_off[atom_ids]
+    in_win = (
+        (dst_y_pix >= 0) & (dst_y_pix < k)
+        & (dst_x_pix >= 0) & (dst_x_pix < k)
+    )
+    if not np.any(in_win):
+        return self.params if self.params is not None else params
+    pix_y = pix_y[in_win]
+    pix_x = pix_x[in_win]
+    atom_ids = atom_ids[in_win]
+    pix_vals = pix_vals[in_win]
+    dst_y_pix = dst_y_pix[in_win]
+    dst_x_pix = dst_x_pix[in_win]
+
+    masks[atom_ids, dst_y_pix, dst_x_pix] = True
+    # Per-atom min via vectorised np.minimum.at (unbuffered ufunc).
+    np.minimum.at(local_min, atom_ids, pix_vals)
+    crops[atom_ids, dst_y_pix, dst_x_pix] = pix_vals - local_min[atom_ids]
+    # An atom is "valid" iff at least one pixel landed in its window.
+    valid = np.isfinite(local_min)
+    local_min = np.where(valid, local_min, 0.0)
 
     if border > 0:
         # Exclude atoms whose bbox touches the image border.
