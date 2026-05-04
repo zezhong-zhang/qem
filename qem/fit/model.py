@@ -35,6 +35,10 @@ class ImageModel(nn.Module):
         self.dx = float(dx)
         self.input_params: dict[str, Any] | None = None
         self.built: bool = False
+        # Cache the local-window meshgrid keyed by (window_size, dtype, device).
+        # See _sum_local — re-allocating these every forward pass is the
+        # single biggest hot-loop allocation in fit_global.
+        self._window_cache: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
 
     # ------------------------------------------------------------------
     # parameter management
@@ -164,15 +168,27 @@ class ImageModel(nn.Module):
         y_grid: torch.Tensor,
         extra: tuple[torch.Tensor, ...],
     ) -> torch.Tensor:
-        """Memory-efficient local-window peak rendering with scatter-add."""
+        """Memory-efficient local-window peak rendering with scatter-add.
+
+        The (2W+1)² meshgrid is cached per (window_size, dtype, device) —
+        only atom positions vary between fit-loop iterations, so we keep
+        the static window grid and skip the per-call allocation.
+        """
         assert self.input_params is not None
-        max_width = float(np.max(to_numpy(self.input_params["width"])))
+        # width is a Parameter on the right device — no numpy round-trip.
+        max_width = float(self.width.detach().max().item())
         window_size = int(max_width * 4)
-        coords = torch.arange(
-            -window_size, window_size + 1,
-            dtype=x_grid.dtype, device=x_grid.device,
-        )
-        local_x, local_y = torch.meshgrid(coords, coords, indexing="xy")
+        cache_key = (window_size, x_grid.dtype, x_grid.device)
+        cached = self._window_cache.get(cache_key)
+        if cached is None:
+            coords = torch.arange(
+                -window_size, window_size + 1,
+                dtype=x_grid.dtype, device=x_grid.device,
+            )
+            local_x, local_y = torch.meshgrid(coords, coords, indexing="xy")
+            self._window_cache[cache_key] = (local_x, local_y)
+        else:
+            local_x, local_y = cached
 
         peak_args = (
             torch.remainder(self.pos_x, 1.0),
@@ -188,7 +204,9 @@ class ImageModel(nn.Module):
 
         h, w = x_grid.shape
         in_bounds = (global_x >= 0) & (global_x < w) & (global_y >= 0) & (global_y < h)
-        masked_peaks = torch.where(in_bounds, local_peaks, torch.zeros_like(local_peaks))
+        # Element-wise mask multiply skips the torch.zeros_like allocation
+        # that the previous torch.where(in_bounds, peaks, zeros) needed.
+        masked_peaks = local_peaks * in_bounds.to(local_peaks.dtype)
 
         global_x_safe = torch.clamp(global_x, 0, w - 1).to(torch.int64)
         global_y_safe = torch.clamp(global_y, 0, h - 1).to(torch.int64)
