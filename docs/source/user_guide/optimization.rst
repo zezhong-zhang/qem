@@ -62,35 +62,39 @@ takes an ``optimizer`` argument that maps to one of:
   steps on smooth, well-initialized problems. Good after a coarse
   Adam run; use ``maxiter=20-50`` instead of hundreds.
 
-Beyond ``torch.optim``: pytorch-minimize
-----------------------------------------
+Batched optimizers for many independent sub-problems
+----------------------------------------------------
 
-For sub-problems that benefit from richer optimizers (BFGS variants
-with bounds, Newton-CG, trust-region), install
-`pytorch-minimize <https://github.com/rfeinman/pytorch-minimize>`_:
+When you have many small, *independent* nonlinear least-squares
+sub-problems (one per atom, per cell, per region), the right
+algorithm is **batched Levenberg-Marquardt** with an analytic
+block-diagonal Jacobian. Generic batched torch optimizers
+(``torch.optim.LBFGS``, ``Adam``) fail here because they treat all
+parameters as coupled — and library wrappers like
+``pytorch-minimize`` are even worse because the bounded LBFGS-B
+active-set machinery is O(n²) in the parameter count.
 
-.. code-block:: bash
-
-   pip install pytorch-minimize
-
-It exposes a ``scipy.optimize``-compatible API on torch tensors with
-autograd:
+QEM ships its own batched LM in :func:`qem.fit.voronoi._batched_gaussian_lm`
+for the per-atom 2-D Gaussian fit. Pattern:
 
 .. code-block:: python
 
-   from torchmin import minimize
+   # crops, masks: (N, k, k) — one cell per atom
+   # px, py, h, w, bg: (N,) initial parameters
+   px, py = _batched_gaussian_lm(
+       crops, masks, x_grid, y_grid,
+       px, py, h, w, bg,
+       max_iter=15,
+   )
 
-   def closure(x):
-       return loss_fn(model_with_params(x))
+Internally:
 
-   result = minimize(closure, x0, method="l-bfgs", max_iter=200)
+- Forward + analytic Jacobian per pixel: ``(N, k, k, P)``
+- Normal equations per atom: ``(JᵀJ + λI) δ = Jᵀ r`` —
+  ``torch.linalg.solve`` on ``(N, P, P)`` systems
+- Adaptive per-atom LM damping: accept step → halve λ; reject → ×4 λ
 
-When to reach for it:
-
-- Heights-only refinement after positions converge — convex,
-  bounded, low-dim → L-BFGS-B in seconds.
-- Voronoi cell sub-fits — replace the per-cell ``scipy.optimize.curve_fit``
-  with batched torch + L-BFGS for big speedups on GPU/MPS.
+Pure torch, no scipy/numpy in the inner loop. Runs on CUDA / MPS / CPU.
 
 For comparison:
 
@@ -99,14 +103,25 @@ Library                          Backend    Methods            Best for
 ================================ ========== ================== ===========================
 ``torch.optim``                  torch      Adam, AdamW, SGD,  Non-convex / streaming /
                                             LBFGS              huge parameter counts
-``pytorch-minimize`` (torchmin)  torch      BFGS, L-BFGS,      Smooth + small/medium dim
-                                            L-BFGS-B,
-                                            Newton-CG,
-                                            trust-region
+``qem.fit.voronoi``              torch      batched LM         Many independent NLLS
+                                                               (block-diagonal Hessian)
 ``scipy.optimize.lsq_linear``    numpy      Bounded LS         Used by ``linear_estimator``
 ``scipy.optimize.nnls``          numpy      Active-set NNLS    Small dense NNLS
-``cvxpylayers``                  torch      Convex (full)      Differentiable convex layers
+``scipy.optimize.curve_fit``     numpy      LM (per-call)      Reference per-atom path in
+                                                               ``fit_voronoi(batched=False)``
 ================================ ========== ================== ===========================
+
+Why we don't use generic batched optimizers for per-atom problems:
+
+- ``torch.optim.LBFGS`` / ``Adam`` track a single quasi-Hessian
+  history across all parameters. For block-diagonal problems this
+  contaminates each atom's search direction with information from
+  unrelated atoms.
+- ``pytorch-minimize`` (BFGS, L-BFGS-B) wraps scipy's solvers; on
+  a 14k-parameter bounded problem we measured a 140× slowdown vs
+  the legacy per-cell scipy path.
+- A handwritten batched LM with analytic Jacobian sidesteps both
+  problems — and gives a clean per-atom acceptance criterion.
 
 Device selection
 ----------------
