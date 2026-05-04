@@ -472,35 +472,6 @@ class Fitter:
         background_region = influence_map - direct_influence_map
         return radius, direct_influence_map, background_region
 
-    def enable_2d_background(self,
-                           method: str = 'photutils',
-                           **kwargs) -> dict:
-        """
-        Enable 2D background estimation for the image fitting.
-        
-        Args:
-            method: Background estimation method ('photutils', 'median', 'polynomial')
-            **kwargs: Additional parameters for background estimation
-            
-        Returns:
-            Dictionary with background estimation information
-        """
-        logging.info("Enabling 2D background estimation with method: %s", method)
-        
-        # Enable 2D background in the estimator
-        info = self.background_estimator.enable_2d_background(method=method, **kwargs)
-        
-        # Update fit_background to use 2D mode
-        self.fit_background = True
-        
-        logging.info("2D background estimation completed: scale=%.3f", info['initial_scale'])
-        return info
-    
-    def disable_2d_background(self):
-        """Disable 2D background estimation and revert to scalar background."""
-        self.background_estimator.disable_2d_background()
-        logging.info("2D background estimation disabled")
-    
     def fit_with_edge_correction(self, maxiter=300, step_size=0.01, verbose=True):
         """
         Two-stage fitting optimized for edge peaks.
@@ -589,76 +560,6 @@ class Fitter:
         
         return params_final
     
-    def get_current_background(self) -> np.ndarray:
-        """
-        Get the current background (2D or scalar).
-        
-        Returns:
-            Background array (2D if enabled, otherwise scalar broadcast to 2D)
-        """
-        if self.background_estimator.use_2d_background:
-            return self.background_estimator.get_current_background()
-        else:
-            # Get scalar background value
-            bg_value = getattr(self, 'init_background', 0.0)
-            if self.params is not None and 'background' in self.params:
-                bg_value = safe_convert_to_numpy(self.params['background'])
-                if np.isscalar(bg_value):
-                    bg_value = float(bg_value)
-                else:
-                    bg_value = float(bg_value.item()) if bg_value.size == 1 else float(bg_value[0])
-            return self.background_estimator.get_current_background(bg_value)
-    
-    def update_2d_background_scale(self, new_scale: float):
-        """Update the 2D background scaling factor."""
-        self.background_estimator.update_2d_background_scale(new_scale)
-    
-    def optimize_2d_background_scale(self) -> float:
-        """
-        Optimize the 2D background scaling factor for the current image.
-        
-        This method finds the optimal scaling factor for the 2D background
-        that minimizes the residual between the scaled background and the image.
-        
-        Returns:
-            Optimal scaling factor
-        """
-        if not self.background_estimator.use_2d_background or self.background_estimator.background_2d is None:
-            raise ValueError("2D background not enabled or not estimated")
-        
-        from scipy.optimize import minimize_scalar
-        
-        background_2d = self.background_estimator.background_2d
-        
-        def objective(scale: float) -> float:
-            """Objective function using robust loss."""
-            scaled_bg = scale * background_2d
-            residual = self.image - scaled_bg
-            
-            # Use robust loss (Huber loss)
-            abs_residual = np.abs(residual)
-            threshold = 2.0 * np.median(abs_residual)
-            
-            loss = np.where(
-                abs_residual <= threshold,
-                0.5 * residual**2,
-                threshold * (abs_residual - 0.5 * threshold)
-            )
-            return np.mean(loss)
-        
-        # Get initial estimate
-        initial_scale = self.background_estimator.background_scale
-        
-        # Optimize with reasonable bounds
-        result = minimize_scalar(objective, bounds=(0.01, 100.0), method='bounded')
-        optimal_scale = result.x
-        
-        # Update the background estimator
-        self.update_2d_background_scale(optimal_scale)
-        
-        logging.info("2D background scale optimized: %.3f -> %.3f", initial_scale, optimal_scale)
-        return float(optimal_scale)
-
     def init_params(
         self,
         atom_size: float = 0.7,
@@ -1834,11 +1735,13 @@ class Fitter:
 from qem.fit.plot import _bind as _bind_plot  # noqa: E402
 from qem.fit.loss import _bind as _bind_loss  # noqa: E402
 from qem.fit.peaks import _bind as _bind_peaks  # noqa: E402
+from qem.fit.background import _bind as _bind_background  # noqa: E402
 from qem.analysis.domains import _bind as _bind_domains  # noqa: E402
 from qem.analysis.gmm import _bind as _bind_gmm  # noqa: E402
 
 _bind_plot(Fitter)
 _bind_loss(Fitter)
 _bind_peaks(Fitter)
+_bind_background(Fitter)
 _bind_domains(Fitter)
 _bind_gmm(Fitter)
