@@ -10,6 +10,7 @@ The QEM User Guide provides comprehensive documentation for using the Quantitati
    workflows
    best_practices
    optimization
+   visualization
    performance
    troubleshooting
 

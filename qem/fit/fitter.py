@@ -1379,6 +1379,7 @@ from qem.analysis.gmm import _bind as _bind_gmm  # noqa: E402
 
 from qem.fit.voronoi import _bind as _bind_voronoi  # noqa: E402
 from qem.fit.solver import _bind as _bind_solver  # noqa: E402
+from qem.viz.interactive import _bind as _bind_interactive  # noqa: E402
 
 _bind_plot(Fitter)
 _bind_loss(Fitter)
@@ -1388,3 +1389,4 @@ _bind_voronoi(Fitter)
 _bind_solver(Fitter)
 _bind_domains(Fitter)
 _bind_gmm(Fitter)
+_bind_interactive(Fitter)
