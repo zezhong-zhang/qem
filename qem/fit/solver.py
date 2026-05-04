@@ -242,37 +242,65 @@ class SciPySolver:
         return solution.astype(target_dtype)
     
     @staticmethod
-    def solve_iterative(A: coo_matrix, b: np.ndarray, non_negative: bool = False, 
-                       max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
-        # Ensure inputs use configured precision
+    def solve_iterative(
+        A: coo_matrix, b: np.ndarray, non_negative: bool = False,
+        max_iter: int = 1000, tol: float = 1e-6, ridge: float = 0.0,
+    ) -> np.ndarray:
+        """Solve the sparse least-squares system.
+
+        ``ridge`` adds Tikhonov regularization (λ‖x‖²) to dampen
+        ill-conditioned systems. ``non_negative=True`` enforces real
+        bounded LS via ``scipy.optimize.lsq_linear`` (interior-point
+        / TRF), not a post-hoc clip — that's what was causing the
+        height-scale bouncing in fit_stochastic preconditioning.
+        """
+        from scipy.optimize import lsq_linear
+        from scipy.sparse import eye as sp_eye, vstack as sp_vstack
+
         config = get_config()
         target_dtype = config.linear_solver_numpy_dtype
-        
-        # Convert to target precision if needed
+
         if A.dtype != target_dtype:
             A = A.astype(target_dtype)
         if b.dtype != target_dtype:
             b = b.astype(target_dtype)
-        
+
         A_csr = A.tocsr()
-        
-        try:
-            solution = lsqr(A_csr, b, iter_lim=max_iter, atol=tol, btol=tol)[0]
-        except Exception:
-            # Fallback to CG on normal equations
-            Atb = A_csr.T @ b
-            from scipy.sparse.linalg import LinearOperator
-            
-            def matvec(x):
-                return A_csr.T @ (A_csr @ x)
-            
-            AtA_op = LinearOperator((A_csr.shape[1], A_csr.shape[1]), matvec=matvec)
-            solution, _ = cg(AtA_op, Atb, maxiter=max_iter, tol=tol)
-        
+
+        # Augment with √λ·I and zeros for ridge regularization.
+        if ridge > 0.0:
+            n_cols = A_csr.shape[1]
+            ridge_block = (np.sqrt(ridge) * sp_eye(n_cols, dtype=target_dtype)).tocsr()
+            A_csr = sp_vstack([A_csr, ridge_block]).tocsr()
+            b = np.concatenate([b, np.zeros(n_cols, dtype=target_dtype)])
+
         if non_negative:
-            solution = np.maximum(solution, 0.0)
-        
-        # Ensure output precision
+            # Real bounded LS — TRF method on the sparse matrix.
+            result = lsq_linear(
+                A_csr, b, bounds=(0.0, np.inf),
+                max_iter=max_iter, tol=tol,
+            )
+            if not result.success:
+                logging.warning(
+                    "lsq_linear non-negative solve did not converge cleanly: %s",
+                    result.message,
+                )
+            solution = result.x
+        else:
+            try:
+                solution = lsqr(A_csr, b, iter_lim=max_iter, atol=tol, btol=tol)[0]
+            except Exception:
+                Atb = A_csr.T @ b
+                from scipy.sparse.linalg import LinearOperator
+
+                def matvec(x):
+                    return A_csr.T @ (A_csr @ x)
+
+                AtA_op = LinearOperator(
+                    (A_csr.shape[1], A_csr.shape[1]), matvec=matvec,
+                )
+                solution, _ = cg(AtA_op, Atb, maxiter=max_iter, tol=tol)
+
         return solution.astype(target_dtype)
 
 
@@ -289,12 +317,16 @@ class LinearSystemSolver:
         self.solver = TorchSolver
 
     def solve_system(self, design_matrix, target: np.ndarray,
-                     non_negative: bool = False) -> Optional[np.ndarray]:
+                     non_negative: bool = False,
+                     ridge: float = 0.0) -> Optional[np.ndarray]:
         """Solve ``design_matrix @ x = target``.
 
         scipy sparse inputs always go through the iterative scipy path.
         For backend tensors: try direct; on memory / singular / linalg
         error fall back to iterative; on a second failure raise DataError.
+
+        ``ridge`` adds Tikhonov regularization (λ‖x‖²) to dampen
+        ill-conditioned systems — only applied on the iterative path.
         """
         # Coerce target to numpy (MPS tensors live on accelerators).
         if hasattr(target, "cpu"):
@@ -305,7 +337,9 @@ class LinearSystemSolver:
         # scipy sparse matrices skip the direct path — they have no
         # backend solver attached.
         if hasattr(design_matrix, "tocsr"):
-            return SciPySolver.solve_iterative(design_matrix, target, non_negative)
+            return SciPySolver.solve_iterative(
+                design_matrix, target, non_negative, ridge=ridge,
+            )
 
         try:
             return self.solver.solve_direct(design_matrix, target, non_negative)
@@ -497,9 +531,9 @@ class SolutionProcessor:
         return True
     
     @staticmethod
-    def process_height_scaling(height_scale: np.ndarray, 
-                             min_scale: float = 0.8, 
-                             max_scale: float = 1.2) -> np.ndarray:
+    def process_height_scaling(height_scale: np.ndarray,
+                             min_scale: float = 0.5,
+                             max_scale: float = 2.0) -> np.ndarray:
         """Process and constrain height scaling factors."""
         # Convert to tensor for processing if it's a numpy array
         if isinstance(height_scale, np.ndarray):
@@ -577,28 +611,37 @@ class SolutionProcessor:
 def linear_estimator(
     self,
     params: dict = None,
-    non_negative: bool = False,
-    device: str = 'cpu',
+    *,
+    non_negative: bool = True,
+    ridge: float = 1e-4,
     best_effort: bool = False,
 ) -> dict:
     """
-    Perform linear estimation of peak heights using least squares fitting.
+    Refine peak heights via constrained ridge least-squares.
 
-    Builds a sparse design matrix from the current peak model and solves
-    a linear system to estimate optimal height scaling factors.
+    Builds a sparse design matrix from the current peak model and
+    solves ``min ‖A·x − b‖² + λ‖x‖²`` subject to ``x ≥ 0`` (when
+    ``non_negative=True``). The non-negative path uses
+    ``scipy.optimize.lsq_linear`` (TRF / interior-point), not a
+    post-hoc projection — the historic ``lsqr → max(0, x)`` was the
+    main source of fit_stochastic preconditioning bouncing.
 
     Args:
-        params: Model parameters dictionary. If ``None``, uses ``self.params``.
-        non_negative: Whether to enforce non-negative height constraints.
-        device: Compute device hint passed through to the solver.
-        best_effort: If ``True``, log and swallow exceptions and return the
-            input parameters unchanged. Defaults to ``False`` so callers
-            see real failures (parameter validation errors, numerical
-            breakdowns, OOM) instead of getting silently stale results.
+        params: Model parameters dictionary. If ``None``, uses
+            ``self.params``.
+        non_negative: Enforce per-atom non-negativity (default
+            ``True`` — heights are physically non-negative).
+        ridge: Tikhonov regularization strength. ``0`` disables.
+            Default ``1e-4`` is enough to stabilize without biasing
+            scales meaningfully on typical STEM data.
+        best_effort: If ``True``, log and swallow exceptions and
+            return the input parameters unchanged. Defaults to
+            ``False`` so callers see real failures (parameter
+            validation errors, numerical breakdowns, OOM).
 
     Returns:
-        Updated parameters dictionary with refined height values, or the
-        original parameters when ``best_effort`` swallows a failure.
+        Updated parameters dictionary with refined heights, or the
+        input parameters when ``best_effort`` swallows a failure.
 
     Raises:
         ParameterError: If ``params`` fails validation.
@@ -636,7 +679,9 @@ def linear_estimator(
         )
         target = self._prepare_target_vector(validated_params)
         solver = LinearSystemSolver()
-        solution = solver.solve_system(design_matrix, target, non_negative)
+        solution = solver.solve_system(
+            design_matrix, target, non_negative=non_negative, ridge=ridge,
+        )
         return self._process_solution(solution, validated_params)
 
     with operation_context:
