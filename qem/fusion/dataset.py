@@ -9,7 +9,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 import numpy as np
 import scipy.io as sio
 
-from qem.exceptions import DataError, ParameterError
+from qem.utils.exceptions import DataError, ParameterError
 
 
 def _as_float_array(data: np.ndarray, name: str) -> np.ndarray:
@@ -266,7 +266,7 @@ class MultiModalDataset:
             raise DataError("concentrations must have shape (height, width, elements)")
 
         if adf_weights is None:
-            from qem.elements import chemical_symbols
+            from qem.utils.elements import chemical_symbols
 
             lookup = {symbol: index for index, symbol in enumerate(chemical_symbols)}
             weights = np.array([lookup.get(element, 1) for element in elements], dtype=np.float64)

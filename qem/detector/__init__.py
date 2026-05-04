@@ -7,8 +7,8 @@ in :mod:`qem.optics`, not here.
 from __future__ import annotations
 
 from .detector import Calibrate_Detector, Calibrate_Dose, Detector
-from .tilt import SampleTilt, tilt_from_affine
-from .wave import (
+from ..optics.tilt import SampleTilt, tilt_from_affine
+from ..optics.wave import (
     Cc_defocus_spread,
     Cc_integration_points,
     convert_deltaE,

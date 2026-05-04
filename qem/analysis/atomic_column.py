@@ -6,7 +6,7 @@ from ase import Atoms
 from matscipy.atomic_strain import atomic_strain
 from matscipy.neighbours import neighbour_list
 
-from qem.elements import chemical_symbols
+from qem.utils.elements import chemical_symbols
 
 
 @dataclass

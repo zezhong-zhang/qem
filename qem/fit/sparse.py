@@ -16,7 +16,7 @@ from scipy.optimize import lsq_linear
 from scipy.sparse import coo_matrix, issparse, spmatrix
 from scipy.sparse.linalg import MatrixRankWarning, spsolve
 
-from qem.exceptions import DataError
+from qem.utils.exceptions import DataError
 
 
 Array = NDArray[np.float64]
@@ -43,7 +43,7 @@ class SparseSolver:
     ) -> Array:
         """Solve ``design_matrix @ x = target`` (least-squares for tall systems).
 
-        Raises :class:`qem.exceptions.DataError` for singular / ill-conditioned
+        Raises :class:`qem.utils.exceptions.DataError` for singular / ill-conditioned
         systems and shape mismatches; preserves all numerical exceptions
         from scipy.
         """

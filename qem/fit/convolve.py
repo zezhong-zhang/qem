@@ -34,7 +34,7 @@ from qem.optics import (
     icom_psf,
     ssb_psf,
 )
-from qem.processing.psf import calculate_psf_width
+from qem.optics import calculate_psf_width
 
 
 # Light-weight replacement for the legacy ProbeParameters dataclass.
@@ -44,7 +44,7 @@ from qem.processing.psf import calculate_psf_width
 class ProbeParameters:
     """Adapter: holds CTF-mode-specific probe parameters as plain attrs.
 
-    Wraps the optics :class:`~qem.instruments.optics.Probe` plus a few
+    Wraps the optics :class:`~qem.optics.Probe` plus a few
     extras (``high_pass_cutoff``, ``detector_inner``/``outer``) that
     don't belong on the Probe itself.
     """
@@ -191,7 +191,7 @@ class ConvFit(Fitter):
     Examples
     --------
     >>> from qem.fit import ConvFit
-    >>> from qem.instruments import create_probe_parameters
+    >>> from qem.detector import create_probe_parameters
     >>>
     >>> # Create probe parameters
     >>> probe = create_probe_parameters(alpha=20, eV=60e3, defocus=30)

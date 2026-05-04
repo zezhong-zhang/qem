@@ -93,9 +93,6 @@ all = [
     "qem[gui,io,notebook,cv,docs,dev]",
 ]
 
-[project.scripts]
-qem-app = "qem.cli:launch_app"
-
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["qem*"]

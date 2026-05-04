@@ -22,7 +22,7 @@ from qem.optics import (
     icom_psf,
     ssb_psf,
 )
-from qem.processing.psf import calculate_psf_width, extract_psf_from_atom_image
+from qem.optics import calculate_psf_width, extract_psf_from_atom_image
 
 
 @pytest.fixture
@@ -182,7 +182,7 @@ class TestPartialCoherence:
 
 
 # ---------------------------------------------------------------------------
-# Image-analysis helpers (qem/processing/psf.py)
+# Image-analysis helpers (qem/optics/psf.py)
 # ---------------------------------------------------------------------------
 
 

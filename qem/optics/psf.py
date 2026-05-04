@@ -1,28 +1,37 @@
-"""High-level PSF / CTF builders for STEM imaging modes.
+"""PSF / CTF builders + image-analysis helpers.
 
-Each imaging mode exposes two functions:
+**Builders** (``Grid + Probe → PSF``).  Each imaging mode exposes two
+functions:
 
 - ``*_psf(grid, probe)`` returns the real-space PSF, fftshift-centered.
 - ``*_ctf(grid, probe)`` returns the q-space transfer function in
   fft-natural ordering (DC at ``[0, 0]``).
 
-The four supported modes are:
+The four supported modes:
 
 - ``ssb``  — analytical Hofer–Pennycook formula for SSB ptychography.
 - ``adf``  — incoherent annular dark field, ``|ψ_probe(r)|²``.
 - ``icom`` — integrated centre-of-mass (with optional high-pass filter).
 - ``epie`` — analytical approximation for ePIE ptychography.
 
-All functions return real PSFs (``torch.float``) or complex CTFs
+All builders return real PSFs (``torch.float``) or complex CTFs
 (``torch.complex``).  Partial-coherence envelopes derived from
 ``probe.focal_spread`` and ``probe.angular_spread`` are applied to the
 q-space CTF and inverse-transformed.
+
+**Image-analysis helpers** (numpy in / numpy out):
+
+- :func:`calculate_psf_width` — second-moment width of an existing PSF.
+- :func:`extract_psf_from_atom_image` — recenter + normalise a single
+  isolated atom from an experimental image into a PSF estimate.
 """
 
 from __future__ import annotations
 
 import math
+from typing import Optional
 
+import numpy as np
 import torch
 
 from .aberrations import Aberrations  # noqa: F401  (re-exported in __init__)
@@ -239,3 +248,64 @@ def epie_ctf(
 
 def epie_psf(grid: Grid, probe: Probe, **kw) -> torch.Tensor:
     return _ctf_to_psf(epie_ctf(grid, probe, **kw))
+
+
+# ---------------------------------------------------------------------------
+# Image-analysis helpers (numpy in / numpy out)
+# ---------------------------------------------------------------------------
+
+
+def calculate_psf_width(psf: np.ndarray, dx: float = 1.0) -> float:
+    """Effective PSF width: second-moment radius of ``|psf|``.
+
+    Parameters
+    ----------
+    psf
+        2D PSF array (real or signed; for SSB-like PSFs with a negative
+        halo, the absolute value is used so the halo contributes to the
+        width).
+    dx
+        Pixel size in Å (kept for API back-compat; the returned width is
+        in *pixels* — multiply by ``dx`` for Å).
+
+    Returns
+    -------
+    Width in pixels.
+    """
+    abs_psf = np.abs(psf)
+    total = abs_psf.sum()
+    if total == 0:
+        return 1.0
+    yy, xx = np.indices(psf.shape)
+    x_c = (xx * abs_psf).sum() / total
+    y_c = (yy * abs_psf).sum() / total
+    var_x = ((xx - x_c) ** 2 * abs_psf).sum() / total
+    var_y = ((yy - y_c) ** 2 * abs_psf).sum() / total
+    return float(np.sqrt(var_x + var_y))
+
+
+def extract_psf_from_atom_image(
+    atom_image: np.ndarray,
+    background: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """Estimate a PSF from a single isolated atom in an image.
+
+    Subtracts an optional background, clips negatives, recenters by
+    centre-of-mass, and normalises to unit sum.
+    """
+    psf = atom_image.copy().astype(float)
+    if background is not None:
+        psf = psf - background
+    psf = np.maximum(psf, 0.0)
+
+    ny, nx = psf.shape
+    cy, cx = ny // 2, nx // 2
+    total = psf.sum()
+    if total > 0:
+        yy, xx = np.indices(psf.shape)
+        x_c = (xx * psf).sum() / total
+        y_c = (yy * psf).sum() / total
+        psf = np.roll(psf, int(round(cy - y_c)), axis=0)
+        psf = np.roll(psf, int(round(cx - x_c)), axis=1)
+        psf = psf / psf.sum()
+    return psf

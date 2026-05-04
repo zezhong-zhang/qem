@@ -79,7 +79,7 @@ def make_contrast_transfer_function(
     in fft-natural ordering.
 
     Accepts the historical ``aberrations`` argument as either a list of
-    legacy :class:`qem.instruments.Aberration` objects or any iterable
+    legacy :class:`qem.optics.Aberrations` objects or any iterable
     that the legacy ``chi`` understands; ``df`` is the user-facing
     defocus (positive ⇒ under-focus, abtem convention).
     """

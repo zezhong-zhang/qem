@@ -3,7 +3,7 @@
 Both functions are pure: in-tensors → out-tensors, no hidden state.
 ``alpha`` is the polar semi-angle in radians (= q · λ); ``phi`` is the
 azimuthal angle in radians.  Coefficients come from
-:class:`qem.instruments.optics.aberrations.Aberrations`.
+:class:`qem.optics.aberrations.Aberrations`.
 
 Sign convention matches abtem:
 ``ψ(k) = aperture(k) · exp(-i · χ(k))`` and ``defocus = -C10``.

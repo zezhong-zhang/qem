@@ -27,7 +27,7 @@ from qem.optics import (
     icom_psf,
     ssb_psf,
 )
-from qem.processing.psf import calculate_psf_width
+from qem.optics import calculate_psf_width
 from qem.fit.potential import (
     PointPotentialModel,
     correlation_coefficient,

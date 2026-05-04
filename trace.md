@@ -364,3 +364,50 @@ FitParamsValidator).
 Updated qem/fit/__init__.py to re-import from new module names. Now 4 test
 collection errors remain — likely test_basic / test_linear_solver_core /
 test_fusion still using old import paths.
+
+### EARS — Progress (2026-05-04 10:33)
+<!-- concepts: phase-finalization, user-moves, notebooks -->
+After Phase 5 commit (fd9be5f), user did their own moves:
+- qem/elements.py → qem/utils/elements.py
+- qem/exceptions.py → qem/utils/exceptions.py
+- qem/lbfgs.py → qem/fit/lbfgs.py
+- qem/sparse.py → qem/fit/sparse.py
+- qem/validation.py → qem/fit/validation.py
+- qem/app.py, qem/cli.py → deleted (no Streamlit GUI / CLI script)
+
+Mass-rewrote 11 consumers across qem/, tests/, and notebooks/. The
+notebooks (introduction, benchmark, STO) also still referenced the
+pre-refactor surface (qem.image_fitting / ImageFitting / qem.benchmark)
+— same regex sweep migrated those to qem.fit.fitter / Fitter /
+qem.benchmarks.benchmark.
+
+Cleaned qem/__init__.py docstring (was advertising a Streamlit GUI that
+no longer exists) and removed [project.scripts] qem-app entry from
+pyproject.toml.
+
+### EARS — Progress (2026-05-04 10:43)
+<!-- concepts: instruments-split, detector-package, optics-tilt-wave -->
+User did another reorg after Phase 5: deleted qem/instruments/ entirely
+and split it three ways:
+- qem/detector/detector.py (new top-level package, just the detector)
+- qem/optics/tilt.py
+- qem/optics/wave.py
+
+User wrote qem/detector/__init__.py that re-exports detector + tilt + wave
+(latter two via parent-package relative imports `from ..optics.tilt`)
+so qem.detector remains a "instrument hardware" surface and qem.optics
+remains the math + tilt + wave surface — both expose tilt/wave for
+discoverability.
+
+Fixes done:
+- qem/optics/__init__.py: added tilt + wave imports + __all__ entries,
+  updated docstring (was still pointing at qem.instruments.optics).
+- qem/optics/wave.py: switched its qem.optics import to sibling relative
+  imports (.aberrations / .chi / .constants) — was a circular import
+  through the package init.
+- qem/__init__.py: added `from . import detector; from . import optics`
+  and matching __all__ entries.
+
+External `qem.instruments` import sweep: only docstring references in
+qem/processing/psf.py, qem/fit/convolve.py, qem/optics/{probe,chi,wave}.py
+— no actual imports broken.

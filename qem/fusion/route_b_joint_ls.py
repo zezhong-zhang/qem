@@ -7,8 +7,8 @@ from typing import Dict, Iterable, List, Mapping, Optional
 
 import numpy as np
 
-from qem.exceptions import DataError, ParameterError
-from qem.elements import chemical_symbols
+from qem.utils.exceptions import DataError, ParameterError
+from qem.utils.elements import chemical_symbols
 
 from .dataset import MultiModalDataset
 

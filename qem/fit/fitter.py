@@ -54,7 +54,7 @@ from qem.fit.solver import (
     LinearSystemSolver,
     SolutionProcessor,
 )
-from qem.validation import FitterValidator, FitParamsValidator
+from qem.fit.validation import FitterValidator, FitParamsValidator
 from qem.utils.memory import (
     BatchMemoryOptimizer,
     ChunkedProcessor,
@@ -64,7 +64,7 @@ from qem.utils.memory import (
     chunked_processor,
 )
 
-from qem.lbfgs import LBFGSOptimizer
+from qem.fit.lbfgs import LBFGSOptimizer
 import h5py
 
 # Only configure logging if not already configured

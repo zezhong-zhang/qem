@@ -15,7 +15,7 @@ from scipy.sparse.linalg import spsolve, lsqr, cg
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 from qem.utils.backend import release_backend_memory
 from qem.utils.config import get_config
-from qem.exceptions import ParameterError, DataError
+from qem.utils.exceptions import ParameterError, DataError
 
 
 @dataclass

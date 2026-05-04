@@ -33,7 +33,7 @@ class Probe:
     focal_spread : float
         Δ_f in Å, 1/e half-width of the focal spread.  Set 0 to disable
         the temporal-coherence envelope.  See
-        :func:`qem.instruments.optics.envelopes.focal_spread_from_chromatic`
+        :func:`qem.optics.envelopes.focal_spread_from_chromatic`
         for the Cc + ΔE → Δ_f conversion.
     angular_spread : float
         σ_α in mrad, source angular spread.  Set 0 to disable the

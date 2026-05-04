@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from scipy.sparse import coo_matrix
 
-from qem.exceptions import DataError
-from qem.sparse import SparseSolver, clip_height_scale
+from qem.utils.exceptions import DataError
+from qem.fit.sparse import SparseSolver, clip_height_scale
 from qem.utils.backend import detect_available_backends
 
 

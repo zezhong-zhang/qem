@@ -5,7 +5,7 @@ Public API — everything imported here is part of the supported surface.
 Quick reference
 ---------------
 
-    from qem.instruments.optics import Aberrations, Probe, Grid, ssb_psf
+    from qem.optics import Aberrations, Probe, Grid, ssb_psf
 
     grid  = Grid(pixels=(128, 128), extent=(64.0, 64.0))   # Å
     probe = Probe(
@@ -28,6 +28,11 @@ Units (everything in Å / radians / eV inside; mrad at the user surface):
 
 Sign convention: ``defocus = -C10`` (abtem); positive ``defocus`` ⇒
 under-focus.  The wave function is ``ψ(k) = aperture · exp(-i χ(k))``.
+
+Sample tilt (:func:`tilt_from_affine`, :class:`SampleTilt`) and the
+numpy multislice helpers (:func:`focused_probe`,
+:func:`make_contrast_transfer_function`, …) live next door in
+:mod:`qem.optics.tilt` and :mod:`qem.optics.wave`.
 """
 
 from __future__ import annotations
@@ -69,16 +74,34 @@ from .aperture import hard_aperture, soft_aperture
 from .grid import Grid
 from .probe import Probe, probe_wave, probe_wave_q
 
-# PSF / CTF builders
+# PSF / CTF builders + image-analysis helpers
 from .psf import (
     adf_ctf,
     adf_psf,
+    calculate_psf_width,
     epie_ctf,
     epie_psf,
+    extract_psf_from_atom_image,
     icom_ctf,
     icom_psf,
     ssb_ctf,
     ssb_psf,
+)
+
+# Sample tilt
+from .tilt import SampleTilt, tilt_from_affine
+
+# Numpy multislice helpers
+from .wave import (
+    Cc_defocus_spread,
+    Cc_integration_points,
+    convert_deltaE,
+    convert_tilt_angles,
+    depth_of_field,
+    focused_probe,
+    make_contrast_transfer_function,
+    plane_wave_illumination,
+    simulation_result_with_Cc,
 )
 
 __all__ = [
@@ -121,4 +144,20 @@ __all__ = [
     "icom_ctf",
     "epie_psf",
     "epie_ctf",
+    # PSF image-analysis helpers
+    "calculate_psf_width",
+    "extract_psf_from_atom_image",
+    # Sample tilt
+    "SampleTilt",
+    "tilt_from_affine",
+    # Multislice helpers
+    "depth_of_field",
+    "convert_tilt_angles",
+    "make_contrast_transfer_function",
+    "focused_probe",
+    "plane_wave_illumination",
+    "convert_deltaE",
+    "Cc_integration_points",
+    "Cc_defocus_spread",
+    "simulation_result_with_Cc",
 ]
