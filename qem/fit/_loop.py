@@ -58,6 +58,7 @@ def fit_loop(
     lr_patience: int = 10,
     lr_factor: float = 0.1,
     min_lr: float = 1e-6,
+    snapshot_every: int = 50,
     verbose: bool = False,
 ) -> FitResult:
     """Adam-style training loop with early stopping and LR reduction.
@@ -99,7 +100,16 @@ def fit_loop(
         # Track best (relative-improvement criterion to mirror the LR scheduler).
         if loss_val < best_loss * (1.0 - 1e-3):
             best_loss = loss_val
-            best_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            should_snapshot = (
+                best_state is None
+                or (epoch + 1) % snapshot_every == 0
+                or (epoch + 1) == epochs
+            )
+            if should_snapshot:
+                best_state = {
+                    k: v.detach().clone()
+                    for k, v in model.state_dict().items()
+                }
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1

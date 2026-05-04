@@ -341,6 +341,9 @@ class Fitter:
         x_grid, y_grid = torch.meshgrid(x, y, indexing="xy")
         self.x_grid = torch.as_tensor(x_grid, dtype=torch.float32)
         self.y_grid = torch.as_tensor(y_grid, dtype=torch.float32)
+        # Pre-batched views for optimize() — torch view, free.
+        self.x_grid_batched = self.x_grid.unsqueeze(0)
+        self.y_grid_batched = self.y_grid.unsqueeze(0)
 
     def _select_model(self):
         """Create a new model instance based on the model type."""
@@ -1625,10 +1628,8 @@ class Fitter:
         if verbose:
             print(f"Using {optimizer} optimizer for fitting.")
         # PyTorch expects a leading batch dimension on inputs.
-        image_tensor = torch.unsqueeze(image_tensor, 0)
-        x_grid = torch.unsqueeze(self.x_grid, 0)
-        y_grid = torch.unsqueeze(self.y_grid, 0)
-        model_inputs = [x_grid, y_grid]
+        image_tensor = image_tensor.unsqueeze(0)
+        model_inputs = [self.x_grid_batched, self.y_grid_batched]
         
         operation_context = (
             self.memory_monitor.monitor_operation("optimize") 
