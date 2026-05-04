@@ -430,24 +430,25 @@ class DesignMatrixBuilder:
         
         # Add background terms if needed
         if fit_background:
+            dev = cols_tensor.device
             bg_rows = torch.reshape(y_grid * self.nx + x_grid, (-1,))
-            rows_tensor = torch.cat([rows_tensor, bg_rows.to(dtype=torch.int32)])
+            rows_tensor = torch.cat([rows_tensor, bg_rows.to(dtype=torch.int32, device=dev)])
 
             del bg_rows
             release_memory()
 
             cols_tensor = torch.cat([cols_tensor,
-                torch.full((self.nx * self.ny,), num_coordinates, dtype=torch.int32)])
-            
+                torch.full((self.nx * self.ny,), num_coordinates, dtype=torch.int32, device=dev)])
+
             if background_2d is not None:
                 # Use 2D background values instead of ones
-                bg_data = torch.as_tensor(background_2d.ravel(), dtype=torch.float32)
+                bg_data = torch.as_tensor(background_2d.ravel(), dtype=torch.float32, device=dev)
                 data_tensor = torch.cat([data_tensor, bg_data])
             else:
                 # Use scalar background (ones)
-                data_tensor = torch.cat([data_tensor, 
-                    torch.ones((self.nx * self.ny,), dtype=torch.float32)])
-            
+                data_tensor = torch.cat([data_tensor,
+                    torch.ones((self.nx * self.ny,), dtype=torch.float32, device=dev)])
+
             shape = (self.nx * self.ny, num_coordinates + 1)
 
         else:
