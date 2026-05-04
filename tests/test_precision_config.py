@@ -36,7 +36,7 @@ def test_safe_precision_falls_back_to_float32_when_float64_unsupported():
 
 
 def test_scipy_solver_uses_configured_precision():
-    from qem.fit.linear_solver import SciPySolver
+    from qem.fit.solver import SciPySolver
     from qem.utils.config import get_config
 
     n_rows, n_cols = 10, 5

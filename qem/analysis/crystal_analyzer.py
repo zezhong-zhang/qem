@@ -1425,7 +1425,7 @@ class CrystalAnalyzer:
         GMM results and updates the atomic structure accordingly.
         
         Args:
-            gmm_results: Results from ImageFitting.estimate_atom_counts_with_gmm()
+            gmm_results: Results from Fitter.estimate_atom_counts_with_gmm()
             
         Returns:
             Updated atomic_columns object

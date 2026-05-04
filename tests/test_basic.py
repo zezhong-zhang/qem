@@ -9,7 +9,7 @@ backend = setup_test_backend()
 import torch
 from qem.fit.model import GaussianModel
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
-from qem.fit.image_fitting import ImageFitting
+from qem.fit.fitter import Fitter
 
 
 def test_backend_detection():
@@ -71,7 +71,7 @@ def test_gaussian_model_basic():
 
 
 def test_image_fitting_basic():
-    """Test basic ImageFitting functionality."""
+    """Test basic Fitter functionality."""
     # Create a simple synthetic image
     size = 20
     image = np.zeros((size, size))
@@ -83,8 +83,8 @@ def test_image_fitting_basic():
             r2 = (i - center)**2 + (j - center)**2
             image[i, j] = np.exp(-r2 / (2 * 2**2)) + 0.1
     
-    # Initialize ImageFitting
-    fitter = ImageFitting(
+    # Initialize Fitter
+    fitter = Fitter(
         image=image,
         dx=1.0,
         model_type="gaussian"

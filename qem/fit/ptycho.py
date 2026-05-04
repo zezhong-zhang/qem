@@ -28,7 +28,7 @@ from qem.optics import (
     ssb_psf,
 )
 from qem.processing.psf import calculate_psf_width
-from qem.fit.point_potential import (
+from qem.fit.potential import (
     PointPotentialModel,
     correlation_coefficient,
     normalized_root_mean_square_error,
@@ -255,7 +255,7 @@ class ConvolutionModel(torch.nn.Module):
         return psf_scaled
 
 
-class PtychographyOptimizer:
+class PtychoOptimizer:
     """Optimizer for ptychographic phase quantification using Keras.
 
     Implements the method from Figure 3 in the paper:
@@ -571,7 +571,7 @@ class PtychographyOptimizer:
         )
 
 
-class ADFConvolutionFitting:
+class AdfConvFit:
     """ADF fitting treating image as probe ⊗ potential convolution."""
 
     def __init__(
@@ -653,7 +653,7 @@ class ADFConvolutionFitting:
             Fitting results
         """
         # Create a specialized optimizer for ADF
-        optimizer = PtychographyOptimizer(
+        optimizer = PtychoOptimizer(
             target_image=self.image,
             ctf_type="ADF",
             alpha=self.alpha,

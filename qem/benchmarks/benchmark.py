@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.ensemble import IsolationForest
 
 from qem.io.statstem import read_statstem
-from qem.fit.image_fitting import ImageFitting
+from qem.fit.fitter import Fitter
 from qem.utils.params import safe_convert_to_numpy
 
 
@@ -95,7 +95,7 @@ class Benchmark:
         plot=True,
         fit_stochastic=True,
     ) -> None:
-        model = ImageFitting(self.image, dx=self.dx)
+        model = Fitter(self.image, dx=self.dx)
         model.coordinates = self.input_coordinates / self.dx
         params = model.init_params(atom_size=atom_size, guess_radius=guess_radius)
         if fit_stochastic:

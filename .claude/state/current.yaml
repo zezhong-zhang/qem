@@ -3,7 +3,7 @@ session_id: s-1777819079-d8c4bc
 role: standalone
 status: active
 started_at: '2026-05-03T14:37:59Z'
-last_heartbeat: '2026-05-04T02:10:42Z'
+last_heartbeat: '2026-05-04T02:17:11Z'
 branch: master
 cwd: /Users/zhangzz/code/qem
 current_task: ''
@@ -11,12 +11,12 @@ decisions: []
 blockers: []
 artifacts: []
 metrics:
-  edits: 126
+  edits: 129
   commits: 0
   errors_fixed: 0
   decisions_made: 0
 plan:
-  current_step_index: 2
+  current_step_index: 3
   steps:
   - index: 0
     action: 'Phase 0: cleanup, flatten, ground rules'
@@ -31,36 +31,30 @@ plan:
     expected_outcome: null
     result: null
   - index: 2
-    action: Commit Phase 1
-    active_form: Committing Phase 1
-    status: in_progress
+    action: 'Phase 2: rename fit/ files + classes (no decomposition)'
+    active_form: Renaming fit/
+    status: completed
     expected_outcome: null
     result: null
   - index: 3
-    action: 'Phase 1.5: reconcile qem/linear_solver.py vs qem/fit/linear_solver.py'
-    active_form: Reconciling linear_solver
-    status: pending
+    action: Commit Phase 2
+    active_form: Committing Phase 2
+    status: in_progress
     expected_outcome: null
     result: null
   - index: 4
-    action: 'Phase 2: decompose ImageFitting'
-    active_form: Decomposing ImageFitting
-    status: pending
-    expected_outcome: null
-    result: null
-  - index: 5
-    action: 'Phase 3: trim memory/log + viz rename'
+    action: 'Phase 3: trim memory + log + viz rename + delete duplicate qem/linear_solver.py'
     active_form: Trimming utils/viz
     status: pending
     expected_outcome: null
     result: null
-  - index: 6
+  - index: 5
     action: 'Phase 4: modernize io/dm.py style'
     active_form: Modernizing io/dm.py
     status: pending
     expected_outcome: null
     result: null
-  - index: 7
+  - index: 6
     action: 'Phase 5: polish (gaussian_mixture_model, __all__)'
     active_form: Polishing
     status: pending

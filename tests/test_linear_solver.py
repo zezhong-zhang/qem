@@ -8,7 +8,7 @@ import torch
 from scipy.sparse import coo_matrix
 
 from qem.exceptions import ParameterError, DataError, ValidationError
-from qem.fit.linear_solver import (
+from qem.fit.solver import (
     ParameterValidator,
     DesignMatrixBuilder,
     LinearSystemSolver,

@@ -10,7 +10,7 @@ backend = setup_test_backend()
 import torch
 import torch
 
-from qem.fit.image_fitting import ImageFitting
+from qem.fit.fitter import Fitter
 from qem.fit.model import GaussianModel, LorentzianModel, VoigtModel
 from qem.utils.params import safe_convert_to_numpy
 
@@ -70,8 +70,8 @@ def test_global_fitting(model_type, model_class):
     noise_level = 0.01
     synthetic_image_np += rng.normal(0, noise_level, synthetic_image_np.shape)
 
-    # Initialize ImageFitting
-    fitter = ImageFitting(
+    # Initialize Fitter
+    fitter = Fitter(
         image=synthetic_image_np,
         dx=1.0,
         model_type=model_type,
@@ -167,8 +167,8 @@ def test_stochastic_fitting():
     synthetic_image = model.sum(x_grid, y_grid, local=False)
     synthetic_image_np = safe_convert_to_numpy(synthetic_image)
 
-    # Initialize ImageFitting
-    fitter = ImageFitting(image=synthetic_image_np, dx=1.0, model_type="gaussian")
+    # Initialize Fitter
+    fitter = Fitter(image=synthetic_image_np, dx=1.0, model_type="gaussian")
 
     # Set coordinates and initialize parameters
     coordinates = np.column_stack((pos_x, pos_y))
@@ -253,8 +253,8 @@ def test_comprehensive_fitting_methods(synthetic_test_data):
     """Test multiple fitting methods on the same synthetic data."""
     data = synthetic_test_data
     
-    # Initialize ImageFitting
-    fitter = ImageFitting(
+    # Initialize Fitter
+    fitter = Fitter(
         image=data['image'],
         dx=data['dx'],
         model_type="gaussian"
@@ -440,8 +440,8 @@ def test_voronoi_properties():
     noise_level = 0.02
     synthetic_image_np += rng.normal(0, noise_level, synthetic_image_np.shape)
 
-    # Initialize ImageFitting
-    fitter = ImageFitting(image=synthetic_image_np, dx=1.0, model_type="gaussian")
+    # Initialize Fitter
+    fitter = Fitter(image=synthetic_image_np, dx=1.0, model_type="gaussian")
 
     # Set coordinates and initialize parameters
     coordinates = np.column_stack((pos_x, pos_y))
@@ -559,8 +559,8 @@ def test_center_of_mass_refinement():
     synthetic_image = model.sum(x_grid, y_grid, local=False)
     synthetic_image_np = safe_convert_to_numpy(synthetic_image)
 
-    # Initialize ImageFitting with slightly offset initial coordinates
-    fitter = ImageFitting(image=synthetic_image_np, dx=1.0, model_type="gaussian")
+    # Initialize Fitter with slightly offset initial coordinates
+    fitter = Fitter(image=synthetic_image_np, dx=1.0, model_type="gaussian")
 
     # Set initial coordinates with integer positions (slightly off from true positions)
     initial_coordinates = np.array([[10, 11], [20, 19]], dtype=float)
@@ -622,8 +622,8 @@ def test_voronoi_properties():
             r2 = (i - center_y) ** 2 + (j - center_x) ** 2
             image[i, j] = np.exp(-r2 / (2 * 3**2)) + 0.1
 
-    # Initialize ImageFitting
-    fitter = ImageFitting(image=image, dx=1.0, model_type="gaussian")
+    # Initialize Fitter
+    fitter = Fitter(image=image, dx=1.0, model_type="gaussian")
 
     # Set coordinates
     fitter.coordinates = np.array([[center_x, center_y]], dtype=float)

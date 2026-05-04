@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 from scipy.ndimage import gaussian_filter
 from skimage.feature import peak_local_max
 
-from qem.fit.image_fitting import ImageFitting
+from qem.fit.fitter import Fitter
 
 # --- Page Configuration ---
 st.set_page_config(layout="wide", page_title="Quantitative Electron Microscopy (QEM)")
@@ -146,7 +146,7 @@ def render_load_data_stage(main_area_col1, main_area_col2):
 
         if st.session_state.original_image_data is not None:
             st.header("2. Initialize Processor")
-            # Define available model types directly based on ImageFitting implementation
+            # Define available model types directly based on Fitter implementation
             model_names = ["gaussian", "voigt", "lorentzian"]
             current_model_idx = 0
             if st.session_state.current_model_name in model_names:
@@ -175,14 +175,14 @@ def render_load_data_stage(main_area_col1, main_area_col2):
                         except ValueError:
                             st.error("Invalid format for unit cell parameters.")
                     with st.spinner("Initializing ImageModelFitter..."):
-                        st.session_state.image_model_fitter = ImageFitting(
+                        st.session_state.image_model_fitter = Fitter(
                             image=st.session_state.original_image_data,
                             dx=st.session_state.pixel_size,
                             units="A",  # Assuming pixel_size is in Angstroms from UI label
                             elements=atom_types if atom_types else None,
                             model_type=st.session_state.current_model_name
                         )
-                        st.success("ImageFitting initialized successfully!")
+                        st.success("Fitter initialized successfully!")
                         st.session_state.params_initialized = False # Reset on new init
                 else:
                     st.error("Failed to initialize ImageModelFitter. Ensure image is loaded and model is selected.")
@@ -210,7 +210,7 @@ def render_load_data_stage(main_area_col1, main_area_col2):
                         image_filtered = gaussian_filter(fitter.image, pf_sigma)
                         st.session_state.temp_image = image_filtered
                         
-                        # Find peaks using skimage directly (similar to ImageFitting.find_peaks)
+                        # Find peaks using skimage directly (similar to Fitter.find_peaks)
                         peaks_locations = peak_local_max(
                             image_filtered,
                             min_distance=pf_min_dist,

@@ -14,17 +14,16 @@ __version__ = "0.1.0"
 # Core modules - import these directly as they're commonly used
 from . import io
 from . import fit
-from .fit.image_fitting import ImageFitting
+from .fit.fitter import Fitter
 from . import analysis
 from . import visualization
 from . import processing
 from . import instruments
 from . import optimizers
 from . import utils
-from . import schema
 
 __all__ = [
-    'ImageFitting',
+    'Fitter',
     'fit',
     'analysis',
     'visualization',
@@ -32,6 +31,5 @@ __all__ = [
     'instruments',
     'optimizers',
     'utils',
-    'schema',
     'io',
 ]

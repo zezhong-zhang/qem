@@ -1,16 +1,16 @@
 """Fitting algorithms and models for QEM."""
 
-from .background import BackgroundEstimator, estimate_background
-from .convolve_fitting import (
-    ADFConvolutionFitting,
-    ConvolutionFitting,
+from .background import Background, estimate_background
+from .convolve import (
+    AdfConvFit,
+    ConvFit,
     OptimizationResult,
-    PtychographyFitting,
+    PtychoFit,
     fit_adf_image,
     fit_ssb_ptychography,
 )
-from .image_fitting import ImageFitting
-from .linear_solver import (
+from .fitter import Fitter
+from .solver import (
     DesignMatrixBuilder,
     LinearSystemSolver,
     MemoryInfo,
@@ -18,14 +18,14 @@ from .linear_solver import (
     SolutionProcessor,
 )
 from .model import GaussianKernel, GaussianModel, ImageModel, LorentzianModel, VoigtModel
-from .point_potential import (
+from .potential import (
     ConvolutionImageModel,
     PointPotentialModel,
     calculate_residual,
     correlation_coefficient,
     normalized_root_mean_square_error,
 )
-from .ptychography_optimization import PtychographyOptimizer
+from .ptycho import PtychoOptimizer
 from .refine import calculate_center_of_mass, fit_gaussian, gauss2d
 from .voronoi import voronoi_integrate, voronoi_point_record
 
@@ -38,7 +38,7 @@ __all__ = [
     "GaussianKernel",
 
     # Main fitting class
-    "ImageFitting",
+    "Fitter",
 
     # Linear solver components
     "LinearSystemSolver",
@@ -48,10 +48,10 @@ __all__ = [
     "MemoryInfo",
 
     # Ptychography / convolution-based fitting
-    "PtychographyOptimizer",
-    "ConvolutionFitting",
-    "ADFConvolutionFitting",
-    "PtychographyFitting",
+    "PtychoOptimizer",
+    "ConvFit",
+    "AdfConvFit",
+    "PtychoFit",
     "OptimizationResult",
     "fit_ssb_ptychography",
     "fit_adf_image",
@@ -69,7 +69,7 @@ __all__ = [
     "gauss2d",
 
     # Background estimation
-    "BackgroundEstimator",
+    "Background",
     "estimate_background",
 
     # Voronoi integration

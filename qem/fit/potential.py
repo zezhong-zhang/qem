@@ -197,10 +197,10 @@ class ConvolutionImageModel(ImageModel):
     The 'height' parameter represents the phase value at each atomic site.
     The 'width' parameter is not used (PSF is fixed by microscope parameters).
 
-    To use this model with ImageFitting:
+    To use this model with Fitter:
     ```python
     from qem.optics import Aberrations, Grid, Probe, ssb_psf
-    from qem.fit.point_potential import ConvolutionImageModel
+    from qem.fit.potential import ConvolutionImageModel
 
     # Build PSF from microscope parameters
     probe = Probe(energy=60e3, aperture=20, aberrations=Aberrations())

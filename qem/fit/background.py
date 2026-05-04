@@ -21,7 +21,7 @@ except ImportError:
 from qem.utils.params import safe_convert_to_numpy
 
 
-class BackgroundEstimator:
+class Background:
     """
     Unified background estimator for QEM image fitting.
     
@@ -396,7 +396,7 @@ def estimate_background(image: np.ndarray,
     Returns:
         Scalar background value (1D) or 2D background pattern (unscaled)
     """
-    estimator = BackgroundEstimator(image, dx)
+    estimator = Background(image, dx)
     
     if use_2d:
         estimator.enable_2d_background(method=method, **kwargs)

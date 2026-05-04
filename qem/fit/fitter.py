@@ -47,14 +47,14 @@ from qem.utils.backend import release_backend_memory
 from qem.utils.arrays import get_random_indices_in_batches
 from qem.visualization.geometry import remove_close_coordinates
 from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
-from qem.fit.background import BackgroundEstimator, estimate_background
-from qem.fit.linear_solver import (
+from qem.fit.background import Background, estimate_background
+from qem.fit.solver import (
     ParameterValidator,
     DesignMatrixBuilder,
     LinearSystemSolver,
     SolutionProcessor,
 )
-from qem.validation import ImageFittingValidator, FittingParameterValidator
+from qem.validation import FitterValidator, FitParamsValidator
 from qem.utils.memory_optimization import (
     BatchMemoryOptimizer,
     ChunkedProcessor,
@@ -72,7 +72,7 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 
 
-class ImageFitting:
+class Fitter:
     def __init__(
         self,
         image: np.ndarray,
@@ -86,8 +86,8 @@ class ImageFitting:
         monitor_memory: bool = False,
     ):
         """
-        Initialize the ImageFitting class with comprehensive input validation.
-        Initialize the ImageFitting class with comprehensive input validation.
+        Initialize the Fitter class with comprehensive input validation.
+        Initialize the Fitter class with comprehensive input validation.
 
         Args:
             image (np.array): The input image as a numpy array.
@@ -125,7 +125,7 @@ class ImageFitting:
                     raise ValueError(f"{param_name} must be a boolean, got {type(param_value)}")
             
         except Exception as e:
-            logging.error(f"ImageFitting initialization failed: {str(e)}")
+            logging.error(f"Fitter initialization failed: {str(e)}")
             raise
         
         # Store validated parameters
@@ -144,7 +144,7 @@ class ImageFitting:
             logging.info("Memory monitoring disabled")
         
         # Log initialization info
-        logging.info(f"Initializing ImageFitting with {self.image.shape} image, "
+        logging.info(f"Initializing Fitter with {self.image.shape} image, "
                     f"dx={self.dx} {self.units}, model={self.model_type}")
 
         # Create model instance based on type
@@ -178,12 +178,12 @@ class ImageFitting:
         self.initialize_grid()
         
         # Initialize background estimation
-        self.background_estimator = BackgroundEstimator(self.image, self.dx)
+        self.background_estimator = Background(self.image, self.dx)
 
     # I/O functions
     def save(self, filepath: str) -> None:
         """
-        Save ImageFitting state to HDF5 file.
+        Save Fitter state to HDF5 file.
         
         Args:
             filepath: Path to save the HDF5 file
@@ -235,15 +235,15 @@ class ImageFitting:
             if hasattr(self, '_voronoi_map') and self._voronoi_map is not None:
                 f.create_dataset('voronoi_map', data=self._voronoi_map)
 
-    def load(self, filepath: str) -> 'ImageFitting':
+    def load(self, filepath: str) -> 'Fitter':
         """
-        Load ImageFitting state from HDF5 file.
+        Load Fitter state from HDF5 file.
         
         Args:
             filepath: Path to the HDF5 file to load
             
         Returns:
-            ImageFitting instance with loaded state
+            Fitter instance with loaded state
             
         Raises:
             FileNotFoundError: If the file doesn't exist
@@ -348,7 +348,7 @@ class ImageFitting:
                         raise ValueError("Voronoi map shape must match image shape")
                     self._voronoi_map = voronoi_map
                 
-                logging.info(f"Successfully loaded ImageFitting state from {filepath}")
+                logging.info(f"Successfully loaded Fitter state from {filepath}")
                 return self
                 
         except FileNotFoundError:
@@ -399,13 +399,13 @@ class ImageFitting:
             model = VoigtModel(dx=float(self.dx))
         elif self.model_type == "convolution":
             # For convolution model, PSF kernel must be set before model selection
-            # This is used by PtychographyFitting which overrides _select_model
+            # This is used by PtychoFit which overrides _select_model
             if not hasattr(self, '_psf_kernel') or self._psf_kernel is None:
                 raise ValueError(
                     "Convolution model requires PSF kernel. "
-                    "Use PtychographyFitting instead of ImageFitting directly."
+                    "Use PtychoFit instead of Fitter directly."
                 )
-            from qem.fit.point_potential import ConvolutionImageModel
+            from qem.fit.potential import ConvolutionImageModel
             model = ConvolutionImageModel(
                 psf_kernel=self._psf_kernel,
                 dx=float(self.dx),

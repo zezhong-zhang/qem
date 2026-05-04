@@ -15,7 +15,7 @@ The key idea is that all these imaging modes can be treated as a convolution
 of a point-potential (atomic positions with values) with a PSF derived from
 the microscope's CTF.
 
-This implementation uses the standard QEM ImageFitting infrastructure with
+This implementation uses the standard QEM Fitter infrastructure with
 native PyTorch optimization.
 """
 
@@ -39,7 +39,7 @@ from qem.processing.psf import calculate_psf_width
 
 # Light-weight replacement for the legacy ProbeParameters dataclass.
 # Kept as a public name in this module so callers that pass a dict to
-# ConvolutionFitting(...) can still do so, but new code should pass
+# ConvFit(...) can still do so, but new code should pass
 # `Probe`/`Aberrations` directly via the `probe` keyword.
 class ProbeParameters:
     """Adapter: holds CTF-mode-specific probe parameters as plain attrs.
@@ -125,14 +125,14 @@ def create_probe_parameters(**kwargs) -> ProbeParameters:
         )
         kwargs["aberrations"] = ab
     return ProbeParameters(**kwargs)
-from qem.fit.point_potential import (
+from qem.fit.potential import (
     PointPotentialModel,
     ConvolutionImageModel,
     correlation_coefficient,
     normalized_root_mean_square_error,
     calculate_residual,
 )
-from qem.fit.image_fitting import ImageFitting
+from qem.fit.fitter import Fitter
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 
 
@@ -157,10 +157,10 @@ class OptimizationResult:
         return self.values
 
 
-class ConvolutionFitting(ImageFitting):
+class ConvFit(Fitter):
     """General convolution-based fitting for STEM images.
 
-    This class extends ImageFitting to support convolution-based fitting
+    This class extends Fitter to support convolution-based fitting
     where the image is modeled as a convolution of a point-potential
     with a PSF derived from the microscope's CTF.
 
@@ -186,18 +186,18 @@ class ConvolutionFitting(ImageFitting):
         Microscope probe parameters
     psf_kernel : np.ndarray, optional
         Pre-computed PSF kernel (overrides CTF calculation)
-    **kwargs : additional arguments passed to ImageFitting
+    **kwargs : additional arguments passed to Fitter
 
     Examples
     --------
-    >>> from qem.fit import ConvolutionFitting
+    >>> from qem.fit import ConvFit
     >>> from qem.instruments import create_probe_parameters
     >>>
     >>> # Create probe parameters
     >>> probe = create_probe_parameters(alpha=20, eV=60e3, defocus=30)
     >>>
     >>> # Initialize fitter
-    >>> fitter = ConvolutionFitting(
+    >>> fitter = ConvFit(
     ...     image=ssb_image,
     ...     ctf_type='SSB',
     ...     probe_params=probe,
@@ -245,7 +245,7 @@ class ConvolutionFitting(ImageFitting):
             Microscope probe parameters
         psf_kernel : np.ndarray, optional
             Pre-computed PSF kernel
-        **kwargs : additional arguments passed to ImageFitting
+        **kwargs : additional arguments passed to Fitter
         """
         # Store CTF and probe parameters
         self.ctf_type = ctf_type
@@ -273,7 +273,7 @@ class ConvolutionFitting(ImageFitting):
         # Store the PSF for model creation
         self._psf_kernel = self.psf
 
-        # Initialize parent ImageFitting with model_type='convolution'
+        # Initialize parent Fitter with model_type='convolution'
         super().__init__(
             image=image,
             dx=dx,
@@ -333,7 +333,7 @@ class ConvolutionFitting(ImageFitting):
         Returns
         -------
         params : dict
-            Parameters dictionary for ImageFitting
+            Parameters dictionary for Fitter
         """
         positions = np.asarray(positions)
         if positions.ndim == 1:
@@ -376,7 +376,7 @@ class ConvolutionFitting(ImageFitting):
         Fit atomic positions and values to the target image.
 
         This method uses Keras model.fit() for optimization, following
-        the standard QEM ImageFitting pattern.
+        the standard QEM Fitter pattern.
 
         Parameters
         ----------
@@ -404,7 +404,7 @@ class ConvolutionFitting(ImageFitting):
         # Initialize parameters
         params = self.init_params_from_positions(positions, initial_values)
 
-        # Run optimization using ImageFitting.fit_global
+        # Run optimization using Fitter.fit_global
         optimized_params = self.fit_global(
             params=params,
             maxiter=maxiter,
@@ -470,18 +470,18 @@ class ConvolutionFitting(ImageFitting):
         return normalized_root_mean_square_error(sim_image, self.image)
 
 
-class PtychographyFitting(ConvolutionFitting):
+class PtychoFit(ConvFit):
     """Ptychography phase quantification using convolution-based fitting.
 
-    This is a specialized version of ConvolutionFitting for ptychography
+    This is a specialized version of ConvFit for ptychography
     phase images (SSB, ePIE, iCoM). The optimized values represent phase
     values at each atomic site.
 
     Examples
     --------
-    >>> from qem.fit import PtychographyFitting
+    >>> from qem.fit import PtychoFit
     >>>
-    >>> fitter = PtychographyFitting(
+    >>> fitter = PtychoFit(
     ...     image=ssb_image,
     ...     alpha=20,           # mrad convergence angle
     ...     eV=60e3,            # 60 kV
@@ -527,7 +527,7 @@ class PtychographyFitting(ConvolutionFitting):
             Microscope probe parameters
         psf_kernel : np.ndarray, optional
             Pre-computed PSF kernel
-        **kwargs : additional arguments passed to ConvolutionFitting
+        **kwargs : additional arguments passed to ConvFit
 
         Quick Parameters
         ---------------
@@ -618,7 +618,7 @@ class PtychographyFitting(ConvolutionFitting):
         return self.get_values()
 
 
-class ADFConvolutionFitting(ConvolutionFitting):
+class AdfConvFit(ConvFit):
     """ADF image fitting using convolution model.
 
     This treats ADF images as a convolution of the probe with the
@@ -627,9 +627,9 @@ class ADFConvolutionFitting(ConvolutionFitting):
 
     Examples
     --------
-    >>> from qem.fit import ADFConvolutionFitting
+    >>> from qem.fit import AdfConvFit
     >>>
-    >>> fitter = ADFConvolutionFitting(
+    >>> fitter = AdfConvFit(
     ...     image=adf_image,
     ...     alpha=20,           # mrad convergence angle
     ...     eV=60e3,            # 60 kV
@@ -685,7 +685,7 @@ class ADFConvolutionFitting(ConvolutionFitting):
             Element types
         probe_params : ProbeParameters or dict, optional
             Override probe parameters (if provided, other parameters ignored)
-        **kwargs : additional arguments passed to ConvolutionFitting
+        **kwargs : additional arguments passed to ConvFit
         """
         # Create probe parameters for ADF if not provided
         if probe_params is None:
@@ -808,7 +808,7 @@ def fit_ssb_ptychography(
 
     Examples
     --------
-    >>> from qem.fit.convolve_fitting import fit_ssb_ptychography
+    >>> from qem.fit.convolve import fit_ssb_ptychography
     >>>
     >>> result = fit_ssb_ptychography(
     ...     image=ssb_image,
@@ -824,7 +824,7 @@ def fit_ssb_ptychography(
         alpha=alpha, eV=eV, df=df, aberrations=aberrations
     )
 
-    fitter = ConvolutionFitting(
+    fitter = ConvFit(
         image=image,
         ctf_type='SSB',
         probe_params=probe_params,
@@ -885,7 +885,7 @@ def fit_adf_image(
     result : OptimizationResult
         Fitting results
     """
-    fitter = ADFConvolutionFitting(
+    fitter = AdfConvFit(
         image=image,
         alpha=alpha,
         eV=eV,
@@ -904,4 +904,4 @@ def fit_adf_image(
 
 
 # Backward compatibility aliases
-PtychographyOptimizer = PtychographyFitting
+PtychoOptimizer = PtychoFit

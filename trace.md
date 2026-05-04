@@ -349,3 +349,18 @@ The reproduce: `pytest tests/test_image_fitting.py -k gaussian-Gaussian`.
 
 Next: dump the loss function signature, compare predict() output to
 the synthetic image, see where the gradient direction goes wrong.
+
+### EARS — Progress (2026-05-04 10:15)
+<!-- concepts: phase-2, file-renames, class-renames -->
+Phase 2 in progress. git mv'd 5 files (image_fitting→fitter, convolve_fitting→
+convolve, ptychography_optimization→ptycho, linear_solver→solver,
+point_potential→potential). Ran a Python rewrite over all consumers (qem/,
+tests/, examples/) for both module paths and class names (ImageFitting→Fitter,
+ConvolutionFitting→ConvFit, PtychographyFitting→PtychoFit,
+ADFConvolutionFitting→AdfConvFit, BackgroundEstimator→Background,
+ImageFittingValidator→FitterValidator, FittingParameterValidator→
+FitParamsValidator).
+
+Updated qem/fit/__init__.py to re-import from new module names. Now 4 test
+collection errors remain — likely test_basic / test_linear_solver_core /
+test_fusion still using old import paths.

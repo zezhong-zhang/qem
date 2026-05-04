@@ -21,8 +21,8 @@ class ValidationError(ValueError):
         self.value = value
 
 
-class ImageFittingValidator:
-    """Comprehensive validation for ImageFitting class parameters."""
+class FitterValidator:
+    """Comprehensive validation for Fitter class parameters."""
     
     @staticmethod
     def validate_image(image: np.ndarray, max_size: int = 5000, max_memory_mb: int = 1000) -> np.ndarray:
@@ -380,7 +380,7 @@ class ImageFittingValidator:
         return atom_types
 
 
-class FittingParameterValidator:
+class FitParamsValidator:
     """Validation for fitting-specific parameters."""
     
     @staticmethod
