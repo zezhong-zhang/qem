@@ -13,7 +13,6 @@ from .fitter import Fitter
 from .solver import (
     DesignMatrixBuilder,
     LinearSystemSolver,
-    MemoryInfo,
     ParameterValidator,
     SolutionProcessor,
 )
@@ -45,7 +44,6 @@ __all__ = [
     "DesignMatrixBuilder",
     "ParameterValidator",
     "SolutionProcessor",
-    "MemoryInfo",
 
     # Ptychography / convolution-based fitting
     "PtychoOptimizer",

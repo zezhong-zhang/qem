@@ -1,10 +1,11 @@
 """
 Linear solver module for QEM image fitting.
-Provides memory-efficient sparse linear system solving with automatic strategy selection.
+
+Sparse linear system solving with a simple two-step fallback: try direct,
+on memory / singular / linalg error fall back to iterative.
 """
 
 import logging
-from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Protocol
 
 import numpy as np
@@ -16,14 +17,6 @@ from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 from qem.utils.backend import release_backend_memory
 from qem.utils.config import get_config
 from qem.utils.exceptions import ParameterError, DataError
-
-
-@dataclass
-class MemoryInfo:
-    """Memory information for the active compute device."""
-    total_mb: float
-    allocated_mb: float
-    free_mb: float
 
 
 class BackendSolver(Protocol):
@@ -283,186 +276,53 @@ class SciPySolver:
 
 
 class LinearSystemSolver:
-    """
-    Memory-aware sparse linear system solver for the PyTorch backend.
+    """Sparse linear system solver: try direct, fall back to iterative.
 
-    Uses ``TorchSolver`` for native dense/sparse paths and falls back to
-    ``SciPySolver`` whenever PyTorch reports a memory or device-compatibility
-    error.
+    Replaces the previous "memory-aware strategy selection" + nested
+    try/except. The cost of always *trying* the direct solver and
+    falling back on actual failure is much lower than psutil polling
+    every solve.
     """
-
-    # Fraction of free memory we are willing to spend on AtA before falling
-    # back to the iterative solver. CUDA memory accounting is reliable, CPU
-    # estimates are conservative.
-    DIRECT_SOLVER_MEMORY_FRACTION = 0.4
 
     def __init__(self):
         self.solver = TorchSolver
 
-    def get_memory_info(self, device=None) -> MemoryInfo:
-        """Get available memory information for the active device."""
-        if device is not None:
-            import torch
-            if device.type == 'cuda':
-                try:
-                    total = torch.cuda.get_device_properties(device).total_memory
-                    allocated = torch.cuda.memory_allocated(device)
-                    reserved = torch.cuda.memory_reserved(device)
-                    return MemoryInfo(
-                        total_mb=total / (1024 * 1024),
-                        allocated_mb=allocated / (1024 * 1024),
-                        free_mb=(total - reserved) / (1024 * 1024),
-                    )
-                except Exception:
-                    pass
+    def solve_system(self, design_matrix, target: np.ndarray,
+                     non_negative: bool = False) -> Optional[np.ndarray]:
+        """Solve ``design_matrix @ x = target``.
 
-        # Conservative CPU/MPS fallback.
-        return MemoryInfo(total_mb=4000, allocated_mb=1000, free_mb=3000)
-
-    def choose_strategy(self, n_cols: int, device=None) -> tuple[str, MemoryInfo]:
+        scipy sparse inputs always go through the iterative scipy path.
+        For backend tensors: try direct; on memory / singular / linalg
+        error fall back to iterative; on a second failure raise DataError.
         """
-        Choose optimal solving strategy based on problem size and available memory.
+        # Coerce target to numpy (MPS tensors live on accelerators).
+        if hasattr(target, "cpu"):
+            target = target.cpu().numpy()
+        elif not isinstance(target, np.ndarray):
+            target = np.asarray(target)
 
-        Args:
-            n_cols: Number of columns in the design matrix
-            device: Computing device (for GPU memory detection)
+        # scipy sparse matrices skip the direct path — they have no
+        # backend solver attached.
+        if hasattr(design_matrix, "tocsr"):
+            return SciPySolver.solve_iterative(design_matrix, target, non_negative)
 
-        Returns:
-            Tuple of (strategy, memory_info) where strategy is 'direct' or 'iterative'
-        """
-        ata_memory_mb = (n_cols * n_cols * 4) / (1024 * 1024)  # float32
-        memory_info = self.get_memory_info(device)
-
-        threshold = self.DIRECT_SOLVER_MEMORY_FRACTION
-
-        # Be more conservative if we're close to memory limits
-        if memory_info.free_mb < 1000:  # Less than 1GB free
-            threshold *= 0.5  # Use only half the normal threshold
-            logging.warning(f"Low memory detected ({memory_info.free_mb:.1f}MB free), using conservative threshold")
-
-        max_memory = memory_info.free_mb * threshold
-        
-        # Force iterative solver for very large problems or low memory
-        if ata_memory_mb > max_memory or memory_info.free_mb < 500:
-            strategy = 'iterative'
-        else:
-            strategy = 'direct'
-        
-        logging.info(
-            f"AtA memory: {ata_memory_mb:.1f}MB, available: {memory_info.free_mb:.1f}MB, "
-            f"max_memory: {max_memory:.1f}MB, using {strategy} solver"
-        )
-        
-        return strategy, memory_info
-    
-    def solve_system(self, design_matrix, target: np.ndarray, 
-                    non_negative: bool = False) -> Optional[np.ndarray]:
-        """
-        Solve linear system with memory-aware strategy selection.
-        
-        Args:
-            design_matrix: Sparse design matrix (backend-specific format)
-            target: Target vector
-            non_negative: Whether to enforce non-negative constraints
-            
-        Returns:
-            Solution vector or None if solving fails
-            
-        Raises:
-            DataError: If all solving methods fail
-        """
         try:
-            # Convert target to numpy if it's a tensor (especially MPS tensors)
-            if hasattr(target, 'cpu'):
-                target = target.cpu().numpy()
-            elif not isinstance(target, np.ndarray):
-                target = np.asarray(target)
-            
-            # Get device info for memory-aware strategy selection
-            device = getattr(design_matrix, 'device', None)
-            n_cols = design_matrix.shape[1]
-            
-            # Choose strategy based on memory constraints
-            strategy, memory_info = self.choose_strategy(n_cols, device)
-            
-            # Check if we have a scipy sparse matrix (fallback case)
-            if hasattr(design_matrix, 'tocsr'):  # scipy sparse matrix
-                logging.info("Using scipy sparse solver for fallback compatibility")
-                # if strategy == 'direct':
-                #     solution = SciPySolver.solve_direct(design_matrix, target, non_negative)
-                # else:
-                solution = SciPySolver.solve_iterative(design_matrix, target, non_negative)
-            else:
-                # Use backend-specific solver
-                if strategy == 'direct':
-                    solution = self.solver.solve_direct(design_matrix, target, non_negative)
-                else:
-                    solution = self.solver.solve_iterative(design_matrix, target, non_negative)
-            
-            return solution
-            
-        except Exception as e:
-            error_msg = str(e)
-            logging.error(f"Linear solve failed: {error_msg}")
-            
-            # Check if it's a memory-related error
-            is_memory_error = any(keyword in error_msg.lower() for keyword in 
-                                ["out of memory", "cuda out of memory", "mps out of memory", "memory", "memoryerror"])
-            
-            if is_memory_error:
-                logging.warning("Memory error detected, forcing scipy fallback for memory efficiency")
-            
-            # Try iterative solver as fallback
-            try:
-                logging.info("Attempting iterative solver as fallback...")
-                
-                # Ensure target is numpy array for fallback
-                fallback_target = target
-                if hasattr(target, 'cpu'):
-                    fallback_target = target.cpu().numpy()
-                elif not isinstance(target, np.ndarray):
-                    fallback_target = np.asarray(target)
-                
-                if hasattr(design_matrix, 'tocsr'):  # scipy sparse matrix
-                    return SciPySolver.solve_iterative(design_matrix, fallback_target, non_negative)
-                elif is_memory_error:
-                    # Force scipy conversion for memory errors
-                    logging.info("Converting to scipy for memory efficiency...")
-                    if hasattr(design_matrix, 'coalesce'):  # PyTorch sparse
-                        A_coo = design_matrix.coalesce()
-                        indices = A_coo.indices().cpu().numpy()
-                        values = A_coo.values().cpu().numpy()
-                        shape = A_coo.shape
-                        scipy_matrix = coo_matrix((values, (indices[0], indices[1])), shape=shape)
-                        return SciPySolver.solve_iterative(scipy_matrix, fallback_target, non_negative)
-                else:
-                    return self.solver.solve_iterative(design_matrix, fallback_target, non_negative)
-                    
-            except Exception as e2:
-                logging.error(f"Fallback solver also failed: {str(e2)}")
-                # Final fallback: try scipy if we haven't already
-                if not hasattr(design_matrix, 'tocsr'):
-                    try:
-                        logging.info("Final fallback: attempting scipy conversion...")
-                        # Try to convert to scipy sparse matrix
-                        if hasattr(design_matrix, 'coalesce'):  # PyTorch sparse
-                            A_coo = design_matrix.coalesce()
-                            indices = A_coo.indices().cpu().numpy()
-                            values = A_coo.values().cpu().numpy()
-                            shape = A_coo.shape
-                            scipy_matrix = coo_matrix((values, (indices[0], indices[1])), shape=shape)
-                            
-                            # Ensure target is also on CPU
-                            if hasattr(target, 'cpu'):
-                                target_numpy = target.cpu().numpy()
-                            else:
-                                target_numpy = np.asarray(target)
-                            
-                            return SciPySolver.solve_iterative(scipy_matrix, target_numpy, non_negative)
-                    except Exception as e3:
-                        logging.error(f"Final fallback also failed: {str(e3)}")
-                
-                raise DataError(f"All linear system solving methods failed. Original error: {str(e)}")
+            return self.solver.solve_direct(design_matrix, target, non_negative)
+        except (MemoryError, np.linalg.LinAlgError) as exc:
+            logging.info("Direct solver fallback (%s); trying iterative.", exc)
+        except Exception as exc:
+            err = str(exc).lower()
+            if not any(k in err for k in ("singular", "memory", "out of memory")):
+                raise
+            logging.info("Direct solver hit numerical issue (%s); trying iterative.", exc)
+
+        try:
+            return self.solver.solve_iterative(design_matrix, target, non_negative)
+        except Exception as exc:
+            raise DataError(
+                f"Linear solve failed: {exc}",
+                technical_details={"matrix_shape": getattr(design_matrix, "shape", None)},
+            ) from exc
 
 
 class DesignMatrixBuilder:
