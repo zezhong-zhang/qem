@@ -9,16 +9,21 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 
 
-class ValidationError(ValueError):
-    """Custom validation error with better context and user guidance."""
-    
-    def __init__(self, parameter: str, value: any, message: str, suggestion: str = None):
-        full_message = f"Parameter '{parameter}' validation failed: {value} - {message}"
-        if suggestion:
-            full_message += f". Suggestion: {suggestion}"
-        super().__init__(full_message)
-        self.parameter = parameter
-        self.value = value
+from qem.utils.exceptions import ValidationError as _ValidationError
+
+
+def ValidationError(parameter: str, value, message: str, suggestion: str | None = None):  # noqa: N802
+    """Backwards-compatible factory for the historic four-positional-arg
+    call shape. Returns the canonical ``qem.utils.exceptions.ValidationError``
+    so callers catching either the local or canonical type still work."""
+    msg = f"Parameter '{parameter}' validation failed: {value} - {message}"
+    if suggestion:
+        msg = f"{msg}. Suggestion: {suggestion}"
+    return _ValidationError(
+        msg,
+        validation_rules=[parameter] if parameter else None,
+        suggestion=suggestion,
+    )
 
 
 class FitterValidator:
