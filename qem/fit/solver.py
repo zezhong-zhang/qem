@@ -6,6 +6,7 @@ on memory / singular / linalg error fall back to iterative.
 """
 
 import logging
+from contextlib import nullcontext
 from typing import Dict, Optional, Tuple, Protocol
 
 import numpy as np
@@ -571,3 +572,190 @@ class SolutionProcessor:
             background = prev_bg_val * (1 + update_rel_clip)
         
         return background, True
+
+
+def linear_estimator(
+    self,
+    params: dict = None,
+    non_negative: bool = False,
+    device: str = 'cpu',
+    best_effort: bool = False,
+) -> dict:
+    """
+    Perform linear estimation of peak heights using least squares fitting.
+
+    Builds a sparse design matrix from the current peak model and solves
+    a linear system to estimate optimal height scaling factors.
+
+    Args:
+        params: Model parameters dictionary. If ``None``, uses ``self.params``.
+        non_negative: Whether to enforce non-negative height constraints.
+        device: Compute device hint passed through to the solver.
+        best_effort: If ``True``, log and swallow exceptions and return the
+            input parameters unchanged. Defaults to ``False`` so callers
+            see real failures (parameter validation errors, numerical
+            breakdowns, OOM) instead of getting silently stale results.
+
+    Returns:
+        Updated parameters dictionary with refined height values, or the
+        original parameters when ``best_effort`` swallows a failure.
+
+    Raises:
+        ParameterError: If ``params`` fails validation.
+        QEMError: For backend / memory / numerical solver failures
+            (when ``best_effort=False``).
+    """
+    # Initialize parameters if needed
+    if params is None:
+        if self.params is None:
+            self.init_params()
+        params = self.params
+
+    operation_context = (
+        self.memory_monitor.monitor_operation("linear_estimator")
+        if self.memory_monitor else nullcontext()
+    )
+
+    def _run() -> dict:
+        validated_params = ParameterValidator.validate_params(params)
+
+        matrix_builder = DesignMatrixBuilder(self.model, self.nx, self.ny)
+        peak_local, global_x, global_y, mask = matrix_builder.build_local_peaks(
+            validated_params, self.same_width, self.atom_types
+        )
+
+        background_2d_for_matrix = None
+        if self.background_estimator.use_2d_background:
+            background_2d_for_matrix = self.background_estimator.get_background_for_linear_estimation()
+
+        design_matrix = matrix_builder.build_sparse_matrix(
+            peak_local, global_x, global_y, mask,
+            self.fit_background, self.num_coordinates,
+            self.x_grid, self.y_grid,
+            background_2d_for_matrix,
+        )
+        target = self._prepare_target_vector(validated_params)
+        solver = LinearSystemSolver()
+        solution = solver.solve_system(design_matrix, target, non_negative)
+        return self._process_solution(solution, validated_params)
+
+    with operation_context:
+        if not best_effort:
+            # Default path: surface real failures to the caller.
+            return _run()
+        try:
+            return _run()
+        except Exception as e:
+            # Opt-in best-effort behaviour for resilient outer loops
+            # (e.g. the stochastic fitter that pre-conditions params).
+            logging.warning(
+                "linear_estimator failed in best_effort mode; "
+                "returning input parameters unchanged: %s", e,
+            )
+            return params
+
+def _prepare_target_vector(self, params: dict) -> np.ndarray:
+    """
+    Prepare target vector for linear system.
+    
+    Args:
+        params: Model parameters
+        
+    Returns:
+        Flattened target vector
+    """
+    # target = safe_convert_to_numpy(self.image_tensor).ravel()
+    target = self.image_tensor.ravel()
+    
+    if not self.fit_background:
+        if self.background_estimator.use_2d_background:
+            # Subtract current 2D background
+            current_bg = self.get_current_background()
+            target = target - current_bg.ravel()
+        else:
+            # Subtract scalar background
+            bg_key = "background_scale" if "background_scale" in params else "background"
+            target = target - params[bg_key]
+        
+    return target
+
+def _process_solution(self, solution: np.ndarray, params: dict, update_threshold: float = 0.2) -> dict:
+    """
+    Process linear system solution and update parameters.
+    
+    Args:
+        solution: Solution vector from linear solver (numpy array from scipy fallback)
+        params: Original parameters dictionary
+        
+    Returns:
+        Updated parameters dictionary
+    """
+    processor = SolutionProcessor()
+    
+    # Validate solution
+    if not processor.validate_solution(solution):
+        logging.warning("Invalid solution obtained, returning original parameters")
+        return params
+    
+    # Extract height scaling and background
+    if self.fit_background:
+        if self.background_estimator.use_2d_background:
+            # For 2D background, the last element is the scaling factor
+            background_scale = solution[-1]
+            
+            # Validate and update 2D background scale
+            if 0.01 < background_scale < 100.0:  # Reasonable bounds
+                self.update_2d_background_scale(float(background_scale))
+                # Update the background_scale parameter
+                params["background_scale"] = safe_convert_to_tensor(float(background_scale))
+                # Remove old background parameter if it exists
+                if "background" in params:
+                    del params["background"]
+            else:
+                logging.warning("2D background scale out of bounds: %.3f, keeping current scale", background_scale)
+            
+            height_scale = solution[:-1]
+        else:
+            # Scalar background processing
+            background, valid = processor.process_background(
+                solution, params, self.init_background, update_threshold
+            )
+            if not valid:
+                logging.warning("Background update too large, skipping parameter update with linear estimator")
+                return params
+            
+            # Convert background to Keras tensor to match parameter types
+            params["background"] = safe_convert_to_tensor(background)
+            height_scale = solution[:-1]
+    else:
+        height_scale = solution
+    
+    # Process height scaling factors
+    processed_scale = processor.process_height_scaling(height_scale)
+    
+    # Convert processed scale to Keras tensor to match parameter types
+    processed_scale_tensor = safe_convert_to_tensor(processed_scale)
+    
+    # Update height parameters
+    params["height"] *= processed_scale_tensor
+
+    # Update instance parameters
+    self.params = params
+    return params
+
+
+
+def _bind(cls) -> None:
+    """Attach extracted methods back onto Fitter at class-load time."""
+    cls.linear_estimator = linear_estimator
+    cls._prepare_target_vector = _prepare_target_vector
+    cls._process_solution = _process_solution
+
+
+__all__ = [
+    "linear_estimator",
+    "_prepare_target_vector",
+    "_process_solution",
+    "_bind",
+]
+
