@@ -55,14 +55,7 @@ from qem.fit.solver import (
     SolutionProcessor,
 )
 from qem.fit.validation import FitterValidator, FitParamsValidator
-from qem.utils.memory import (
-    BatchMemoryOptimizer,
-    ChunkedProcessor,
-    SparseMatrixOptimizer,
-    MemoryMonitor,
-    memory_optimizer,
-    chunked_processor,
-)
+from qem.utils.memory import MemoryMonitor
 
 from qem.fit.lbfgs import LBFGSOptimizer
 import h5py
