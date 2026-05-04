@@ -78,99 +78,59 @@ class Fitter:
         fit_background: bool = True,
         monitor_memory: bool = False,
     ):
-        """
-        Initialize the Fitter class with comprehensive input validation.
-        Initialize the Fitter class with comprehensive input validation.
+        """Initialize the Fitter.
 
         Args:
-            image (np.array): The input image as a numpy array.
-            dx (float, optional): The size of each pixel. Defaults to 1.0.
-            units (str, optional): The units of the image. Defaults to "A".
-            elements (list[str], optional): The elements in the image. Defaults to None.
-            model_type (str, optional): Type of model to use. Defaults to "gaussian".
-            same_width (bool, optional): Whether to use same width for all peaks. Defaults to True.
-            pbc (bool, optional): Whether to use periodic boundary conditions. Defaults to False.
-            fit_background (bool, optional): Whether to fit background. Defaults to True.
-            
-        Raises:
-            ValueError: If any input parameters are invalid.
+            image: 2-D STEM image as a numpy array.
+            dx: Pixel size in `units`.
+            units: Length units (e.g. ``"A"``, ``"nm"``).
+            elements: Atomic species present in the image.
+            model_type: Peak model — ``"gaussian"`` / ``"lorentzian"`` / ``"voigt"``.
+            same_width: Share width across atoms of the same type.
+            pbc: Periodic boundary conditions on the image grid.
+            fit_background: Whether to include a background term in the fit.
+            monitor_memory: If True, attach a MemoryMonitor for `with monitor_operation`.
         """
-        # Validate all input parameters
-        try:
-            self.image = image
-            self.dx = dx
-            self.elements = elements
-            self.model_type = model_type
-            
-            # Validate string parameters
-            if not isinstance(units, str):
-                raise ValueError("Units must be a string")
-            if len(units) == 0:
-                raise ValueError("Units cannot be empty")
-            
-            # Validate boolean parameters
-            for param_name, param_value in [
-                ("same_width", same_width),
-                ("pbc", pbc),
-                ("fit_background", fit_background),
-            ]:
-                if not isinstance(param_value, bool):
-                    raise ValueError(f"{param_name} must be a boolean, got {type(param_value)}")
-            
-        except Exception as e:
-            logging.error(f"Fitter initialization failed: {str(e)}")
-            raise
-        
-        # Store validated parameters
+        self.image = image
+        self.dx = dx
+        self.elements = elements
+        self.model_type = model_type
         self.units = units
-        self.same_width = same_width
-        self.pbc = pbc
-        self.fit_background = fit_background
+        self.same_width = bool(same_width)
+        self.pbc = bool(pbc)
+        self.fit_background = bool(fit_background)
         self.monitor_memory = monitor_memory
-        
-        # Initialize memory monitoring
-        if self.monitor_memory:
-            self.memory_monitor = MemoryMonitor()
-            logging.info("Memory monitoring enabled")
-        else:
-            self.memory_monitor = None
-            logging.info("Memory monitoring disabled")
-        
-        # Log initialization info
-        logging.info(f"Initializing Fitter with {self.image.shape} image, "
-                    f"dx={self.dx} {self.units}, model={self.model_type}")
 
-        # Create model instance based on type
+        self.memory_monitor = MemoryMonitor() if self.monitor_memory else None
+
+        logging.info(
+            "Initializing Fitter with %s image, dx=%s %s, model=%s",
+            self.image.shape, self.dx, self.units, self.model_type,
+        )
+
         self.model = self._select_model()
-
-        # Create Gaussian kernel for filtering
         self.kernel = GaussianKernel()
         self._window = None
 
-        # Initialize missing attributes
-        self._atom_types = np.array([])  
+        self._atom_types = np.array([])
         self._coordinates = np.array([])
-        self.coordinates_history = dict()
-        
-        # Initialize boundary penalty settings (disabled by default)
+        self.coordinates_history: dict = {}
+
+        # Boundary penalty + adaptive edge loss off by default.
         self.use_boundary_penalty = False
         self.boundary_margin = 2.0
         self.boundary_strength = 0.01
-        
-        # Initialize adaptive edge loss settings (disabled by default)
         self.use_adaptive_edge_loss = False
+
         self.coordinates_state = 0
         self.init_background = 0.0
         self.prediction = np.zeros_like(self.image)
 
-        # Initialize other attributes
         self.params = None
         self.converged = False
         self.ny, self.nx = image.shape
         self.regions = Regions(image=image)
         self.initialize_grid()
-        
-        # Initialize background estimation
         self.background_estimator = Background(self.image, self.dx)
 
     # I/O functions
