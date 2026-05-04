@@ -72,7 +72,42 @@ jobs:
     - name: Test with pytest
       run: |
         python -m pytest tests/ --cov=qem --cov-report=xml -v
-    
+
+    - name: Smoke-test example .py modules
+      run: |
+        # Strict: any example that errors on import fails CI. Examples
+        # ship as importable modules — no main() runner — so a clean
+        # import is the contract.
+        python -c "
+        import importlib, glob, os, sys
+        sys.path.insert(0, 'examples')
+        failures = []
+        for path in sorted(glob.glob('examples/*.py')):
+            mod = os.path.splitext(os.path.basename(path))[0]
+            try:
+                importlib.import_module(mod)
+                print('imported', mod)
+            except Exception as exc:
+                print('SMOKE FAIL', mod, '->', exc)
+                failures.append((mod, exc))
+        if failures:
+            sys.exit('Example smoke failed: ' + ', '.join(m for m, _ in failures))
+        "
+
+    - name: Smoke-test example notebooks (best-effort)
+      run: |
+        # Notebooks often need test data not in the repo, so failures
+        # surface as GitHub warnings rather than CI failures. nbmake's
+        # --nbmake-kernel=python3 keeps things portable across runners.
+        pip install nbmake
+        for nb in examples/*.ipynb; do
+          [ -e "$nb" ] || continue
+          echo "Smoke testing $nb"
+          python -m pytest --nbmake --nbmake-kernel=python3 \
+            --nbmake-timeout=60 "$nb" || \
+            echo "::warning file=$nb::notebook smoke failed (likely missing data)"
+        done
+
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v3
       with:

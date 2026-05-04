@@ -84,6 +84,7 @@ dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "pytest-benchmark>=4.0",
+    "nbmake>=1.5",
     "build>=1.0",
     "black>=24.0",
     "ruff>=0.5",
