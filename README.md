@@ -72,7 +72,7 @@ QEM currently support the following features
 - [x] High-Performance Computing: Achieves significant speed-ups through GPU acceleration, model-based parameter estimation is performed via gradient descent.
 - [x] Flexibility of model choices (Gaussian, Lorentzian, Voigt, ect)
 - [x] Multi-elemental column refinement with same/different width for each element/column 
-- [x] Flexible Backend: Built on [Keras](https://keras.io/), it supports multiple backends like [JAX](https://docs.jax.dev/en/latest/), [TensorFlow](https://www.tensorflow.org), and [PyTorch](https://pytorch.org/), giving users the freedom to choose their preferred framework.
+- [x] Native PyTorch: built directly on [PyTorch](https://pytorch.org/) for autograd-friendly fits and seamless GPU acceleration.
 - [x] Bridging Fields: Creates a seamless workflow between experimental microscopy and computational materials modeling via [ASE](https://wiki.fysik.dtu.dk/ase/).
 - [x] Atomic column assignment with input crystal structure and spatial mask
 - [x] Displacement and strain mapping 
@@ -106,7 +106,7 @@ cd examples
 <!-- ROADMAP -->
 ## Roadmap
 ### TO-DO list
-- [x] Model based on Keras to support different backend (Tensorflow, PyTorch, JAX)
+- [x] Models built directly on PyTorch (no Keras / multi-backend shim)
 - [ ] Test the code on Windows
 - [ ] Improve Gaussian mixture model and selection rule
 - [ ] Atom counting based on simulated library

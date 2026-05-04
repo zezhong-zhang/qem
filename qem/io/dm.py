@@ -296,7 +296,7 @@ CLASS read dm file
 """
 
 
-class read_DM(object):
+class read_DM:
 
     def __init__(self, f, prt):
         self.f = f  # file stream
@@ -749,7 +749,7 @@ CLASS store dm file
 """
 
 
-class write_DM(object):
+class write_DM:
 
     def __init__(self, im_type, im_size, dm_ext, prt):
         if dm_ext == "dm4":

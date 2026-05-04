@@ -19,7 +19,6 @@ from . import analysis
 from . import viz
 from . import processing
 from . import instruments
-from . import optimizers
 from . import utils
 
 __all__ = [
@@ -29,7 +28,6 @@ __all__ = [
     'viz',
     'processing',
     'instruments',
-    'optimizers',
     'utils',
     'io',
 ]

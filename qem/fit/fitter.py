@@ -64,7 +64,7 @@ from qem.utils.memory import (
     chunked_processor,
 )
 
-from qem.optimizers.lbfgs import LBFGSOptimizer
+from qem.lbfgs import LBFGSOptimizer
 import h5py
 
 # Only configure logging if not already configured
