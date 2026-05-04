@@ -881,7 +881,7 @@ class Fitter:
         )
         
         with operation_context:
-            from qem.fit._loop import fit_loop, make_optimizer
+            from qem.fit.loop import fit_loop, make_optimizer
 
             opt = make_optimizer(optimizer, model.parameters(), step_size)
             fit_loop(

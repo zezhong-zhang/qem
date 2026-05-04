@@ -488,7 +488,7 @@ class PtychoOptimizer:
 
         # Pure-PyTorch training loop with explicit progress tracking and
         # early stopping (replaces the legacy keras.callbacks plumbing).
-        from qem.fit._loop import make_optimizer
+        from qem.fit.loop import make_optimizer
 
         opt = make_optimizer(optimizer, self.model.parameters(), step_size)
         history: dict[str, list] = {'loss': [], 'correlation': [], 'nrmse': []}

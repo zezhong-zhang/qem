@@ -9,7 +9,7 @@ import numpy as np
 import torch
 from torch import nn
 
-from qem.fit._loop import fit_loop, make_optimizer
+from qem.fit.loop import fit_loop, make_optimizer
 from qem.utils.exceptions import DataError, ParameterError
 from qem.utils.elements import chemical_symbols
 from qem.utils.tensors import best_device
