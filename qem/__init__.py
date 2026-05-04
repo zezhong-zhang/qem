@@ -16,7 +16,7 @@ from . import io
 from . import fit
 from .fit.fitter import Fitter
 from . import analysis
-from . import visualization
+from . import viz
 from . import processing
 from . import instruments
 from . import optimizers
@@ -26,7 +26,7 @@ __all__ = [
     'Fitter',
     'fit',
     'analysis',
-    'visualization',
+    'viz',
     'processing',
     'instruments',
     'optimizers',

@@ -5,10 +5,10 @@ from qem.analysis.crystal_analyzer import CrystalAnalyzer
 from matplotlib.path import Path
 from qem.analysis.atomic_column import AtomicColumns
 import matplotlib.pyplot as plt
-from qem.visualization.color import get_unique_colors
+from qem.viz.color import get_unique_colors
 from ase.visualize import view
 import logging
-from qem.visualization.select import GetRegionSelection
+from qem.viz.select import GetRegionSelection
 
 
 @dataclass

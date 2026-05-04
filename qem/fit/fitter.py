@@ -22,7 +22,7 @@ from tqdm import tqdm
 # Application-specific imports
 from qem.analysis.crystal_analyzer import CrystalAnalyzer
 from qem.analysis.region import Regions, Region
-from qem.visualization.select import (
+from qem.viz.select import (
     GetAtomSelection,
     GetRegionSelection,
     InteractivePlot,
@@ -45,7 +45,7 @@ from qem.utils.params import (
 )
 from qem.utils.backend import release_backend_memory
 from qem.utils.arrays import get_random_indices_in_batches
-from qem.visualization.geometry import remove_close_coordinates
+from qem.viz.geometry import remove_close_coordinates
 from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
 from qem.fit.background import Background, estimate_background
 from qem.fit.solver import (
@@ -55,7 +55,7 @@ from qem.fit.solver import (
     SolutionProcessor,
 )
 from qem.validation import FitterValidator, FitParamsValidator
-from qem.utils.memory_optimization import (
+from qem.utils.memory import (
     BatchMemoryOptimizer,
     ChunkedProcessor,
     SparseMatrixOptimizer,

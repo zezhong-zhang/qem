@@ -18,8 +18,8 @@ from skimage.feature import peak_local_max
 from skimage.transform import rescale
 
 from qem.analysis.atomic_column import AtomicColumns
-from qem.visualization.color import get_unique_colors
-from qem.visualization.select import GetAtomSelection, InteractivePlot
+from qem.viz.color import get_unique_colors
+from qem.viz.select import GetAtomSelection, InteractivePlot
 from scipy.ndimage import gaussian_filter
 
 logging.basicConfig(level=logging.INFO)

@@ -35,7 +35,7 @@ from contextlib import contextmanager
 
 import numpy as np
 
-from qem.utils.logging_config import get_logger
+from qem.utils.log import get_logger
 
 # Make logging available for testing
 import logging

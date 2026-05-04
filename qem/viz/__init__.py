@@ -4,7 +4,7 @@ Visualization and interactive tools for QEM.
 
 from .color import *
 from .select import *
-from .add_coordinate import *
+from .coords import *
 from .zoom import *
 from .plotting import *
 from .geometry import *

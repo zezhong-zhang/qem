@@ -3,10 +3,10 @@ Utility functions and helpers for QEM.
 """
 
 from .params import *
-from .logging_config import *
+from .log import *
 from .backend import *
 from .arrays import *
-from .memory_optimization import *
+from .memory import *
 
 __all__ = [
     # General utilities
