@@ -1,116 +1,116 @@
 Visualization stack
 ===================
 
-QEM ships matplotlib helpers in :mod:`qem.fit.plot` (publication-quality
-static figures, the default). For interactive or large-scale work the
-modern Python viz ecosystem has better-suited tools — this page
-compares them and maps QEM's existing plots to the right one.
+Two surfaces, two stacks:
 
-Pain point: matplotlib's ``plt.show()`` and ``plt.show(block=False) +
-plt.pause(...)`` patterns block on Tk/Qt event loops. That's fine for
-end-user inspection but kills automated testing, headless scripts, and
-notebook flow. Switching to HTML-based plots fixes this.
+* **Jupyter notebook / scripts → plotly** — non-blocking HTML output.
+  Use for exploratory plots, embedded figures in reports, and any
+  pipeline where ``matplotlib.pyplot.show()`` would freeze on a Tk/Qt
+  event loop. See :mod:`qem.viz.interactive`.
+
+* **Desktop GUI → napari** — full microscopy-style viewer with image
+  layers, point overlays per element, voronoi cell labels, and
+  workflow-aligned dock widgets that drive the Fitter directly. See
+  :mod:`qem.viz.napari_app`.
+
+The matplotlib helpers in :mod:`qem.fit.plot` remain for static
+publication figures (PDF/SVG vector output, mature LaTeX support).
+
+Notebook: ``qem.viz.interactive``
+---------------------------------
+
+Three plotly drop-ins for the most-used static figures, all bound onto
+``Fitter`` so the OO style works:
+
+.. code-block:: python
+
+    fitter.plot_fitting_interactive()           # image / model / residual
+    fitter.plot_coordinates_interactive()       # atoms on image
+    fitter.plot_scs_histogram_interactive()     # SCS per element
+
+Each returns a Plotly ``Figure``. In Jupyter it auto-displays; from a
+script call ``fig.write_html("out.html")`` for a self-contained file.
+
+Desktop GUI: ``qem-app``
+------------------------
+
+The desktop app is a real napari viewer with a workflow-aligned right
+sidebar:
+
+::
+
+    +----------------------------------+----------------------+
+    | napari image canvas              |  📂 Data             |
+    |   - Image (STEM scan)            |  🎯 Peaks            |
+    |   - Model           (toggle)     |  ⚙️  Fit              |
+    |   - Residual        (toggle)     |  📊 Voronoi          |
+    |   - Atoms (Points, per element)  |  🔬 Analysis (GMM)   |
+    |   - Voronoi cells (Labels, opt)  |                      |
+    +----------------------------------+----------------------+
+
+Each dock corresponds to one Fitter step:
+
+* **📂 Data** — set ``dx`` / units, save fit (HDF5), export params (NPZ).
+* **🎯 Peaks** — :meth:`Fitter.find_peaks` with min-distance, threshold,
+  smoothing; ``Refine via CoM`` button calls
+  :meth:`Fitter.refine_center_of_mass`.
+* **⚙️ Fit** — pick ``fit_global`` / ``fit_stochastic`` and an optimizer
+  (``adam`` / ``adamw`` / ``sgd`` / ``lbfgs``). Long ops run in
+  ``napari.qt.thread_worker`` so the UI stays responsive. The model
+  and residual layers auto-toggle visible after the fit completes.
+* **📊 Voronoi** — :meth:`Fitter.fit_voronoi` (with optional
+  Levenberg-Marquardt refine), then :meth:`Fitter.voronoi_integration`.
+  ``Colour atoms by`` lets you switch the Points layer's face_color
+  between element / SCS / height in one click.
+* **🔬 Analysis** — :meth:`Fitter.estimate_atom_counts_with_gmm` and
+  the matplotlib atom-count map.
+
+Run from the CLI:
+
+.. code-block:: bash
+
+    pip install qem[gui]              # napari[pyqt5] + magicgui + plotly
+    qem-app                           # empty viewer (drag-drop image)
+    qem-app path/to/image.tif         # opens .tif / .tiff
+    qem-app path/to/image.npy         # opens raw NumPy
+    qem-app path/to/example.mat       # legacy StatSTEM .mat
+
+From Python:
+
+.. code-block:: python
+
+    import qem
+    from qem.fit.fitter import Fitter
+
+    image = qem.io.read_statstem("data/Au/Example_Au.mat")["input"]["obs"]
+    fitter = Fitter(image, dx=0.1, units="A", elements=["Au"])
+    fitter.show_in_napari()           # returns the napari.Viewer
+
+From a Jupyter notebook (Qt event loop runs alongside the kernel):
+
+.. code-block:: python
+
+    %gui qt
+    fitter.show_in_napari()
+
+Closing the viewer does NOT close the underlying Fitter — it remains in
+memory with its updated state. Re-open with ``fitter.show_in_napari()``.
 
 When to use what
 ----------------
 
-==============================  ============================  ============================
-You want…                       Library                       Why
-==============================  ============================  ============================
-Publication-quality PDF/PNG     matplotlib                    Mature, vector output, LaTeX
-Interactive notebook plots      **plotly**                    HTML output, hover, zoom,
-                                                              non-blocking, ships with QEM
-                                                              GUI extra
-3-D image + label overlays      **napari**                    Built for microscopy:
-                                                              image stacks + point/shape
-                                                              layers + Qt UI for free
->50k-atom scatter / heatmaps    **HoloViews + Datashader**    Rasterises huge point clouds
-                                                              to images in milliseconds
-Real-time (live fitting)        **PyQtGraph** or **Vispy**    OpenGL, designed for
-                                                              streaming updates
-Web dashboard                   **Plotly Dash** or            Plotly already in stack;
-                                **Streamlit** (current)       Streamlit is simpler
-==============================  ============================  ============================
-
-QEM-specific recommendations
-----------------------------
-
-**Image + model + residual triptych** (``plot_fitting``)
-  Today: matplotlib ``imshow`` × 3.
-  Better: :func:`qem.viz.interactive.plot_fitting_interactive` —
-  plotly heatmaps with linked pan/zoom across the three panels and
-  intensity hover. Returns a Figure; calls ``fig.show()`` in Jupyter,
-  writes ``fig.write_html("…")`` from scripts.
-
-**Atom positions on the image** (``plot_coordinates``)
-  Today: matplotlib ``imshow`` + per-element ``scatter``.
-  Better: :func:`qem.viz.interactive.plot_coordinates_interactive` —
-  plotly ``Scattergl`` (WebGL-backed) handles ~50k points smoothly.
-  For >50k atoms, switch to HoloViews+Datashader (raster pipeline,
-  ms-scale render time):
-
-  .. code-block:: python
-
-      import holoviews as hv
-      from holoviews.operation.datashader import datashade
-      hv.extension("bokeh")
-      points = hv.Points((coords[:, 0], coords[:, 1]))
-      datashade(points, cmap="viridis", width=800, height=800)
-
-**SCS histogram** (``plot_scs_histogram``)
-  Today: matplotlib ``hist`` per element.
-  Better: :func:`qem.viz.interactive.plot_scs_histogram_interactive` —
-  plotly with hover bin-edges and click-to-toggle elements. Same
-  shape as the matplotlib version.
-
-**Atom-count map** (``plot_atom_count_map``)
-  Today: matplotlib ``scatter`` over ``imshow``.
-  Better: napari for exploration. The image goes in as an
-  ``Image`` layer; the per-atom counts go in as a ``Points`` layer
-  with the count as ``properties``. napari's per-point coloring
-  handles 50k+ atoms and gives box-select / threshold-by-count for
-  free.
-
-  .. code-block:: python
-
-      import napari
-      v = napari.Viewer()
-      v.add_image(fitter.image)
-      v.add_points(
-          fitter.coordinates,
-          properties={"count": atom_counts},
-          face_color="count", face_colormap="viridis",
-          size=3,
-      )
-
-**3-D crystal lattice** (``view_3d``)
-  Today: ASE viewer (matplotlib + Tk).
-  Better: PyVista ``Plotter`` or ``ipyvtklink`` for in-notebook 3-D.
-  PyVista handles million-atom structures interactively via VTK.
-
-**Region selection** (``select_atoms``, ``select_region``)
-  Today: matplotlib widgets via ``InteractivePlot``.
-  Better: napari's Polygon / Lasso layer tools — built for exactly
-  this and integrate with the image stack viewer.
-
-**GUI dashboard** (``qem-app``, currently Streamlit)
-  Streamlit + plotly is the right stack today. Plotly is non-blocking
-  by construction and Streamlit re-runs the script on widget change.
-  Migrate any matplotlib figures inside the app to the
-  ``qem.viz.interactive`` plotly versions to drop the Streamlit
-  ``st.pyplot`` overhead and get hover/zoom for free.
-
-Migration approach
-------------------
-
-The matplotlib helpers (``qem.fit.plot``) are not deprecated. They
-remain the right tool for static publication figures. The
-``qem.viz.interactive`` module is purely additive:
-
-.. code-block:: python
-
-    fitter.plot_fitting()                    # matplotlib (PDF target)
-    fig = fitter.plot_fitting_interactive()  # plotly (notebook target)
+================================  ============================  =========================
+You want…                         Library                       Why
+================================  ============================  =========================
+Publication-quality PDF/PNG       matplotlib (qem.fit.plot)     Vector output, LaTeX
+Notebook plot, embed in report    **plotly** (qem.viz.interactive)
+                                                                HTML, hover, non-blocking
+Full desktop app                  **napari** (qem.viz.napari_app)
+                                                                Image+layer model fits
+                                                                STEM workflows
+>50k-atom scatter                 HoloViews + Datashader        Rasterises huge clouds
+3-D crystal lattice               PyVista                       VTK, million-atom interactive
+================================  ============================  =========================
 
 Optional dependencies
 ---------------------
@@ -119,12 +119,14 @@ The interactive layer ships in the ``gui`` extra:
 
 .. code-block:: bash
 
-    pip install qem[gui]   # plotly + Streamlit
+    pip install qem[gui]
 
-For the big-data and 3-D options you'd add yourself:
+This pulls ``napari[pyqt5]`` (desktop), ``magicgui`` (dock widgets),
+``plotly`` (notebook), and ``imageio`` (image loaders).
+
+For the larger-scale or 3-D options:
 
 .. code-block:: bash
 
-    pip install holoviews datashader bokeh   # very large point clouds
-    pip install napari                       # image + layer exploration
-    pip install pyvista                      # 3-D crystal viewer
+    pip install holoviews datashader bokeh   # >50k atom point clouds
+    pip install pyvista                       # 3-D crystal viewer

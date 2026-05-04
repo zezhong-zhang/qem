@@ -31,13 +31,48 @@ Development Workflow
    git clone https://github.com/yourusername/qem.git
    cd qem
 
-2. **Set Up Environment**
+2. **Set Up Environment** (``uv`` recommended)
+
+.. code-block:: bash
+
+   # Install uv if you don't have it: https://docs.astral.sh/uv/
+   curl -LsSf https://astral.sh/uv/install.sh | sh
+
+   # Create the dev venv. QEM requires Python 3.11+.
+   uv venv .venv --python 3.11
+   source .venv/bin/activate    # or: .venv\Scripts\activate on Windows
+
+   # Install qem in editable mode with all dev + GUI extras.
+   uv pip install -e ".[dev,gui,cv]"
+
+   # Optional: install io / notebook extras as you need them.
+   uv pip install -e ".[io,notebook]"
+
+   # Run the test suite to verify the install.
+   pytest -q
+
+   # Launch the desktop GUI to check napari + magicgui work.
+   qem-app
+
+If you prefer ``pip`` directly:
+
+.. code-block:: bash
+
+   python3.11 -m venv .venv
+   source .venv/bin/activate
+   pip install -e ".[dev,gui,cv]"
+
+If you still use conda:
 
 .. code-block:: bash
 
    conda create -n qem-dev python=3.11
    conda activate qem-dev
-   pip install -e ".[dev]"
+   pip install -e ".[dev,gui,cv]"
+
+The CI runs ``pytest tests/`` against Python 3.11 and 3.12. ``uv`` is
+~10× faster for the heavy installs (PyTorch + napari + magicgui +
+matplotlib pulls in ~1.5 GB), which matters for iterating locally.
 
 3. **Create Feature Branch**
 

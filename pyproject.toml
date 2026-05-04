@@ -51,10 +51,14 @@ dependencies = [
 Homepage = "https://github.com/zezhong-zhang/qem"
 Issues = "https://github.com/zezhong-zhang/qem/issues"
 
+[project.scripts]
+qem-app = "qem.viz.napari_app:run_app"
+
 [project.optional-dependencies]
-# GUI / Streamlit app entry point. Heavy and optional.
+# GUI desktop app (napari) + interactive notebook plotters (plotly).
 gui = [
-    "streamlit>=1.30",
+    "napari[pyqt5]>=0.5",
+    "magicgui>=0.8",
     "plotly>=5.18",
     "imageio>=2.31",
 ]

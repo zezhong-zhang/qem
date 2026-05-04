@@ -86,14 +86,26 @@ You can check the example tutorials in the examples
 <!-- GETTING STARTED -->
 ## Getting Started
 
-To get code running locally, let's first create a conda environment.
+QEM needs Python 3.11+. The recommended workflow uses
+[`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-conda create -n qem python=3.11
-conda activate qem
-pip install -e .
-cd examples
+# Install uv (one-time; see https://docs.astral.sh/uv/ for alternatives)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create + activate a dev venv pinned to Python 3.11
+uv venv .venv --python 3.11
+source .venv/bin/activate
+
+# Install qem in editable mode with the dev + GUI extras
+uv pip install -e ".[dev,gui,cv]"
+
+# Run the desktop GUI
+qem-app                               # empty viewer (drag-drop image)
+qem-app data/Au/Example_Au.mat        # opens a fit
 ```
+
+If you prefer pip / conda directly, see `docs/source/development/contributing.rst`.
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
