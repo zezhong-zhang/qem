@@ -110,6 +110,7 @@ class Fitter:
         self.model = self._select_model()
         self.kernel = GaussianKernel()
         self._window = None
+        self._window_t: torch.Tensor | None = None  # cached float32 view used in loss().
 
         self._atom_types = np.array([])
         self._coordinates = np.array([])
@@ -330,6 +331,23 @@ class Fitter:
         if self.memory_monitor is not None:
             self.memory_monitor = None
             logging.info("Memory monitoring disabled")
+
+    def detach(self) -> dict[str, Any]:
+        """Snapshot every fitted parameter to numpy.
+
+        Call this once you're done fitting and want everything in numpy
+        for plotting / saving / external consumption. Internal hot-path
+        state stays on-device until this point.
+        """
+        out: dict[str, Any] = {}
+        for k, v in (self.params or {}).items():
+            out[k] = v.detach().cpu().numpy() if torch.is_tensor(v) else v
+        out["prediction"] = (
+            self.prediction.copy()
+            if isinstance(self.prediction, np.ndarray)
+            else np.asarray(self.prediction)
+        )
+        return out
 
     # Init grids and models
     def initialize_grid(self):
@@ -1358,8 +1376,9 @@ class Fitter:
             use_adaptive_edge_loss = getattr(self, 'use_adaptive_edge_loss', False)
         
         diff = y_true - y_pred
-        window = torch.as_tensor(self.window, dtype=torch.float32)
-        diff = torch.mul(diff, window)
+        if self._window_t is None:
+            self._window_t = torch.as_tensor(self.window, dtype=torch.float32)
+        diff = torch.mul(diff, self._window_t)
         
         # Base MSE loss
         mse = torch.sqrt(torch.mean(torch.square(diff)))
@@ -1593,7 +1612,7 @@ class Fitter:
         batch_size: int = 1024,
         optimizer: str = "adam",
         **optimizer_kwargs
-    ) -> dict[str, NDArray[Any]]:
+    ) -> dict[str, Any]:  # actually torch.Tensor for grad params; use detach() for numpy snapshot.
         """
         Optimize model parameters using specified optimizer.
         
@@ -3241,6 +3260,7 @@ class Fitter:
             >>> fitter.fit_global()  # Better edge peak fitting
         """
         self._window = np.ones_like(self.image)
+        self._window_t = None  # invalidate cached torch view
         logging.info("Edge window dampening disabled (uniform weighting)")
 
     @property
