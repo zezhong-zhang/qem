@@ -1,3 +1,4 @@
+import torch
 """Convolution-based fitting for STEM images.
 
 This module implements correlation-based optimization for different STEM imaging modes:
@@ -22,7 +23,6 @@ from dataclasses import dataclass
 from typing import Optional, Tuple, Union, List
 
 import numpy as np
-from qem.utils import torch_compat as keras
 
 from qem.optics import (
     Aberrations,

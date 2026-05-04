@@ -6,7 +6,7 @@ import pytest
 from qem.utils.backend import setup_test_backend
 backend = setup_test_backend()
 
-from qem.utils.torch_compat import ops
+import torch
 from qem.fit.model import GaussianModel
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 from qem.fit.image_fitting import ImageFitting
@@ -36,17 +36,17 @@ def test_gaussian_model_basic():
     """Test basic Gaussian model functionality."""
     # Create a simple grid
     size = 20
-    x_grid = ops.arange(size, dtype='float32')
-    y_grid = ops.arange(size, dtype='float32')
-    x_grid, y_grid = ops.meshgrid(x_grid, y_grid)
+    x_grid = torch.arange(size, dtype=torch.float32)
+    y_grid = torch.arange(size, dtype=torch.float32)
+    x_grid, y_grid = torch.meshgrid(x_grid, y_grid, indexing="xy")
     
     # Create test parameters for a single peak
     params = {
-        "pos_x": ops.convert_to_tensor([10.0], dtype='float32'),
-        "pos_y": ops.convert_to_tensor([10.0], dtype='float32'),
-        "height": ops.convert_to_tensor([1.0], dtype='float32'),
-        "width": ops.convert_to_tensor([2.0], dtype='float32'),
-        "background": ops.convert_to_tensor(0.1, dtype='float32')
+        "pos_x": torch.as_tensor([10.0], dtype=torch.float32),
+        "pos_y": torch.as_tensor([10.0], dtype=torch.float32),
+        "height": torch.as_tensor([1.0], dtype=torch.float32),
+        "width": torch.as_tensor([2.0], dtype=torch.float32),
+        "background": torch.as_tensor(0.1, dtype=torch.float32)
     }
     
     # Test model

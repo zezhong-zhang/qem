@@ -7,8 +7,8 @@ import pytest
 from qem.utils.backend import setup_test_backend
 backend = setup_test_backend()
 
-from qem.utils.torch_compat import ops
-from qem.utils import torch_compat as keras
+import torch
+import torch
 
 from qem.fit.image_fitting import ImageFitting
 from qem.fit.model import GaussianModel, LorentzianModel, VoigtModel
@@ -40,22 +40,22 @@ def test_global_fitting(model_type, model_class):
     ratio = 0.5  # For Voigt
 
     # Create synthetic image using the new model
-    x_grid = ops.arange(image_size, dtype="float32")
-    y_grid = ops.arange(image_size, dtype="float32")
-    x_grid, y_grid = ops.meshgrid(x_grid, y_grid)
+    x_grid = torch.arange(image_size, dtype=torch.float32)
+    y_grid = torch.arange(image_size, dtype=torch.float32)
+    x_grid, y_grid = torch.meshgrid(x_grid, y_grid, indexing="xy")
 
     # Create ground truth parameters
     true_params = {
-        "pos_x": ops.convert_to_tensor(pos_x, dtype="float32"),
-        "pos_y": ops.convert_to_tensor(pos_y, dtype="float32"),
-        "height": ops.convert_to_tensor(heights, dtype="float32"),
-        "width": ops.convert_to_tensor([width] * num_peaks, dtype="float32"),
-        "background": ops.convert_to_tensor(0.0, dtype="float32"),
+        "pos_x": torch.as_tensor(pos_x, dtype=torch.float32),
+        "pos_y": torch.as_tensor(pos_y, dtype=torch.float32),
+        "height": torch.as_tensor(heights, dtype=torch.float32),
+        "width": torch.as_tensor([width] * num_peaks, dtype=torch.float32),
+        "background": torch.as_tensor(0.0, dtype=torch.float32),
     }
 
     if model_type == "voigt":
-        true_params["ratio"] = ops.convert_to_tensor(
-            [ratio] * num_peaks, dtype="float32"
+        true_params["ratio"] = torch.as_tensor(
+            [ratio] * num_peaks, dtype=torch.float32
         )
 
     # Generate synthetic image
@@ -148,16 +148,16 @@ def test_stochastic_fitting():
     width = 2.0
 
     # Create synthetic image
-    x_grid = ops.arange(image_size, dtype="float32")
-    y_grid = ops.arange(image_size, dtype="float32")
-    x_grid, y_grid = ops.meshgrid(x_grid, y_grid)
+    x_grid = torch.arange(image_size, dtype=torch.float32)
+    y_grid = torch.arange(image_size, dtype=torch.float32)
+    x_grid, y_grid = torch.meshgrid(x_grid, y_grid, indexing="xy")
 
     true_params = {
-        "pos_x": ops.convert_to_tensor(pos_x, dtype="float32"),
-        "pos_y": ops.convert_to_tensor(pos_y, dtype="float32"),
-        "height": ops.convert_to_tensor(heights, dtype="float32"),
-        "width": ops.convert_to_tensor([width] * num_peaks, dtype="float32"),
-        "background": ops.convert_to_tensor(0.0, dtype="float32"),
+        "pos_x": torch.as_tensor(pos_x, dtype=torch.float32),
+        "pos_y": torch.as_tensor(pos_y, dtype=torch.float32),
+        "height": torch.as_tensor(heights, dtype=torch.float32),
+        "width": torch.as_tensor([width] * num_peaks, dtype=torch.float32),
+        "background": torch.as_tensor(0.0, dtype=torch.float32),
     }
 
     model = GaussianModel(dx=1.0)
@@ -211,16 +211,16 @@ def synthetic_test_data():
     background = 0.1
     
     # Create synthetic image using the new model
-    x_grid = ops.arange(image_size, dtype='float32')
-    y_grid = ops.arange(image_size, dtype='float32')
-    x_grid, y_grid = ops.meshgrid(x_grid, y_grid)
+    x_grid = torch.arange(image_size, dtype=torch.float32)
+    y_grid = torch.arange(image_size, dtype=torch.float32)
+    x_grid, y_grid = torch.meshgrid(x_grid, y_grid, indexing="xy")
     
     true_params = {
-        "pos_x": ops.convert_to_tensor(pos_x, dtype='float32'),
-        "pos_y": ops.convert_to_tensor(pos_y, dtype='float32'),
-        "height": ops.convert_to_tensor(heights, dtype='float32'),
-        "width": ops.convert_to_tensor([width] * num_peaks, dtype='float32'),
-        "background": ops.convert_to_tensor(background, dtype='float32')
+        "pos_x": torch.as_tensor(pos_x, dtype=torch.float32),
+        "pos_y": torch.as_tensor(pos_y, dtype=torch.float32),
+        "height": torch.as_tensor(heights, dtype=torch.float32),
+        "width": torch.as_tensor([width] * num_peaks, dtype=torch.float32),
+        "background": torch.as_tensor(background, dtype=torch.float32)
     }
     
     model = GaussianModel(dx=dx)
@@ -416,16 +416,16 @@ def test_voronoi_properties():
     width = 3.0
 
     # Create synthetic image using the new model
-    x_grid = ops.arange(image_size, dtype="float32")
-    y_grid = ops.arange(image_size, dtype="float32")
-    x_grid, y_grid = ops.meshgrid(x_grid, y_grid)
+    x_grid = torch.arange(image_size, dtype=torch.float32)
+    y_grid = torch.arange(image_size, dtype=torch.float32)
+    x_grid, y_grid = torch.meshgrid(x_grid, y_grid, indexing="xy")
 
     true_params = {
-        "pos_x": ops.convert_to_tensor(pos_x, dtype="float32"),
-        "pos_y": ops.convert_to_tensor(pos_y, dtype="float32"),
-        "height": ops.convert_to_tensor(heights, dtype="float32"),
-        "width": ops.convert_to_tensor([width] * num_peaks, dtype="float32"),
-        "background": ops.convert_to_tensor(0.1, dtype="float32"),
+        "pos_x": torch.as_tensor(pos_x, dtype=torch.float32),
+        "pos_y": torch.as_tensor(pos_y, dtype=torch.float32),
+        "height": torch.as_tensor(heights, dtype=torch.float32),
+        "width": torch.as_tensor([width] * num_peaks, dtype=torch.float32),
+        "background": torch.as_tensor(0.1, dtype=torch.float32),
     }
 
     model = GaussianModel(dx=1.0)
@@ -540,16 +540,16 @@ def test_center_of_mass_refinement():
     width = 2.5
 
     # Create synthetic image
-    x_grid = ops.arange(image_size, dtype="float32")
-    y_grid = ops.arange(image_size, dtype="float32")
-    x_grid, y_grid = ops.meshgrid(x_grid, y_grid)
+    x_grid = torch.arange(image_size, dtype=torch.float32)
+    y_grid = torch.arange(image_size, dtype=torch.float32)
+    x_grid, y_grid = torch.meshgrid(x_grid, y_grid, indexing="xy")
 
     true_params = {
-        "pos_x": ops.convert_to_tensor(true_pos_x, dtype="float32"),
-        "pos_y": ops.convert_to_tensor(true_pos_y, dtype="float32"),
-        "height": ops.convert_to_tensor(heights, dtype="float32"),
-        "width": ops.convert_to_tensor([width] * num_peaks, dtype="float32"),
-        "background": ops.convert_to_tensor(0.05, dtype="float32"),
+        "pos_x": torch.as_tensor(true_pos_x, dtype=torch.float32),
+        "pos_y": torch.as_tensor(true_pos_y, dtype=torch.float32),
+        "height": torch.as_tensor(heights, dtype=torch.float32),
+        "width": torch.as_tensor([width] * num_peaks, dtype=torch.float32),
+        "background": torch.as_tensor(0.05, dtype=torch.float32),
     }
 
     model = GaussianModel(dx=1.0)

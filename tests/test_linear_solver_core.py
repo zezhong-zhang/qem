@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from scipy.sparse import coo_matrix
 
-from qem.backend_utils import detect_available_backends
+from qem.utils.backend import detect_available_backends
 from qem.exceptions import DataError
 from qem.linear_solver import LinearSystemSolver, SolutionProcessor
 

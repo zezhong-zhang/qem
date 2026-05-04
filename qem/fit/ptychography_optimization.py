@@ -17,7 +17,6 @@ from typing import Optional, Tuple, Union, List, Callable
 
 import numpy as np
 import torch
-from qem.utils import torch_compat as keras
 
 from qem.optics import (
     Aberrations,
@@ -114,107 +113,62 @@ class OptimizationResult:
     history: Optional[dict]  # Optimization history
 
 
-class ConvolutionModel(keras.Model):
+class ConvolutionModel(torch.nn.Module):
     """PyTorch model for convolution-based ptychography optimization."""
 
-    def __init__(self, psf_kernel, potential_model, **kwargs):
-        """
-        Initialize the convolution model.
-
-        Parameters
-        ----------
-        psf_kernel : np.ndarray
-            Point spread function
-        potential_model : PointPotentialModel
-            Point-potential model for simulation
-        """
-        super().__init__(**kwargs)
-        self.psf_kernel = safe_convert_to_tensor(psf_kernel.astype(np.float32))
+    def __init__(self, psf_kernel, potential_model):
+        super().__init__()
+        self.psf_kernel = torch.as_tensor(psf_kernel.astype(np.float32))
         self.potential_model = potential_model
-        self.input_params = None
+        self.input_params: dict | None = None
+        self.built = False
 
     def set_params(self, params):
-        """Set model parameters."""
-        self.input_params = {k: keras.ops.convert_to_tensor(v) for k, v in params.items()}
+        """Set model parameters; build lazily on first use."""
+        self.input_params = {k: torch.as_tensor(v) for k, v in params.items()}
         if self.built:
             self.update_params(self.input_params)
 
     def update_params(self, params):
-        """Update model parameters."""
-        for key, value in params.items():
-            if hasattr(self, key):
-                current_value = getattr(self, key)
-                current_value.assign(value)
+        """Copy new values into the existing nn.Parameter slots."""
+        with torch.no_grad():
+            for key, value in params.items():
+                if hasattr(self, key):
+                    target = getattr(self, key)
+                    target.copy_(torch.as_tensor(value, dtype=target.dtype).to(target.device))
 
     def build(self, input_shape=None):
-        """Build model variables."""
         if self.input_params is None:
-            raise ValueError("initial_params must be set before building the model.")
-
+            raise ValueError("set_params() must run before build().")
         if self.built:
             return
-
-        n_atoms = self.input_params['pos_x'].shape[0]
-
-        # Create trainable variables
-        self.pos_x = self.add_weight(
-            shape=(n_atoms,),
-            initializer=keras.initializers.Constant(self.input_params['pos_x']),
-            name="pos_x",
-            trainable=True
-        )
-        self.pos_y = self.add_weight(
-            shape=(n_atoms,),
-            initializer=keras.initializers.Constant(self.input_params['pos_y']),
-            name="pos_y",
-            trainable=True
-        )
-        self.phases = self.add_weight(
-            shape=(n_atoms,),
-            initializer=keras.initializers.Constant(self.input_params['phases']),
-            name="phases",
-            trainable=True
-        )
-
+        ip = self.input_params
+        # Always-present parameters
+        self.pos_x = torch.nn.Parameter(torch.as_tensor(ip['pos_x'], dtype=torch.float32).clone())
+        self.pos_y = torch.nn.Parameter(torch.as_tensor(ip['pos_y'], dtype=torch.float32).clone())
+        self.phases = torch.nn.Parameter(torch.as_tensor(ip['phases'], dtype=torch.float32).clone())
         # Optional parameters
-        if 'tilt_x' in self.input_params:
-            self.tilt_x = self.add_weight(
-                shape=(),
-                initializer=keras.initializers.Constant(self.input_params['tilt_x']),
-                name="tilt_x",
-                trainable=True
-            )
-        if 'tilt_y' in self.input_params:
-            self.tilt_y = self.add_weight(
-                shape=(),
-                initializer=keras.initializers.Constant(self.input_params['tilt_y']),
-                name="tilt_y",
-                trainable=True
-            )
-        if 'psf_scale' in self.input_params:
-            self.psf_scale = self.add_weight(
-                shape=(),
-                initializer=keras.initializers.Constant(self.input_params['psf_scale']),
-                name="psf_scale",
-                trainable=True
-            )
-
-        super().build(input_shape)
+        for opt_key in ("tilt_x", "tilt_y", "psf_scale"):
+            if opt_key in ip:
+                value = torch.as_tensor(ip[opt_key], dtype=torch.float32).clone()
+                if value.dim() == 0:
+                    pass  # scalar
+                self.register_parameter(opt_key, torch.nn.Parameter(value))
+        self.built = True
 
     def get_params(self):
-        """Get current parameters as dictionary."""
-        params = {
-            'pos_x': keras.ops.convert_to_tensor(self.pos_x),
-            'pos_y': keras.ops.convert_to_tensor(self.pos_y),
-            'phases': keras.ops.convert_to_tensor(self.phases),
+        out = {
+            'pos_x': self.pos_x.detach(),
+            'pos_y': self.pos_y.detach(),
+            'phases': self.phases.detach(),
         }
-        if hasattr(self, 'tilt_x'):
-            params['tilt_x'] = keras.ops.convert_to_tensor(self.tilt_x)
-        if hasattr(self, 'tilt_y'):
-            params['tilt_y'] = keras.ops.convert_to_tensor(self.tilt_y)
-        if hasattr(self, 'psf_scale'):
-            params['psf_scale'] = keras.ops.convert_to_tensor(self.psf_scale)
-        return params
+        for opt_key in ("tilt_x", "tilt_y", "psf_scale"):
+            if hasattr(self, opt_key):
+                out[opt_key] = getattr(self, opt_key).detach()
+        return out
+
+    def forward(self, inputs):
+        return self.call(inputs)
 
     def call(self, inputs):
         """Forward pass — fully differentiable PyTorch simulation.
@@ -435,27 +389,27 @@ class PtychographyOptimizer:
             Negative correlation coefficient
         """
         # Flatten images
-        y_true_flat = keras.ops.reshape(y_true, (-1,))
-        y_pred_flat = keras.ops.reshape(y_pred, (-1,))
+        y_true_flat = torch.reshape(y_true, (-1,))
+        y_pred_flat = torch.reshape(y_pred, (-1,))
 
         # Calculate means
-        mu_true = keras.ops.mean(y_true_flat)
-        mu_pred = keras.ops.mean(y_pred_flat)
+        mu_true = torch.mean(y_true_flat)
+        mu_pred = torch.mean(y_pred_flat)
 
         # Calculate standard deviations
-        sigma_true = keras.ops.std(y_true_flat)
-        sigma_pred = keras.ops.std(y_pred_flat)
+        sigma_true = torch.std(y_true_flat)
+        sigma_pred = torch.std(y_pred_flat)
 
         # Avoid division by zero
         epsilon = 1e-10
-        sigma_true = keras.ops.maximum(sigma_true, epsilon)
-        sigma_pred = keras.ops.maximum(sigma_pred, epsilon)
+        sigma_true = torch.maximum(sigma_true, epsilon)
+        sigma_pred = torch.maximum(sigma_pred, epsilon)
 
         # Calculate correlation
-        n = keras.ops.shape(y_true_flat)[0]
+        n = tuple(y_true_flat.shape)[0]
         centered_true = y_true_flat - mu_true
         centered_pred = y_pred_flat - mu_pred
-        numerator = keras.ops.sum(centered_true * centered_pred)
+        numerator = torch.sum(centered_true * centered_pred)
         denominator = (n - 1) * sigma_true * sigma_pred
 
         correlation = numerator / denominator
@@ -532,60 +486,47 @@ class PtychographyOptimizer:
         target_tensor = safe_convert_to_tensor(self.target_image)
         gridshape = np.array([self.ny, self.nx], dtype=np.int32)
 
-        # Choose optimizer
-        if optimizer.lower() == "adamw":
-            opt = keras.optimizers.AdamW(learning_rate=step_size)
-        elif optimizer.lower() == "sgd":
-            opt = keras.optimizers.SGD(learning_rate=step_size)
-        else:  # default to adam
-            opt = keras.optimizers.Adam(learning_rate=step_size)
+        # Pure-PyTorch training loop with explicit progress tracking and
+        # early stopping (replaces the legacy keras.callbacks plumbing).
+        from qem.fit._loop import make_optimizer
 
-        # Compile model
-        self.model.compile(optimizer=opt, loss=self._loss_function)
+        opt = make_optimizer(optimizer, self.model.parameters(), step_size)
+        history: dict[str, list] = {'loss': [], 'correlation': [], 'nrmse': []}
 
-        # Tracking history
-        history = {'loss': [], 'correlation': [], 'nrmse': []}
+        best_loss = float('inf')
+        best_state: dict | None = None
+        epochs_no_improve = 0
+        patience = 20
 
-        def track_progress(epoch, logs):
-            """Callback to track optimization progress."""
-            loss = logs.get('loss', 0)
-            correlation = -loss  # Convert back to correlation
-
-            # Calculate NRMSE
+        for epoch in range(max_iterations):
+            opt.zero_grad(set_to_none=True)
             simulated = self.model(gridshape)
+            loss = self._loss_function(target_tensor, simulated)
+            loss.backward()
+            opt.step()
+
+            loss_val = float(loss.detach())
+            correlation = -loss_val
             simulated_np = safe_convert_to_numpy(simulated)
             nrmse = normalized_root_mean_square_error(simulated_np, self.target_image)
-
-            history['loss'].append(loss)
+            history['loss'].append(loss_val)
             history['correlation'].append(correlation)
             history['nrmse'].append(nrmse)
 
             if verbose and (epoch % 10 == 0 or epoch == max_iterations - 1):
                 print(f"Epoch {epoch}: correlation={correlation:.6f}, nrmse={nrmse:.6f}")
 
-        # Create callback list
-        callbacks = [
-            keras.callbacks.LambdaCallback(
-                on_epoch_end=lambda epoch, logs: track_progress(epoch, logs)
-            ),
-            keras.callbacks.EarlyStopping(
-                monitor='loss',
-                min_delta=tolerance,
-                patience=20,
-                verbose=0,
-                restore_best_weights=True,
-            ),
-        ]
+            if loss_val < best_loss - tolerance:
+                best_loss = loss_val
+                best_state = {k: v.detach().clone() for k, v in self.model.state_dict().items()}
+                epochs_no_improve = 0
+            else:
+                epochs_no_improve += 1
+                if epochs_no_improve >= patience:
+                    break
 
-        # Fit model
-        self.model.fit(
-            [gridshape],
-            target_tensor,
-            epochs=max_iterations,
-            batch_size=1,
-            verbose=0,
-            callbacks=callbacks,
-        )
+        if best_state is not None:
+            self.model.load_state_dict(best_state)
 
         # Extract optimized parameters
         opt_params = self.model.get_params()

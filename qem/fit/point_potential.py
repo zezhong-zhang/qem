@@ -11,7 +11,6 @@ from typing import Optional, Tuple, Union
 
 import numpy as np
 import torch
-from qem.utils import torch_compat as keras
 from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.signal import fftconvolve
 
@@ -298,18 +297,18 @@ class ConvolutionImageModel(ImageModel):
         Tensor
             Simulated image (convolution of point-potential with PSF)
         """
-        ny, nx = keras.ops.shape(x)[0], keras.ops.shape(x)[1]
-        n_atoms = keras.ops.shape(pos_x)[0]
+        ny, nx = tuple(x.shape)[0], tuple(x.shape)[1]
+        n_atoms = tuple(pos_x.shape)[0]
 
         # Create point-potential map using a differentiable approach
         # Use Gaussian approximation centered at each atomic position
         # This provides smooth gradients while approximating the PSF
 
         # Get PSF width as a measure of the kernel size
-        psf_sigma = keras.ops.cast(self._kx_half / 3.0, dtype=x.dtype)
+        psf_sigma = (self._kx_half / 3.0).to(dtype=x.dtype)
 
         # Initialize result
-        result = keras.ops.zeros_like(x)
+        result = torch.zeros_like(x)
 
         # For each atom, add a Gaussian contribution
         # The amplitude is the phase value (height)
@@ -322,7 +321,7 @@ class ConvolutionImageModel(ImageModel):
             # Gaussian approximation of PSF contribution
             # Using the actual PSF width as sigma
             sigma = psf_sigma
-            contribution = height[i] * keras.ops.exp(-dist_sq / (2 * sigma**2))
+            contribution = height[i] * torch.exp(-dist_sq / (2 * sigma**2))
             result = result + contribution
 
         return result
@@ -352,11 +351,11 @@ class ConvolutionImageModel(ImageModel):
         # Handle batch dimension if present
         has_batch_dim = len(x_grid.shape) > 2
         if has_batch_dim:
-            x_grid = keras.ops.squeeze(x_grid, axis=0)
-            y_grid = keras.ops.squeeze(y_grid, axis=0)
+            x_grid = torch.squeeze(x_grid, dim=0)
+            y_grid = torch.squeeze(y_grid, dim=0)
 
-        ny, nx = keras.ops.shape(x_grid)[0], keras.ops.shape(x_grid)[1]
-        n_atoms = keras.ops.shape(self.pos_x)[0]
+        ny, nx = tuple(x_grid.shape)[0], tuple(x_grid.shape)[1]
+        n_atoms = self.pos_x.shape[0]
 
         # Build point-potential map using the model_fn approach
         # This creates differentiable atomic contributions
@@ -367,7 +366,7 @@ class ConvolutionImageModel(ImageModel):
 
         # Add batch dimension back if needed
         if has_batch_dim:
-            result = keras.ops.expand_dims(result, axis=0)
+            result = torch.unsqueeze(result, dim=0)
 
         return result
 

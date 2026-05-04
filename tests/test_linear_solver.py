@@ -4,8 +4,8 @@ Tests for the linear_solver module.
 
 import numpy as np
 import pytest
+import torch
 from scipy.sparse import coo_matrix
-from qem.utils import torch_compat as keras
 
 from qem.exceptions import ParameterError, DataError, ValidationError
 from qem.fit.linear_solver import (
@@ -24,10 +24,10 @@ class TestParameterValidator:
     def test_valid_params(self):
         """Test validation with valid parameters."""
         params = {
-            "pos_x": keras.ops.convert_to_tensor([1.0, 2.0, 3.0]),
-            "pos_y": keras.ops.convert_to_tensor([1.0, 2.0, 3.0]),
-            "height": keras.ops.convert_to_tensor([1.0, 1.0, 1.0]),
-            "width": keras.ops.convert_to_tensor([1.0, 1.0, 1.0]),
+            "pos_x": torch.as_tensor([1.0, 2.0, 3.0]),
+            "pos_y": torch.as_tensor([1.0, 2.0, 3.0]),
+            "height": torch.as_tensor([1.0, 1.0, 1.0]),
+            "width": torch.as_tensor([1.0, 1.0, 1.0]),
         }
 
         validated = ParameterValidator.validate_params(params)
@@ -49,10 +49,10 @@ class TestParameterValidator:
     def test_mismatched_lengths(self):
         """Test validation with mismatched array lengths."""
         params = {
-            "pos_x": keras.ops.convert_to_tensor([1.0, 2.0]),
-            "pos_y": keras.ops.convert_to_tensor([1.0]),  # Different length
-            "height": keras.ops.convert_to_tensor([1.0, 1.0]),
-            "width": keras.ops.convert_to_tensor([1.0, 1.0]),
+            "pos_x": torch.as_tensor([1.0, 2.0]),
+            "pos_y": torch.as_tensor([1.0]),  # Different length
+            "height": torch.as_tensor([1.0, 1.0]),
+            "width": torch.as_tensor([1.0, 1.0]),
         }
 
         with pytest.raises(
@@ -64,10 +64,10 @@ class TestParameterValidator:
         """Regression: pos_x == pos_y but height differs — chained comparison
         used to silently accept this; the validator must reject it."""
         params = {
-            "pos_x": keras.ops.convert_to_tensor([1.0, 2.0]),
-            "pos_y": keras.ops.convert_to_tensor([1.0, 2.0]),
-            "height": keras.ops.convert_to_tensor([1.0]),  # Different length
-            "width": keras.ops.convert_to_tensor([1.0, 1.0]),
+            "pos_x": torch.as_tensor([1.0, 2.0]),
+            "pos_y": torch.as_tensor([1.0, 2.0]),
+            "height": torch.as_tensor([1.0]),  # Different length
+            "width": torch.as_tensor([1.0, 1.0]),
         }
 
         with pytest.raises(
@@ -78,10 +78,10 @@ class TestParameterValidator:
     def test_nan_values(self):
         """Test validation with NaN values."""
         params = {
-            "pos_x": keras.ops.convert_to_tensor([1.0, float("nan")]),
-            "pos_y": keras.ops.convert_to_tensor([1.0, 2.0]),
-            "height": keras.ops.convert_to_tensor([1.0, 1.0]),
-            "width": keras.ops.convert_to_tensor([1.0, 1.0]),
+            "pos_x": torch.as_tensor([1.0, float("nan")]),
+            "pos_y": torch.as_tensor([1.0, 2.0]),
+            "height": torch.as_tensor([1.0, 1.0]),
+            "width": torch.as_tensor([1.0, 1.0]),
         }
 
         with pytest.raises(ParameterError, match="contains NaN or infinite values"):
@@ -99,10 +99,10 @@ class TestDesignMatrixBuilder:
     def test_build_local_peaks(self):
         """Test building local peaks."""
         params = {
-            "pos_x": keras.ops.convert_to_tensor([10.0, 20.0]),
-            "pos_y": keras.ops.convert_to_tensor([15.0, 25.0]),
-            "height": keras.ops.convert_to_tensor([1.0, 1.0]),
-            "width": keras.ops.convert_to_tensor([2.0, 2.0]),
+            "pos_x": torch.as_tensor([10.0, 20.0]),
+            "pos_y": torch.as_tensor([15.0, 25.0]),
+            "height": torch.as_tensor([1.0, 1.0]),
+            "width": torch.as_tensor([2.0, 2.0]),
         }
         atom_types = np.array([0, 0])
 
@@ -119,13 +119,13 @@ class TestDesignMatrixBuilder:
     def test_build_sparse_matrix(self):
         """Test building sparse design matrix."""
         # Create simple test data
-        peak_local = keras.ops.ones((5, 5, 2))  # 2 peaks
-        global_x = keras.ops.ones((5, 5, 2)) * 10
-        global_y = keras.ops.ones((5, 5, 2)) * 10
-        mask = keras.ops.ones((5, 5, 2), dtype=bool)
+        peak_local = torch.ones((5, 5, 2))  # 2 peaks
+        global_x = torch.ones((5, 5, 2)) * 10
+        global_y = torch.ones((5, 5, 2)) * 10
+        mask = torch.ones((5, 5, 2), dtype=bool)
 
-        x_grid = keras.ops.ones((50, 50))
-        y_grid = keras.ops.ones((50, 50))
+        x_grid = torch.ones((50, 50))
+        y_grid = torch.ones((50, 50))
 
         design_matrix = self.builder.build_sparse_matrix(
             peak_local,
@@ -244,10 +244,10 @@ class TestIntegration:
         builder = DesignMatrixBuilder(model, nx, ny)
 
         params = {
-            "pos_x": keras.ops.convert_to_tensor([5.0]),
-            "pos_y": keras.ops.convert_to_tensor([5.0]),
-            "height": keras.ops.convert_to_tensor([10.0]),
-            "width": keras.ops.convert_to_tensor([2.0]),
+            "pos_x": torch.as_tensor([5.0]),
+            "pos_y": torch.as_tensor([5.0]),
+            "height": torch.as_tensor([10.0]),
+            "width": torch.as_tensor([2.0]),
         }
 
         # Build design matrix
@@ -255,8 +255,8 @@ class TestIntegration:
             params, same_width=True, atom_types=np.array([0])
         )
 
-        x_grid = keras.ops.ones((ny, nx))
-        y_grid = keras.ops.ones((ny, nx))
+        x_grid = torch.ones((ny, nx))
+        y_grid = torch.ones((ny, nx))
 
         design_matrix = builder.build_sparse_matrix(
             peak_local,

@@ -267,3 +267,85 @@ Steps so far:
   Next: delete _legacy.py, migrate consumers (fit/, tests/, examples/),
   drop tests/test_ctf.py (will write new tests/test_psf.py against the
   functional API).
+
+### EARS — Progress (2026-05-04 01:01)
+<!-- concepts: phase-1, keras-shim, tensors-helper -->
+Phase 0 committed (786ea4c, -1329 LoC). All 148 tests + 1 skipped pass.
+Now Phase 1: drop the keras-shim. Strategy:
+
+1. Wrote qem/utils/tensors.py (88 lines) — clean torch-only replacement
+   for the to_numpy / to_tensor / stop_grad / clone_params / release_memory
+   utilities the codebase needs. Replaces the ~250-line torch_compat shim
+   plus qem/utils/{backend,params}.py duplication.
+
+2. Next: rewrite each consumer of `torch_compat as keras` to use
+   tensors.py + plain torch. Order:
+   - utils/params.py (small, leaf)
+   - utils/backend.py (small, leaf — collapses into tensors.py)
+   - utils/memory_optimization.py
+   - validation.py
+   - benchmarks/pytorch_migration_benchmark.py
+   - backend_utils.py (top-level, in-flight)
+   - fit/{model,linear_solver,point_potential}.py
+   - fit/{convolve_fitting,ptychography_optimization,image_fitting}.py
+   - tests/*
+
+3. Then delete torch_compat.py + backend_utils.py.
+
+The shim's three big idioms to replace:
+  keras.ops.X       → torch.X (with to_tensor() coercion at edges)
+  keras.Model + fit → torch.nn.Module + explicit loop in qem/fit/loop.py
+  keras.optimizers  → torch.optim
+
+### EARS — Progress (2026-05-04 09:19)
+<!-- concepts: phase-1, keras-shim, backend-trim -->
+Phase 1 in progress (resumed). Trimmed qem/utils/backend.py from 108 lines
+to 78 lines — now a thin compat re-export of qem/utils/tensors.py. The
+multi-backend ceremony (detect_available_backends, configure_backend,
+auto_configure) is preserved as a back-compat surface; new code should
+import from qem.utils.tensors directly.
+
+Still ahead in Phase 1:
+- qem/utils/memory_optimization.py (uses keras shim)
+- qem/validation.py (uses keras shim)
+- qem/backend_utils.py (top-level, in-flight, uses `import keras`)
+- qem/benchmarks/pytorch_migration_benchmark.py
+- qem/fit/{model,linear_solver,point_potential,convolve_fitting,
+  ptychography_optimization,image_fitting}.py
+- tests/* (5 files)
+- delete torch_compat.py + backend_utils.py
+
+### EARS — Progress (2026-05-04 09:29)
+<!-- concepts: phase-1, keras-removal, mechanical-translation -->
+Phase 1 in progress. Wrote /tmp/keras_to_torch.py, a one-shot regex
+translator that mapped keras.ops.X(...) → torch.X(...) across 7 files
+(qem/fit/{convolve_fitting,linear_solver,point_potential,ptychography_optimization,
+image_fitting,background}.py + qem/linear_solver.py). 71 mechanical
+substitutions.
+
+Manual fixes after the script:
+- ConvolutionModel(keras.Model) → torch.nn.Module rewrite (parameters
+  via nn.Parameter + register_parameter, no add_weight)
+- ImageFitting's keras.optimizers + .compile() + .fit() → explicit
+  qem.fit._loop.fit_loop (new helper, ~120 lines)
+- Same for PtychographyOptimizer's training block
+- _cast_call placeholder (translator marker) → x.to(dtype=...)
+- np.isnan instead of torch.isnan where the input is a numpy ndarray
+- backend.detect_available_backends() switched to importlib.util.find_spec
+  so test_import.test_import_qem_reports_missing_torch's stub works
+
+148 tests → 146 passing → 1 pyright-only failure left.
+
+### EARS — Progress (2026-05-04 10:02)
+<!-- concepts: phase-1, fit-loop, regression -->
+Phase 1 mostly done — keras shim deleted, all but 3 tests pass.
+The 3 failures are test_global_fitting[gaussian/lorentzian/voigt] — the
+fit converges but to wrong heights (e.g. expected 0.88 / 0.89 / 0.56,
+got 0.47 / -0.03 / 0.16).
+
+Suspect the new fit_loop's reduce-on-plateau triggers too aggressively
+or the loss function's signature/sign got broken in image_fitting.py.
+The reproduce: `pytest tests/test_image_fitting.py -k gaussian-Gaussian`.
+
+Next: dump the loss function signature, compare predict() output to
+the synthetic image, see where the gradient direction goes wrong.

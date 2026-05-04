@@ -40,7 +40,7 @@ from qem.utils.logging_config import get_logger
 # Make logging available for testing
 import logging
 
-from qem.utils import torch_compat as keras
+from qem.utils.tensors import stop_grad
 
 class MemoryMonitor:
     """
@@ -491,13 +491,9 @@ class BatchMemoryOptimizer:
         optimized_params = {}
         
         for key, value in params.items():
-            # Handle PyTorch tensors via the torch_compat shim.
+            # Detach gradients on PyTorch tensors; numpy arrays pass through.
             if hasattr(value, "detach") and hasattr(value, "shape"):
-                try:
-                    optimized_params[key] = keras.ops.stop_gradient(value)
-                except Exception:
-                    # Fallback if optimization fails
-                    optimized_params[key] = value
+                optimized_params[key] = stop_grad(value)
             
             # Handle numpy arrays (no gradient computation needed)
             elif isinstance(value, np.ndarray):

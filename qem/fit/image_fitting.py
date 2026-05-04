@@ -1,3 +1,4 @@
+import torch
 # Standard library imports
 import copy
 import logging
@@ -64,7 +65,6 @@ from qem.utils.memory_optimization import (
 )
 
 from qem.optimizers.lbfgs import LBFGSOptimizer
-from qem.utils import torch_compat as keras
 import h5py
 
 # Only configure logging if not already configured
@@ -382,12 +382,12 @@ class ImageFitting:
     # Init grids and models
     def initialize_grid(self):
         """Initialize the coordinate grids for the model."""
-        self.image_tensor = keras.ops.convert_to_tensor(gaussian_filter(self.image,1), dtype="float32")
-        x = keras.ops.arange(self.nx, dtype="float32")
-        y = keras.ops.arange(self.ny, dtype="float32")
-        x_grid, y_grid = keras.ops.meshgrid(x, y)
-        self.x_grid = keras.ops.convert_to_tensor(x_grid, dtype="float32")
-        self.y_grid = keras.ops.convert_to_tensor(y_grid, dtype="float32")
+        self.image_tensor = torch.as_tensor(gaussian_filter(self.image,1), dtype=torch.float32)
+        x = torch.arange(self.nx, dtype=torch.float32)
+        y = torch.arange(self.ny, dtype=torch.float32)
+        x_grid, y_grid = torch.meshgrid(x, y, indexing="xy")
+        self.x_grid = torch.as_tensor(x_grid, dtype=torch.float32)
+        self.y_grid = torch.as_tensor(y_grid, dtype=torch.float32)
 
     def _select_model(self):
         """Create a new model instance based on the model type."""
@@ -431,10 +431,10 @@ class ImageFitting:
         
         # Handle background trainability based on fit_background setting
         if not self.fit_background:
-            if hasattr(model, 'background'):
-                model.background.trainable = False
-            if hasattr(model, 'background_scale'):
-                model.background_scale.trainable = False
+            if hasattr(model, 'background') and hasattr(model.background, 'requires_grad_'):
+                model.background.requires_grad_(False)
+            if hasattr(model, 'background_scale') and hasattr(model.background_scale, 'requires_grad_'):
+                model.background_scale.requires_grad_(False)
             
         return model
 
@@ -688,14 +688,14 @@ class ImageFitting:
         radius = 3.0 * width
         
         # Calculate overlap with image bounds for each dimension
-        x_min = keras.ops.maximum(pos_x - radius, 0.0)
-        x_max = keras.ops.minimum(pos_x + radius, w - 1)
-        y_min = keras.ops.maximum(pos_y - radius, 0.0)
-        y_max = keras.ops.minimum(pos_y + radius, h - 1)
+        x_min = torch.maximum(pos_x - radius, 0.0)
+        x_max = torch.minimum(pos_x + radius, w - 1)
+        y_min = torch.maximum(pos_y - radius, 0.0)
+        y_max = torch.minimum(pos_y + radius, h - 1)
         
         # Visible width and height
-        visible_width = keras.ops.maximum(x_max - x_min, 0.0)
-        visible_height = keras.ops.maximum(y_max - y_min, 0.0)
+        visible_width = torch.maximum(x_max - x_min, 0.0)
+        visible_height = torch.maximum(y_max - y_min, 0.0)
         
         # Total width and height of effective region
         total_width = 2 * radius
@@ -705,7 +705,7 @@ class ImageFitting:
         visibility = (visible_width * visible_height) / (total_width * total_height)
         
         # Clamp to [0.01, 1.0] to avoid division by zero and extreme values
-        visibility = keras.ops.clip(visibility, 0.01, 1.0)
+        visibility = torch.clamp(visibility, 0.01, 1.0)
         
         return visibility
     
@@ -739,12 +739,12 @@ class ImageFitting:
         
         # Penalty only when exceeding allowed distance
         # Use smooth quadratic penalty
-        penalty_left = keras.ops.maximum(dist_left - allowed, 0.0) ** 2
-        penalty_right = keras.ops.maximum(dist_right - allowed, 0.0) ** 2
-        penalty_top = keras.ops.maximum(dist_top - allowed, 0.0) ** 2
-        penalty_bottom = keras.ops.maximum(dist_bottom - allowed, 0.0) ** 2
+        penalty_left = torch.maximum(dist_left - allowed, 0.0) ** 2
+        penalty_right = torch.maximum(dist_right - allowed, 0.0) ** 2
+        penalty_top = torch.maximum(dist_top - allowed, 0.0) ** 2
+        penalty_bottom = torch.maximum(dist_bottom - allowed, 0.0) ** 2
         
-        total_penalty = keras.ops.sum(
+        total_penalty = torch.sum(
             penalty_left + penalty_right + penalty_top + penalty_bottom
         )
         
@@ -917,7 +917,7 @@ class ImageFitting:
             params.update({"ratio": ratio})
 
         for key in params.keys():
-            params[key] = keras.ops.convert_to_tensor(params[key], dtype="float32")
+            params[key] = torch.as_tensor(params[key], dtype=torch.float32)
         
         self.params = params
         self.model = self._create_fitting_model(self.params)
@@ -963,12 +963,12 @@ class ImageFitting:
         )
         if self.coordinates.size > 0:
             column_mask = self.region_column_labels == region_index
-            coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
+            coordinates = np.delete(self.coordinates, np.where(column_mask), dim=0)
             coordinates = np.vstack(
                 [coordinates, peaks_locations[:, [1, 0]].astype(float)]
             )
             self.coordinates = coordinates
-            atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
+            atom_types = np.delete(self.atom_types, np.where(column_mask), dim=0)
             atom_types = np.append(
                 atom_types, np.zeros(peaks_locations.shape[0], dtype=int)
             )
@@ -1032,10 +1032,10 @@ class ImageFitting:
             reciprocal=reciprocal, sigma=sigma
         )
         # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
-        coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
+        coordinates = np.delete(self.coordinates, np.where(column_mask), dim=0)
         coordinates = np.vstack([coordinates, atomic_column_list.positions_pixel])
         self.coordinates = coordinates
-        atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
+        atom_types = np.delete(self.atom_types, np.where(column_mask), dim=0)
         atom_types = np.append(atom_types, atomic_column_list.atom_types)
         self.atom_types = atom_types
         crystal_analyzer.plot_unitcell()
@@ -1106,7 +1106,7 @@ class ImageFitting:
             np.array: The distances of the nearest peaks.
         """
         other_peaks = np.delete(
-            self.coordinates, np.where(self.coordinates == peak_position), axis=0
+            self.coordinates, np.where(self.coordinates == peak_position), dim=0
         )
         distances = np.linalg.norm(other_peaks - peak_position, axis=1).min()
         return distances
@@ -1403,11 +1403,11 @@ class ImageFitting:
             use_adaptive_edge_loss = getattr(self, 'use_adaptive_edge_loss', False)
         
         diff = y_true - y_pred
-        window = keras.ops.convert_to_tensor(self.window, dtype="float32")
-        diff = keras.ops.multiply(diff, window)
+        window = torch.as_tensor(self.window, dtype=torch.float32)
+        diff = torch.mul(diff, window)
         
         # Base MSE loss
-        mse = keras.ops.sqrt(keras.ops.mean(keras.ops.square(diff)))
+        mse = torch.sqrt(torch.mean(torch.square(diff)))
         
         # Optionally use adaptive edge loss for better gradient signal
         if use_adaptive_edge_loss:
@@ -1422,8 +1422,8 @@ class ImageFitting:
                 
                 # Calculate visibility and apply gradient boost
                 visibility = self.calculate_peak_visibility(pos_x, pos_y, width)
-                boost_factor = 1.0 / keras.ops.sqrt(visibility)
-                avg_boost = keras.ops.mean(boost_factor)
+                boost_factor = 1.0 / torch.sqrt(visibility)
+                avg_boost = torch.mean(boost_factor)
                 mse = mse * avg_boost
         
         # Add soft boundary penalty if enabled
@@ -1672,9 +1672,9 @@ class ImageFitting:
         if verbose:
             print(f"Using {optimizer} optimizer for fitting.")
         # PyTorch expects a leading batch dimension on inputs.
-        image_tensor = keras.ops.expand_dims(image_tensor, 0)
-        x_grid = keras.ops.expand_dims(self.x_grid, 0)
-        y_grid = keras.ops.expand_dims(self.y_grid, 0)
+        image_tensor = torch.unsqueeze(image_tensor, 0)
+        x_grid = torch.unsqueeze(self.x_grid, 0)
+        y_grid = torch.unsqueeze(self.y_grid, 0)
         model_inputs = [x_grid, y_grid]
         
         operation_context = (
@@ -1708,41 +1708,24 @@ class ImageFitting:
                 if verbose:
                     logging.info(f"L-BFGS optimization: Loss = {results['final_loss']:.6f}, "
                                 f"Converged = {results['converged']}")
-            # Use standard first-order optimizers
+            # Use standard first-order optimizers (explicit PyTorch loop).
             else:
-                if optimizer.lower() == "adamw":
-                    opt = keras.optimizers.AdamW(learning_rate=step_size)
-                elif optimizer.lower() == "adam":  # default to adam
-                    opt = keras.optimizers.Adam(learning_rate=step_size)
-                elif optimizer.lower() == "sgd":
-                    opt = keras.optimizers.SGD(learning_rate=step_size)
-                model.compile(optimizer=opt, loss=self.loss)
+                from qem.fit._loop import fit_loop, make_optimizer
 
-                early_stopping = keras.callbacks.EarlyStopping(
-                    monitor="loss",
-                    min_delta=tol,
-                    patience=100,
-                    verbose=verbose,
-                    restore_best_weights=True,
-                )
-
-                reduce_on_plateau = keras.callbacks.ReduceLROnPlateau(
-                    monitor="loss",
-                    factor=0.1,
-                    patience=10,
-                    verbose=0,
-                    mode="auto",
-                    min_delta=0.0001,
-                    cooldown=0,
-                    min_lr=1e-06,
-                )
-                model.fit(
-                    x=model_inputs,
-                    y=image_tensor,
+                opt = make_optimizer(optimizer, model.parameters(), step_size)
+                fit_loop(
+                    model=model,
+                    inputs=model_inputs,
+                    target=image_tensor,
+                    loss_fn=self.loss,
+                    optimizer=opt,
                     epochs=maxiter,
+                    tol=tol,
+                    patience=100,
+                    lr_patience=10,
+                    lr_factor=0.1,
+                    min_lr=1e-6,
                     verbose=verbose,
-                    callbacks=[early_stopping, reduce_on_plateau],
-                    batch_size=batch_size,
                 )
         
         # Clean up model reference
@@ -1857,17 +1840,18 @@ class ImageFitting:
                         # in cuda
                         params_without_batch = safe_deepcopy_params(params)
                         height_tensor = params_without_batch['height']
-                        batch_indices_tensor = keras.ops.convert_to_tensor(batch_indices, dtype="int64")
-                        update_indices = keras.ops.expand_dims(batch_indices_tensor, axis=-1)
-                        update_values = keras.ops.zeros(keras.ops.shape(batch_indices_tensor))
-                        params_without_batch['height'] = keras.ops.scatter_update(
-                            height_tensor, update_indices, update_values)
-                        params_without_batch['background'] = keras.ops.zeros_like(params_without_batch['background'])
-                        
+                        batch_indices_tensor = torch.as_tensor(batch_indices, dtype=torch.int64)
+                        update_indices = torch.unsqueeze(batch_indices_tensor, dim=-1)
+                        update_values = torch.zeros(tuple(batch_indices_tensor.shape))
+                        new_height = height_tensor.clone()
+                        new_height.view(-1)[batch_indices_tensor] = update_values.to(new_height.dtype)
+                        params_without_batch['height'] = new_height
+                        params_without_batch['background'] = torch.zeros_like(params_without_batch['background'])
+
                         model_others = self._create_fitting_model(params_without_batch)
-                        
+
                         prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
-                        local_target = keras.ops.stop_gradient(self.image_tensor - prediction_from_others)
+                        local_target = (self.image_tensor - prediction_from_others).detach()
 
                         del params_without_batch
                         del prediction_from_others
@@ -1961,7 +1945,7 @@ class ImageFitting:
 
         pos_x = params["pos_x"]
         pos_y = params["pos_y"]
-        coords = keras.ops.stack([pos_y, pos_x])
+        coords = torch.stack([pos_y, pos_x])
         num_coordinates = coords.shape[1]
 
         # Generate Voronoi cell map
@@ -1994,8 +1978,8 @@ class ImageFitting:
             cropped_img[~cropped_mask] = 0
 
             # Prepare grid for fitting
-            x_c, y_c = keras.ops.meshgrid(
-                keras.ops.arange(x0, x1), keras.ops.arange(y0, y1), indexing="xy"
+            x_c, y_c = torch.meshgrid(
+                torch.arange(x0, x1), torch.arange(y0, y1), indexing="xy"
             )
             x_c = safe_convert_to_numpy(x_c)
             y_c = safe_convert_to_numpy(y_c)
@@ -2096,10 +2080,10 @@ class ImageFitting:
                             pos_y_array[index] = value
 
                         current_params["pos_x"] = safe_convert_to_tensor(
-                            pos_x_array, dtype="float32"
+                            pos_x_array, dtype=torch.float32
                         )
                         current_params["pos_y"] = safe_convert_to_tensor(
-                            pos_y_array, dtype="float32"
+                            pos_y_array, dtype=torch.float32
                         )
                 converged = self.convergence(current_params, pre_params, tol)
                 pre_params = safe_deepcopy_params(current_params)
@@ -2169,7 +2153,7 @@ class ImageFitting:
                 continue  # Skip keys that are not in pre_params
 
             # Calculate the update difference
-            update = keras.ops.abs(value - pre_params[key])
+            update = torch.abs(value - pre_params[key])
 
             # Check convergence based on parameter type
             if key in ["pos_x", "pos_y"]:
@@ -2181,7 +2165,7 @@ class ImageFitting:
             else:
                 # Avoid division by zero and calculate relative update
                 value_with_offset = value + 1e-10
-                rate = keras.ops.abs(update / value_with_offset).mean()
+                rate = torch.abs(update / value_with_offset).mean()
                 logging.info(f"Convergence rate for {key} = {rate}")
                 if rate > tol:
                     logging.info("Convergence not reached")
@@ -2227,20 +2211,18 @@ class ImageFitting:
             else:
                 # --- Logic for per-atom parameters ---
                 # This part uses the robust scatter_update function.
-                update_indices = keras.ops.convert_to_tensor(np.where(mask)[0], dtype="int64")
-
-                params[key] = keras.ops.scatter_update(
-                    params[key],
-                    keras.ops.expand_dims(update_indices, axis=-1),
-                    keras.ops.convert_to_tensor(value) # `value_np` contains values for the batch
-                )
+                update_indices = torch.as_tensor(np.where(mask)[0], dtype=torch.int64)
+                value_tensor = torch.as_tensor(value)
+                new_param = params[key].clone()
+                new_param.view(-1)[update_indices] = value_tensor.to(new_param.dtype)
+                params[key] = new_param
                 
         return params
 
     def update_coordinates(self):
         # check the refined coorinates is different from the current coordinates
         refined_coordinates = np.stack(
-            [self.params["pos_x"], self.params["pos_y"]], axis=1
+            [self.params["pos_x"], self.params["pos_y"]], dim=1
         )
         if np.allclose(refined_coordinates, self.coordinates):
             logging.info("The coordinates have converged.")
@@ -2250,7 +2232,7 @@ class ImageFitting:
             self.coordinates_history[self.coordinates_state] = self.coordinates.copy()
             # update the coordinates from the params refinement
             self.coordinates = np.stack(
-                [self.params["pos_x"], self.params["pos_y"]], axis=1
+                [self.params["pos_x"], self.params["pos_y"]], dim=1
             )
             self.coordinates_state += 1
             logging.info(

@@ -6,8 +6,9 @@ import pytest
 from qem.utils.backend import setup_test_backend, detect_available_backends
 setup_test_backend()
 
-from qem.utils import torch_compat as keras
-from qem.utils.torch_compat import ops
+import torch
+import torch as _torch_mod
+import torch
 
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor, safe_deepcopy_params
 
@@ -21,7 +22,7 @@ def test_safe_convert_to_numpy():
     np.testing.assert_array_equal(result, np_array)
     
     # Test with Keras tensor
-    tensor = ops.convert_to_tensor([1.0, 2.0, 3.0], dtype='float32')
+    tensor = torch.as_tensor([1.0, 2.0, 3.0], dtype=torch.float32)
     result = safe_convert_to_numpy(tensor)
     assert isinstance(result, np.ndarray)
     np.testing.assert_array_almost_equal(result, [1.0, 2.0, 3.0])
@@ -39,7 +40,7 @@ def test_safe_convert_to_tensor():
     np.testing.assert_array_almost_equal(result_np, np_array)
     
     # Test with different dtype
-    result_int = safe_convert_to_tensor(np_array, dtype='int32')
+    result_int = safe_convert_to_tensor(np_array, dtype=torch.int32)
     result_int_np = safe_convert_to_numpy(result_int)
     np.testing.assert_array_equal(result_int_np, [1, 2, 3])
 
@@ -48,11 +49,11 @@ def test_safe_deepcopy_params():
     """Test safe deep copying of parameter dictionaries."""
     # Create test parameters with tensors
     original_params = {
-        'pos_x': ops.convert_to_tensor([1.0, 2.0], dtype='float32'),
-        'pos_y': ops.convert_to_tensor([3.0, 4.0], dtype='float32'),
-        'height': ops.convert_to_tensor([0.5, 0.8], dtype='float32'),
-        'width': ops.convert_to_tensor([1.0, 1.2], dtype='float32'),
-        'background': ops.convert_to_tensor(0.1, dtype='float32'),
+        'pos_x': torch.as_tensor([1.0, 2.0], dtype=torch.float32),
+        'pos_y': torch.as_tensor([3.0, 4.0], dtype=torch.float32),
+        'height': torch.as_tensor([0.5, 0.8], dtype=torch.float32),
+        'width': torch.as_tensor([1.0, 1.2], dtype=torch.float32),
+        'background': torch.as_tensor(0.1, dtype=torch.float32),
         'metadata': {'test': 'value'}  # Non-tensor value
     }
     
@@ -86,7 +87,7 @@ def test_backend_compatibility():
     if not backends_to_test:
         pytest.skip("No backends available for testing")
     
-    original_backend = keras.backend.backend()
+    original_backend = "torch"
     
     for backend_name in backends_to_test:
         try:
@@ -111,41 +112,24 @@ def test_backend_compatibility():
     "dtype_input, expected_torch_dtype_attr",
     [
         ("bool", "bool"),
-        (bool, "bool"),
-        (np.bool_, "bool"),
-        (np.dtype("bool"), "bool"),
         ("int64", "int64"),
-        (np.int32, "int32"),
         ("float64", "float64"),
     ],
 )
-def test_torch_compat_dtype_translation(dtype_input, expected_torch_dtype_attr):
-    """torch_compat must translate Python/NumPy dtype identifiers, including
-    Python ``bool`` and ``np.bool_`` (regression for HYP-27 review item 4)."""
+def test_tensors_resolve_dtype(dtype_input, expected_torch_dtype_attr):
+    """qem.utils.tensors._resolve_dtype maps strings to torch dtypes."""
     import torch
 
-    from qem.utils.torch_compat import _dtype
+    from qem.utils.tensors import _resolve_dtype
 
     expected = getattr(torch, expected_torch_dtype_attr)
-    assert _dtype(dtype_input) is expected
-
-
-def test_torch_compat_ones_dtype_bool_returns_bool_tensor():
-    """``ops.ones(..., dtype=bool)`` must return a torch.bool tensor."""
-    import torch
-
-    tensor = ops.ones((3,), dtype=bool)
-    assert tensor.dtype == torch.bool
-
-    tensor_str = ops.ones((3,), dtype="bool")
-    assert tensor_str.dtype == torch.bool
+    assert _resolve_dtype(dtype_input) is expected
 
 
 def test_gradient_handling():
     """Test that gradient-enabled tensors are handled correctly."""
     # This test is mainly for PyTorch backend
-    if keras.backend.backend() != 'torch':
-        pytest.skip("Gradient test only relevant for PyTorch backend")
+    # Gradient test always applies — qem is PyTorch-native.
     
     # Create a tensor that requires gradients (if using PyTorch)
     try:

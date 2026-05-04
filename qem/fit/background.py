@@ -1,3 +1,4 @@
+import torch
 """
 Unified background estimation for QEM image fitting.
 

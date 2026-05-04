@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Dict, Optional, Tuple, Protocol
 
 import numpy as np
-from qem.utils import torch_compat as keras
+import torch
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve, lsqr, cg
 
@@ -491,22 +491,22 @@ class DesignMatrixBuilder:
                 ratio = ratio[atom_types]
         
         # Create local coordinate system
-        window_size = keras.ops.cast(keras.ops.max(width) * 5, dtype="int32")
-        x = keras.ops.arange(-window_size, window_size + 1, 1, dtype="float32")
-        y = keras.ops.arange(-window_size, window_size + 1, 1, dtype="float32")
-        local_x, local_y = keras.ops.meshgrid(x, y, indexing="xy")
+        window_size = (torch.max(width) * 5).to(dtype=torch.int32)
+        x = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
+        y = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
+        local_x, local_y = torch.meshgrid(x, y, indexing="xy")
         
         # Generate local peaks
-        input_params = (keras.ops.mod(pos_x, 1), keras.ops.mod(pos_y, 1), height, width)
+        input_params = (torch.remainder(pos_x, 1), torch.remainder(pos_y, 1), height, width)
         if ratio is not None:
             input_params += (ratio,)
         
         peak_local = self.model.model_fn(local_x[..., None], local_y[..., None], *input_params)
         
         # Calculate global coordinates and mask
-        pos_x_int, pos_y_int = keras.ops.floor(pos_x), keras.ops.floor(pos_y)
-        global_x = keras.ops.expand_dims(local_x, -1) + pos_x_int
-        global_y = keras.ops.expand_dims(local_y, -1) + pos_y_int
+        pos_x_int, pos_y_int = torch.floor(pos_x), torch.floor(pos_y)
+        global_x = torch.unsqueeze(local_x, -1) + pos_x_int
+        global_y = torch.unsqueeze(local_y, -1) + pos_y_int
         
         mask = ((global_x >= 0) & (global_x < self.nx) & 
                 (global_y >= 0) & (global_y < self.ny))
@@ -518,40 +518,40 @@ class DesignMatrixBuilder:
                           background_2d: np.ndarray = None):
         """Build sparse design matrix from peak data with optional 2D background."""
         # Extract valid data
-        valid_indices = keras.ops.where(mask)
-        shape = keras.ops.shape(peak_local)
+        valid_indices = torch.where(mask)
+        shape = tuple(peak_local.shape)
         
         flat_indices = (valid_indices[0] * (shape[1] * shape[2]) + 
                        valid_indices[1] * shape[2] + valid_indices[2])
         
-        data_tensor = keras.ops.take(keras.ops.reshape(peak_local, (-1,)), flat_indices)
-        global_x_valid = keras.ops.take(keras.ops.reshape(global_x, (-1,)), flat_indices)
-        global_y_valid = keras.ops.take(keras.ops.reshape(global_y, (-1,)), flat_indices)
+        data_tensor = torch.take(torch.reshape(peak_local, (-1,)), flat_indices)
+        global_x_valid = torch.take(torch.reshape(global_x, (-1,)), flat_indices)
+        global_y_valid = torch.take(torch.reshape(global_y, (-1,)), flat_indices)
         
         # Calculate matrix indices
         cols_tensor = valid_indices[2]
-        rows_tensor = (keras.ops.cast(global_y_valid, "int32") * self.nx + 
-                      keras.ops.cast(global_x_valid, "int32"))
+        rows_tensor = (global_y_valid.to(dtype=torch.int32) * self.nx +
+                       global_x_valid.to(dtype=torch.int32))
         
         # Add background terms if needed
         if fit_background:
-            bg_rows = keras.ops.reshape(y_grid * self.nx + x_grid, (-1,))
-            rows_tensor = keras.ops.concatenate([rows_tensor, keras.ops.cast(bg_rows, "int32")])
+            bg_rows = torch.reshape(y_grid * self.nx + x_grid, (-1,))
+            rows_tensor = torch.cat([rows_tensor, bg_rows.to(dtype=torch.int32)])
 
             del bg_rows
             release_backend_memory()
 
-            cols_tensor = keras.ops.concatenate([cols_tensor,
-                keras.ops.full((self.nx * self.ny,), num_coordinates, dtype="int32")])
+            cols_tensor = torch.cat([cols_tensor,
+                torch.full((self.nx * self.ny,), num_coordinates, dtype=torch.int32)])
             
             if background_2d is not None:
                 # Use 2D background values instead of ones
-                bg_data = keras.ops.convert_to_tensor(background_2d.ravel(), dtype="float32")
-                data_tensor = keras.ops.concatenate([data_tensor, bg_data])
+                bg_data = torch.as_tensor(background_2d.ravel(), dtype=torch.float32)
+                data_tensor = torch.cat([data_tensor, bg_data])
             else:
                 # Use scalar background (ones)
-                data_tensor = keras.ops.concatenate([data_tensor, 
-                    keras.ops.ones((self.nx * self.ny,), dtype="float32")])
+                data_tensor = torch.cat([data_tensor, 
+                    torch.ones((self.nx * self.ny,), dtype=torch.float32)])
             
             shape = (self.nx * self.ny, num_coordinates + 1)
 
@@ -603,9 +603,9 @@ class ParameterValidator:
         pos_x, pos_y, height = params["pos_x"], params["pos_y"], params["height"]
 
         lengths = {
-            keras.ops.shape(pos_x)[0],
-            keras.ops.shape(pos_y)[0],
-            keras.ops.shape(height)[0],
+            tuple(pos_x.shape)[0],
+            tuple(pos_y.shape)[0],
+            tuple(height.shape)[0],
         }
         if len(lengths) != 1:
             raise ParameterError("pos_x, pos_y, and height must have same length")
@@ -628,8 +628,8 @@ class SolutionProcessor:
         if solution is None:
             return False
         
-        # Check for NaN or infinite values
-        if keras.ops.any(keras.ops.isnan(solution)) or keras.ops.any(keras.ops.isinf(solution)):
+        # Check for NaN or infinite values (input may be numpy or tensor).
+        if np.any(np.isnan(np.asarray(solution))) or np.any(np.isinf(np.asarray(solution))):
             logging.warning("Solution contains NaN or infinite values")
             return False
         
@@ -647,15 +647,15 @@ class SolutionProcessor:
             height_tensor = height_scale
         
         # Count out-of-bounds values for logging
-        too_small = keras.ops.sum(height_tensor < min_scale)
-        too_large = keras.ops.sum(height_tensor > max_scale)
+        too_small = torch.sum(height_tensor < min_scale)
+        too_large = torch.sum(height_tensor > max_scale)
 
         # Replace nan with 1
-        height_tensor = keras.ops.where(keras.ops.isnan(height_tensor), 
-                                      keras.ops.ones_like(height_tensor), height_tensor)
+        height_tensor = torch.where(torch.isnan(height_tensor), 
+                                      torch.ones_like(height_tensor), height_tensor)
         
         # Apply constraints
-        height_tensor = keras.ops.clip(height_tensor, min_scale, max_scale)
+        height_tensor = torch.clamp(height_tensor, min_scale, max_scale)
         
         # Log warnings if constraints were applied
         if too_small > 0:

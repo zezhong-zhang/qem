@@ -13,6 +13,7 @@ implementation so existing callers continue to work.
 """
 
 from __future__ import annotations
+import torch
 
 from dataclasses import dataclass
 import logging
@@ -164,9 +165,9 @@ class DesignMatrixBuilder:
             if ratio is not None:
                 ratio = ratio[atom_types]
 
-        window_size = ops.cast(ops.max(width) * 5, dtype="int32")
-        x = ops.arange(-window_size, window_size + 1, 1, dtype="float32")
-        y = ops.arange(-window_size, window_size + 1, 1, dtype="float32")
+        window_size = ops.cast(ops.max(width) * 5, dtype=torch.int32)
+        x = ops.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
+        y = ops.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
         local_x, local_y = ops.meshgrid(x, y, indexing="xy")
 
         input_params = (ops.mod(pos_x, 1), ops.mod(pos_y, 1), height, width)
@@ -246,10 +247,10 @@ class DesignMatrixBuilder:
             background_rows = ops.reshape(y_grid, (-1,)) * self.nx + ops.reshape(x_grid, (-1,))
             rows_tensor = ops.concatenate([rows_tensor, ops.cast(background_rows, "int32")])
             cols_tensor = ops.concatenate(
-                [cols_tensor, ops.full((pixel_count,), num_coordinates, dtype="int32")]
+                [cols_tensor, ops.full((pixel_count,), num_coordinates, dtype=torch.int32)]
             )
             data_tensor = ops.concatenate(
-                [data_tensor, ops.ones((pixel_count,), dtype="float32")]
+                [data_tensor, ops.ones((pixel_count,), dtype=torch.float32)]
             )
             matrix_shape = (pixel_count, int(num_coordinates) + 1)
 

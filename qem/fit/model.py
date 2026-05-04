@@ -1,352 +1,295 @@
+"""Image-fitting peak models — Gaussian / Lorentzian / Voigt.
+
+Pure PyTorch.  Each model is an :class:`torch.nn.Module` whose
+parameters (``pos_x``, ``pos_y``, ``height``, ``width``, ``background``,
+optional ``ratio``) are :class:`torch.nn.Parameter` instances created
+lazily via :meth:`set_params`.  Forward pass evaluates the model on a
+real-space grid; ``sum`` does the same with an option for a JIT-friendly
+local windowing.
+"""
+
+from __future__ import annotations
+
 from abc import abstractmethod
+from typing import Any, Mapping
 
 import numpy as np
-from dotenv import load_dotenv
+import torch
 from numba import jit as njit
+from torch import nn
 
-load_dotenv()
-from qem.utils import torch_compat as keras
+from qem.utils.tensors import to_numpy, to_tensor
 
-from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
 
-class ImageModel(keras.Model):
-    """Base class for all image models."""
+def _as_param(value: Any, *, requires_grad: bool = True) -> nn.Parameter:
+    """Wrap a value as a trainable ``nn.Parameter`` of dtype float32."""
+    tensor = to_tensor(value, dtype="float32").detach().clone()
+    return nn.Parameter(tensor, requires_grad=requires_grad)
 
-    def __init__(self, dx: float=1.0):
-        """Initialize the model.
-        
-        Args:
-            dx (float, optional): Pixel size. Defaults to 1.0.
-        """
+
+class ImageModel(nn.Module):
+    """Base class for parametric peak-shape image models."""
+
+    def __init__(self, dx: float = 1.0):
         super().__init__()
-        self.dx = dx
-        self.input_params = None
-            
-    def set_params(self, params):
-        # Set params as tensors, but do not build variables yet
-        self.input_params = {k: keras.ops.convert_to_tensor(v) for k, v in params.items()}
-        # If already built and shapes match, update values
+        self.dx = float(dx)
+        self.input_params: dict[str, Any] | None = None
+        self.built: bool = False
+
+    # ------------------------------------------------------------------
+    # parameter management
+    # ------------------------------------------------------------------
+
+    def set_params(self, params: Mapping[str, Any]) -> None:
+        """Stash an initial parameter set; build lazily on first use."""
+        self.input_params = {k: to_tensor(v) for k, v in params.items()}
         if self.built:
             self.update_params(self.input_params)
 
-    def update_params(self, params):
-        """Update the model parameters (values only, not shapes)."""
-        # Configuration parameters that are not model weights
-        config_params = {'same_width', 'atom_types'}
-        
-        for key, value in params.items():
-            if key in config_params:
-                # Skip configuration parameters - they're handled in input_params
-                continue
-            elif hasattr(self, key):
-                current_value = getattr(self, key)
-                current_value.assign(value)
-            else:
-                raise ValueError(f"Parameter {key} does not exist in the model.")
+    def update_params(self, params: Mapping[str, Any]) -> None:
+        """Update existing :class:`nn.Parameter` values in-place."""
+        config_keys = {"same_width", "atom_types"}
+        with torch.no_grad():
+            for key, value in params.items():
+                if key in config_keys:
+                    continue
+                if not hasattr(self, key):
+                    raise ValueError(f"Parameter {key!r} does not exist on the model.")
+                target: nn.Parameter = getattr(self, key)
+                target.copy_(to_tensor(value, dtype=target.dtype).to(target.device))
 
-    def build(self, input_shape=(1,)):
+    def build(self, input_shape: tuple[int, ...] | None = None) -> None:
+        """Create :class:`nn.Parameter` instances from ``input_params``."""
         if self.input_params is None:
-            raise ValueError("initial_params must be set before building the model.")
-        # If already built and shapes match, do nothing
+            raise ValueError("set_params() must be called before build().")
         if self.built:
             return
-        # Otherwise, create new variables
-        self.pos_x = self.add_weight(shape=(self.input_params['pos_x'].shape[0],), initializer=keras.initializers.Constant(self.input_params['pos_x']), name="pos_x")
-        self.pos_y = self.add_weight(shape=(self.input_params['pos_y'].shape[0],), initializer=keras.initializers.Constant(self.input_params['pos_y']), name="pos_y")
-        self.height = self.add_weight(shape=(self.input_params['height'].shape[0],), initializer=keras.initializers.Constant(self.input_params['height']), name="height")
-        self.width = self.add_weight(shape=(self.input_params['width'].shape[0],), initializer=keras.initializers.Constant(self.input_params['width']), name="width")
-        self.background = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.input_params['background']), name="background")
-        super().build(input_shape)
-        
-    def get_params(self):
-        dict_params = {
-            "pos_x": keras.ops.convert_to_tensor(self.pos_x),
-            "pos_y": keras.ops.convert_to_tensor(self.pos_y),
-            "height": keras.ops.convert_to_tensor(self.height),
-            "width": keras.ops.convert_to_tensor(self.width),
-            "background": keras.ops.convert_to_tensor(self.background),
-            "same_width": self.input_params.get('same_width', False),
-        }
-        # atom_types may not be present in all models (e.g., convolution model)
-        if 'atom_types' in self.input_params:
-            dict_params['atom_types'] = keras.ops.convert_to_tensor(self.input_params['atom_types'])
-        else:
-            # Default to zeros if not present
-            dict_params['atom_types'] = keras.ops.convert_to_tensor(
-                keras.ops.zeros_like(self.height, dtype='int32')
-            )
-        if hasattr(self, 'ratio'):
-            dict_params['ratio'] = keras.ops.convert_to_tensor(self.ratio)
-        return dict_params
+        ip = self.input_params
+        self.pos_x = _as_param(ip["pos_x"])
+        self.pos_y = _as_param(ip["pos_y"])
+        self.height = _as_param(ip["height"])
+        self.width = _as_param(ip["width"])
+        self.background = _as_param(ip["background"])
+        self.built = True
 
-    def call(self, inputs):
-        """Forward pass of the model."""
+    def get_params(self) -> dict[str, Any]:
+        """Snapshot the current parameter values as detached tensors."""
+        if not self.built:
+            raise RuntimeError("Model has not been built yet.")
+        ip = self.input_params or {}
+        out: dict[str, Any] = {
+            "pos_x": self.pos_x.detach(),
+            "pos_y": self.pos_y.detach(),
+            "height": self.height.detach(),
+            "width": self.width.detach(),
+            "background": self.background.detach(),
+            "same_width": ip.get("same_width", False),
+        }
+        if "atom_types" in ip:
+            out["atom_types"] = to_tensor(ip["atom_types"], dtype="int32")
+        else:
+            out["atom_types"] = torch.zeros_like(self.height, dtype=torch.int32)
+        if hasattr(self, "ratio"):
+            out["ratio"] = self.ratio.detach()
+        return out
+
+    # ------------------------------------------------------------------
+    # forward + sum
+    # ------------------------------------------------------------------
+
+    def forward(self, inputs: tuple[torch.Tensor, torch.Tensor]) -> torch.Tensor:
         x_grid, y_grid = inputs
         return self.sum(x_grid, y_grid)
 
     @abstractmethod
-    def model_fn(self, x, y, pos_x, pos_y, height, width, *args):
-        """Core model function that defines the peak shape."""
-        pass
-
+    def model_fn(
+        self,
+        x: torch.Tensor,
+        y: torch.Tensor,
+        pos_x: torch.Tensor,
+        pos_y: torch.Tensor,
+        height: torch.Tensor,
+        width: torch.Tensor,
+        *args: torch.Tensor,
+    ) -> torch.Tensor:
+        """Compute peak intensity at (x, y).  Subclasses provide this."""
 
     @abstractmethod
-    def volume(self, params: dict) -> np.ndarray:
-        """Calculate the volume of each peak."""
-        pass
+    def volume(self, params: Mapping[str, Any]) -> np.ndarray:
+        """Per-peak volume (height × area, in dx-scaled units)."""
 
-    # The revised method starts here.
-    def sum(self, x_grid: np.ndarray, y_grid: np.ndarray, local: bool = True):
-        """Calculates the sum of all peaks on a grid, with an optional background.
+    def sum(
+        self,
+        x_grid: Any,
+        y_grid: Any,
+        local: bool = True,
+    ) -> torch.Tensor:
+        """Render all peaks plus background onto the supplied grid."""
+        if self.input_params is None:
+            raise RuntimeError("set_params()/build() must run before sum().")
 
-        This method supports both a global calculation and a memory-efficient local
-        calculation suitable for JIT compilation.
+        x_grid = to_tensor(x_grid, dtype="float32")
+        y_grid = to_tensor(y_grid, dtype="float32")
 
-        Args:
-            x_grid (array): A 2D array of X coordinates (from meshgrid).
-            y_grid (array): A 2D array of Y coordinates (from meshgrid).
-            local (bool, optional): If True, calculates peaks in local windows to
-                conserve memory. This approach is JIT-compatible. Defaults to True.
+        has_batch = x_grid.dim() > 2
+        if has_batch:
+            x_grid = x_grid.squeeze(0)
+            y_grid = y_grid.squeeze(0)
 
-        Returns:
-            array: A 2D array representing the rendered image of peaks plus background.
-        """
-        x_grid = keras.ops.convert_to_tensor(x_grid, dtype="float32")
-        y_grid = keras.ops.convert_to_tensor(y_grid, dtype="float32")
-
-        # Squeeze batch dimension for processing, if it exists.
-        has_batch_dim = len(x_grid.shape) > 2
-        if has_batch_dim:
-            x_grid = keras.ops.squeeze(x_grid, axis=0)
-            y_grid = keras.ops.squeeze(y_grid, axis=0)
-
-        # Prepare arguments for the peak model function.
-        # This is refactored to avoid code duplication.
+        # Per-atom width / ratio (broadcast across atom_types when same_width).
         width = self.width
-        ratio = self.ratio if hasattr(self, 'ratio') else None
-        if self.input_params.get('same_width', False):
-            atom_types = keras.ops.cast(
-                safe_convert_to_tensor(self.input_params['atom_types']), dtype='int32'
-            )
-            width = keras.ops.take(self.width, atom_types)
+        ratio = self.ratio if hasattr(self, "ratio") else None
+        if self.input_params.get("same_width", False):
+            atom_types = to_tensor(self.input_params["atom_types"], dtype="int64")
+            width = width[atom_types]
             if ratio is not None:
-                ratio = keras.ops.take(self.ratio, atom_types)
-        
-        width_ratio_args = (width, ratio) if ratio is not None else (width,)
+                ratio = ratio[atom_types]
+        extra = (width, ratio) if ratio is not None else (width,)
 
         if not local:
-            # Global calculation: simpler but uses more memory.
             peaks = self.model_fn(
-                x_grid[..., None], y_grid[..., None],  # Broadcasting to match peak dimensions
+                x_grid[..., None], y_grid[..., None],
                 self.pos_x, self.pos_y,
-                self.height, *width_ratio_args
+                self.height, *extra,
             )
-            result = keras.ops.sum(peaks, axis=-1) + self.background
+            result = peaks.sum(dim=-1) + self.background
         else:
-            # --- JIT-Compatible Local Calculation ---
-            
-            # 1. Define a static window size. For JIT compilation, this value
-            # cannot be a traced tensor; it must be a concrete Python integer.
-            # We assume the width parameter used for this is a static NumPy array.
-            max_width = np.max(safe_convert_to_numpy(self.input_params['width']))
-            window_size = int(max_width * 4)
+            result = self._sum_local(x_grid, y_grid, extra)
 
-            # 2. Create a local coordinate grid for the window.
-            window_coords = keras.ops.arange(-window_size, window_size + 1, dtype=x_grid.dtype)
-            local_x_grid, local_y_grid = keras.ops.meshgrid(window_coords, window_coords)
+        return result.unsqueeze(0) if has_batch else result
 
-            # 3. Calculate all local peak shapes centered at (0,0).
-            peak_params = (
-                keras.ops.mod(self.pos_x, 1), keras.ops.mod(self.pos_y, 1),
-                self.height, *width_ratio_args
-            )
-            local_peaks = self.model_fn(local_x_grid[..., None], local_y_grid[..., None], *peak_params)
+    def _sum_local(
+        self,
+        x_grid: torch.Tensor,
+        y_grid: torch.Tensor,
+        extra: tuple[torch.Tensor, ...],
+    ) -> torch.Tensor:
+        """Memory-efficient local-window peak rendering with scatter-add."""
+        assert self.input_params is not None
+        max_width = float(np.max(to_numpy(self.input_params["width"])))
+        window_size = int(max_width * 4)
+        coords = torch.arange(
+            -window_size, window_size + 1,
+            dtype=x_grid.dtype, device=x_grid.device,
+        )
+        local_x, local_y = torch.meshgrid(coords, coords, indexing="xy")
 
-            # 4. Calculate the global coordinates where each local peak point should go.
-            pos_x_int = keras.ops.floor(self.pos_x)
-            pos_y_int = keras.ops.floor(self.pos_y)
-            global_x = keras.ops.expand_dims(local_x_grid, -1) + pos_x_int
-            global_y = keras.ops.expand_dims(local_y_grid, -1) + pos_y_int
+        peak_args = (
+            torch.remainder(self.pos_x, 1.0),
+            torch.remainder(self.pos_y, 1.0),
+            self.height, *extra,
+        )
+        local_peaks = self.model_fn(local_x[..., None], local_y[..., None], *peak_args)
 
-            # 5. Create a mask to identify points that fall within the image boundaries.
-            mask = (global_x >= 0) & (global_x < x_grid.shape[1]) & (global_y >= 0) & (global_y < y_grid.shape[0])
+        pos_x_int = torch.floor(self.pos_x)
+        pos_y_int = torch.floor(self.pos_y)
+        global_x = local_x.unsqueeze(-1) + pos_x_int
+        global_y = local_y.unsqueeze(-1) + pos_y_int
 
-            # 6. Apply the mask to zero out contributions from out-of-bounds points.
-            # This is the key to JIT compatibility, as it preserves the static shape of the array.
-            masked_peaks = keras.ops.where(mask, local_peaks, 0.0)
+        h, w = x_grid.shape
+        in_bounds = (global_x >= 0) & (global_x < w) & (global_y >= 0) & (global_y < h)
+        masked_peaks = torch.where(in_bounds, local_peaks, torch.zeros_like(local_peaks))
 
-            # 7. Clip coordinates to prevent scatter operations from failing on out-of-bounds indices.
-            # The values for these points are already zeroed out by the mask.
-            h, w = x_grid.shape
-            global_x_safe = keras.ops.clip(global_x, 0, w - 1)
-            global_y_safe = keras.ops.clip(global_y, 0, h - 1)
+        global_x_safe = torch.clamp(global_x, 0, w - 1).to(torch.int64)
+        global_y_safe = torch.clamp(global_y, 0, h - 1).to(torch.int64)
+        flat_indices = global_y_safe.reshape(-1) * w + global_x_safe.reshape(-1)
 
-            # 8. Scatter the masked peaks onto the canvas with PyTorch's scatter_add.
-            total = keras.ops.zeros_like(x_grid, dtype='float32')
-            masked_peaks_flat = keras.ops.reshape(masked_peaks, [-1])
-            g_y_flat = keras.ops.cast(keras.ops.reshape(global_y_safe, [-1]), 'int64')
-            g_x_flat = keras.ops.cast(keras.ops.reshape(global_x_safe, [-1]), 'int64')
-            indices = g_y_flat * w + g_x_flat
-
-            total_flat = keras.ops.reshape(total, (-1,))
-            total = total_flat.scatter_add(0, indices, masked_peaks_flat).reshape(total.shape)
-
-            result = total + self.background
-
-        # Add batch dimension back if it was originally present.
-        if has_batch_dim:
-            result = keras.ops.expand_dims(result, axis=0)
-
-        return result
-
+        canvas = torch.zeros_like(x_grid).reshape(-1)
+        canvas = canvas.scatter_add(0, flat_indices, masked_peaks.reshape(-1))
+        return canvas.reshape(x_grid.shape) + self.background
 
 
 class GaussianModel(ImageModel):
-    """Gaussian peak model."""
+    """Isotropic Gaussian peak."""
 
-    def volume(self, params: dict) -> np.ndarray:
-        """Calculate the volume of each Gaussian peak.
-        
-        For a 2D Gaussian, the volume is: height * 2π * width²
-        """
-        height = params["height"]
-        width = params["width"]
+    def volume(self, params: Mapping[str, Any]) -> np.ndarray:
+        height = to_numpy(params["height"])
+        width = to_numpy(params["width"])
         return height * 2 * np.pi * width**2 * self.dx**2
 
     def model_fn(self, x, y, pos_x, pos_y, height, width, *args):
-        """Core computation for Gaussian model using PyTorch."""
-        return height * keras.ops.exp(
-            -(keras.ops.square(x - pos_x) + keras.ops.square(y - pos_y)) / (2 * keras.ops.square(width))
+        return height * torch.exp(
+            -((x - pos_x) ** 2 + (y - pos_y) ** 2) / (2 * width**2)
         )
 
-class LorentzianModel(ImageModel):
-    """Lorentzian peak model."""
 
-    def volume(self, params: dict) -> np.ndarray:
-        """Calculate the volume of each Lorentzian peak.
-        
-        For a 2D Lorentzian, the volume is: height * π * width²
-        """
-        height = params["height"]
-        width = params["width"]
+class LorentzianModel(ImageModel):
+    """Isotropic Lorentzian peak."""
+
+    def volume(self, params: Mapping[str, Any]) -> np.ndarray:
+        height = to_numpy(params["height"])
+        width = to_numpy(params["width"])
         return height * np.pi * width**2 * self.dx**2
 
     def model_fn(self, x, y, pos_x, pos_y, height, width, *args):
-        """Core computation for Lorentzian model using PyTorch."""
-        return height / (
-            1 + (keras.ops.square(x - pos_x) + keras.ops.square(y - pos_y)) / keras.ops.square(width)
-        )
+        return height / (1 + ((x - pos_x) ** 2 + (y - pos_y) ** 2) / width**2)
 
 
 class VoigtModel(ImageModel):
-    """Voigt peak model."""
-    def __init__(self, dx: float=1.0):
-        """Initialize the model.
+    """Voigt = ratio·Gaussian + (1−ratio)·Lorentzian."""
 
-        Args:
-            dx (float, optional): Pixel size. Defaults to 1.0.
-        """
+    def __init__(self, dx: float = 1.0):
         super().__init__(dx)
-        self.ratio = None
+        self.ratio: nn.Parameter | None = None  # type: ignore[assignment]
 
-    def set_params(self, params):
-        super().set_params(params)
-        # The ratio parameter will be handled by the base class update_params method
-
-    def build(self, input_shape=None):
+    def build(self, input_shape: tuple[int, ...] | None = None) -> None:
         if self.input_params is None:
-            raise ValueError("initial_params must be set before building the model.")
-        # If already built and shapes match, do nothing
+            raise ValueError("set_params() must be called before build().")
         if self.built:
             return
-            
-        # Handle both scalar and array ratio parameters
-        ratio_param = self.input_params['ratio']
-        if hasattr(ratio_param, 'shape') and len(ratio_param.shape) > 0:
-            # Array case (different ratios for each peak)
-            ratio_shape = (ratio_param.shape[0],)
-        else:
-            # Scalar case (same ratio for all peaks)
-            ratio_shape = ()
-        
-        self.ratio = self.add_weight(
-            shape=ratio_shape, 
-            initializer=keras.initializers.Constant(ratio_param), 
-            name="ratio"
-        )
-        # Call parent build method
+        self.ratio = _as_param(self.input_params["ratio"])
         super().build(input_shape)
 
-
-    def get_params(self):
+    def get_params(self) -> dict[str, Any]:
         params = super().get_params()
-        params['ratio'] = keras.ops.convert_to_tensor(self.ratio)
+        params["ratio"] = self.ratio.detach()  # type: ignore[union-attr]
         return params
 
-    def volume(self, params: dict) -> np.ndarray:
-        """Calculate the volume of each Voigt peak.
-        
-        For a 2D Voigt profile, the volume is a weighted sum of Gaussian and Lorentzian volumes:
-        V = ratio * (height * 2π * width²) + (1-ratio) * (height * π * width²)
-        """
-        height = params["height"]
-        width = params["width"]
-        ratio = params["ratio"]
-        
-        gaussian_vol = height * 2 * np.pi * width**2 * self.dx**2
-        lorentzian_vol = height * np.pi * width**2 * self.dx**2
-        
-        return ratio * gaussian_vol + (1 - ratio) * lorentzian_vol
+    def volume(self, params: Mapping[str, Any]) -> np.ndarray:
+        height = to_numpy(params["height"])
+        width = to_numpy(params["width"])
+        ratio = to_numpy(params["ratio"])
+        gaussian = height * 2 * np.pi * width**2 * self.dx**2
+        lorentzian = height * np.pi * width**2 * self.dx**2
+        return ratio * gaussian + (1 - ratio) * lorentzian
 
     def model_fn(self, x, y, pos_x, pos_y, height, width, ratio):
-        """Core computation for Voigt model using PyTorch."""
-        # Convert width to sigma and gamma
         sigma = width
-        gamma = width / keras.ops.sqrt(2 * keras.ops.log(2.0))
-        
-        # Calculate squared distance
-        r2 = keras.ops.square(x - pos_x) + keras.ops.square(y - pos_y)
-        
-        # Compute Gaussian and Lorentzian parts
-        gaussian_part = keras.ops.exp(-r2 / (2 * sigma**2))
-        lorentzian_part = gamma**3 / keras.ops.power(r2 + gamma**2, 3/2)
-        
-        # Return weighted sum
-        return height * (ratio * gaussian_part + (1 - ratio) * lorentzian_part)
+        gamma = width / torch.sqrt(torch.tensor(2.0 * np.log(2.0)))
+        r2 = (x - pos_x) ** 2 + (y - pos_y) ** 2
+        gaussian = torch.exp(-r2 / (2 * sigma**2))
+        lorentzian = gamma**3 / torch.pow(r2 + gamma**2, 1.5)
+        return height * (ratio * gaussian + (1 - ratio) * lorentzian)
 
 
 class GaussianKernel:
-    """Gaussian kernel implementation."""
+    """Convolutional Gaussian filter (separable kernel + 2D conv)."""
 
-    def __init__(self):
-        """Initialize the kernel."""
+    def gaussian_kernel(self, sigma: float) -> torch.Tensor:
+        size = int(4 * sigma + 0.5) * 2 + 1
+        x = torch.arange(-(size // 2), (size // 2) + 1, dtype=torch.float32)
+        x_grid, y_grid = torch.meshgrid(x, x, indexing="xy")
+        kernel = torch.exp(-(x_grid**2 + y_grid**2) / (2 * sigma**2))
+        return kernel / kernel.sum()
 
-    def gaussian_kernel(self, sigma):
-        """Creates a 2D Gaussian kernel with the given sigma."""
-        size = int(4 * sigma + 0.5) * 2 + 1  # Odd size
-        x = keras.ops.arange(-(size // 2), (size // 2) + 1, dtype='float32')
-        x_grid, y_grid = keras.ops.meshgrid(x, x)
-        kernel = keras.ops.exp(-(x_grid**2 + y_grid**2) / (2 * sigma**2))
-        return kernel / keras.ops.sum(kernel)
-
-    def gaussian_filter(self, image, sigma):
-        """Applies Gaussian filter to a 2D image."""
-        # Ensure both image and kernel are float32
-        image = keras.ops.cast(image, 'float32')
+    def gaussian_filter(self, image: Any, sigma: float) -> torch.Tensor:
+        image_t = to_tensor(image, dtype="float32")
         kernel = self.gaussian_kernel(sigma)
-        # Add channel dimensions for input and kernel
-        image = keras.ops.expand_dims(keras.ops.expand_dims(image, 0), -1)  # [1, H, W, 1]
-        kernel = keras.ops.expand_dims(keras.ops.expand_dims(kernel, -1), -1)  # [H, W, 1, 1]
-        filtered = keras.ops.conv(image, kernel, padding='same')
-        return keras.ops.squeeze(filtered)  # Remove extra dimensions
+        # NCHW for conv2d: image [1,1,H,W], kernel [1,1,kh,kw].
+        image_t = image_t.unsqueeze(0).unsqueeze(0)
+        kernel = kernel.unsqueeze(0).unsqueeze(0)
+        pad = kernel.shape[-1] // 2
+        return torch.nn.functional.conv2d(image_t, kernel, padding=pad).squeeze()
+
 
 @njit
 def gaussian_2d_single(xy, pos_x, pos_y, height, width, background):
-    """2D Gaussian function for single atom."""
+    """Numba-jitted 2D Gaussian (used by point-potential fits)."""
     x_grid, y_grid = xy
     return (
         height
         * np.exp(
-            -((x_grid[:,:,None] - pos_x) ** 2 + (y_grid[:,:,None] - pos_y) ** 2) / (2 * width**2)
+            -((x_grid[:, :, None] - pos_x) ** 2 + (y_grid[:, :, None] - pos_y) ** 2)
+            / (2 * width**2)
         ) + background
     ).ravel()

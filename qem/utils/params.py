@@ -1,110 +1,32 @@
+"""Parameter-dict helpers for QEM fitting.
+
+Re-exports the tensor-conversion helpers under their historical names
+so existing call sites keep working with one fewer import line.
 """
-PyTorch-safe utilities and I/O functions for QEM.
-"""
 
-import numpy as np
+from __future__ import annotations
+
+import h5py
+
+from .tensors import (
+    clone_params as safe_deepcopy_params,
+    stop_grad as safe_stop_gradient,
+    to_numpy as safe_convert_to_numpy,
+    to_tensor as safe_convert_to_tensor,
+)
 
 
-def export_params(params, filename):
-    """
-    Export the parameters to a file.
-
-    Parameters:
-    - params: Dictionary of parameters to export.
-    - filename: Name of the file to export to.
-    """
-    with open(filename, "w") as f:
+def export_params(params: dict, filename: str) -> None:
+    """Write a flat parameter dict to an HDF5 file."""
+    with h5py.File(filename, "w") as f:
         for key, value in params.items():
-            f.create_dataset(key, data=value)
-    f.close()
-
-# Backend-safe tensor conversion utilities
-def safe_convert_to_numpy(tensor):
-    """
-    Safely convert a tensor to a numpy array.
-    
-    Args:
-        tensor: PyTorch tensor or numpy array
-        
-    Returns:
-        numpy.ndarray: The tensor converted to numpy array
-    """
-    if isinstance(tensor, np.ndarray):
-        return tensor
-    if hasattr(tensor, "detach"):
-        return tensor.detach().cpu().numpy()
-    return np.asarray(tensor)
+            f.create_dataset(key, data=safe_convert_to_numpy(value))
 
 
-def safe_convert_to_tensor(array, dtype="float32"):
-    """
-    Safely convert a numpy array to PyTorch tensor.
-    
-    Args:
-        array: numpy array or tensor
-        dtype: target dtype for the tensor
-        
-    Returns:
-        PyTorch tensor
-    """
-    from qem.utils import torch_compat as keras
-    return keras.ops.convert_to_tensor(array, dtype=dtype)
-
-def safe_stop_gradient(tensor):
-    """
-    Safely apply stop_gradient to a tensor, handling numpy scalars and arrays.
-    
-    Args:
-        tensor: Tensor, numpy array, or scalar
-        
-    Returns:
-        Tensor with gradients stopped, or original value if not a tensor
-    """
-    from qem.utils import torch_compat as keras
-    ops = keras.ops
-    
-    # If it's a numpy scalar or doesn't have gradients, return as-is
-    if isinstance(tensor, (int, float, np.integer, np.floating)):
-        return tensor
-    
-    # If it's a numpy array, convert to tensor first
-    if isinstance(tensor, np.ndarray):
-        tensor = ops.convert_to_tensor(tensor)
-    
-    # Apply stop_gradient if it's a tensor
-    if hasattr(tensor, 'shape'):
-        try:
-            return ops.stop_gradient(tensor)
-        except (AttributeError, TypeError):
-            # Fallback for cases where stop_gradient doesn't work
-            return tensor
-    
-    return tensor
-
-
-def safe_deepcopy_params(params):
-    """
-    Safely deep copy a parameter dictionary containing tensors.
-    
-    Args:
-        params: Dictionary containing tensors and other values
-        
-    Returns:
-        Dictionary with safely copied parameters
-    """
-    import copy
-    from qem.utils import torch_compat as keras
-    ops = keras.ops
-    copied_params = {}
-    
-    for key, value in params.items():
-        if hasattr(value, 'shape'):  # It's a tensor
-            if hasattr(value, 'detach'):
-                copied_params[key] = value.detach().clone()
-            else:
-                copied_params[key] = ops.convert_to_tensor(safe_convert_to_numpy(value))
-        else:
-            # For non-tensors, use regular deepcopy
-            copied_params[key] = copy.deepcopy(value)
-    
-    return copied_params
+__all__ = [
+    "export_params",
+    "safe_convert_to_numpy",
+    "safe_convert_to_tensor",
+    "safe_stop_gradient",
+    "safe_deepcopy_params",
+]
