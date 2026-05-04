@@ -15,7 +15,7 @@ from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.signal import fftconvolve
 
 from qem.fit.model import ImageModel
-from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
+from qem.utils.tensors import to_numpy, to_tensor
 
 
 class PointPotentialModel:
@@ -241,7 +241,7 @@ class ConvolutionImageModel(ImageModel):
         """
         super().__init__(dx)
         psf_kernel = np.asarray(psf_kernel, dtype=np.float32)
-        self.psf_kernel = safe_convert_to_tensor(psf_kernel)
+        self.psf_kernel = to_tensor(psf_kernel)
         self.ny, self.nx = psf_kernel.shape
 
         # Pre-compute PSF kernel info for efficient convolution
@@ -258,7 +258,7 @@ class ConvolutionImageModel(ImageModel):
         # Update PSF kernel if provided
         if "psf_kernel" in params:
             psf = np.asarray(params["psf_kernel"], dtype=np.float32)
-            self.psf_kernel = safe_convert_to_tensor(psf)
+            self.psf_kernel = to_tensor(psf)
             self._psf_np = psf
             self._ky, self._kx = psf.shape
             self._ky_half, self._kx_half = self._ky // 2, self._kx // 2
@@ -402,9 +402,9 @@ class ConvolutionImageModel(ImageModel):
             Point-potential map (2D array)
         """
         # Convert to numpy for efficient scatter operation
-        pos_x_np = safe_convert_to_numpy(pos_x)
-        pos_y_np = safe_convert_to_numpy(pos_y)
-        height_np = safe_convert_to_numpy(height)
+        pos_x_np = to_numpy(pos_x)
+        pos_y_np = to_numpy(pos_y)
+        height_np = to_numpy(height)
 
         potential_map = np.zeros((ny, nx), dtype=np.float32)
 
@@ -431,7 +431,7 @@ class ConvolutionImageModel(ImageModel):
             if 0 <= x_int + 1 < nx and 0 <= y_int + 1 < ny:
                 potential_map[y_int + 1, x_int + 1] += w11 * phi
 
-        return safe_convert_to_tensor(potential_map)
+        return to_tensor(potential_map)
 
     def volume(self, params: dict) -> np.ndarray:
         """
@@ -451,7 +451,7 @@ class ConvolutionImageModel(ImageModel):
         volumes : np.ndarray
             Phase values (same as height)
         """
-        height = safe_convert_to_numpy(params["height"])
+        height = to_numpy(params["height"])
         return height * self.dx ** 2
 
     def simulate_with_psf(
@@ -482,7 +482,7 @@ class ConvolutionImageModel(ImageModel):
         simulated_image : np.ndarray
             Simulated image with PSF convolution
         """
-        psf = safe_convert_to_numpy(self.psf_kernel)
+        psf = to_numpy(self.psf_kernel)
         gridshape = (self.ny, self.nx)
 
         simulated = self._point_potential_model.simulate_from_positions(

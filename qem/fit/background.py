@@ -22,7 +22,7 @@ except ImportError:
     PHOTUTILS_AVAILABLE = False
     logging.debug("photutils is not installed; falling back to median/polynomial background methods.")
 
-from qem.utils.params import safe_convert_to_numpy
+from qem.utils.tensors import to_numpy
 
 
 class Background:
@@ -42,7 +42,7 @@ class Background:
             dx: Pixel size (default: 1.0)
             mask: Optional mask array for excluded regions
         """
-        self.image = safe_convert_to_numpy(image)
+        self.image = to_numpy(image)
         self.dx = dx
         self.mask = mask
         self.ny, self.nx = self.image.shape
@@ -451,7 +451,7 @@ def get_current_background(self) -> np.ndarray:
         # Get scalar background value
         bg_value = getattr(self, 'init_background', 0.0)
         if self.params is not None and 'background' in self.params:
-            bg_value = safe_convert_to_numpy(self.params['background'])
+            bg_value = to_numpy(self.params['background'])
             if np.isscalar(bg_value):
                 bg_value = float(bg_value)
             else:

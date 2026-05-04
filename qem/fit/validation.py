@@ -1,25 +1,20 @@
-"""
-Input validation utilities for QEM image fitting.
-Provides comprehensive validation for user inputs and model parameters.
-"""
+"""Input validation for the public Fitter API."""
 
 import logging
 from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 
+from qem.utils.exceptions import ValidationError
 
-from qem.utils.exceptions import ValidationError as _ValidationError
 
-
-def ValidationError(parameter: str, value, message: str, suggestion: str | None = None):  # noqa: N802
-    """Backwards-compatible factory for the historic four-positional-arg
-    call shape. Returns the canonical ``qem.utils.exceptions.ValidationError``
-    so callers catching either the local or canonical type still work."""
+def _invalid(parameter: str, value, message: str, suggestion: str | None = None) -> ValidationError:
+    """Build a canonical ValidationError for the historic
+    (parameter, value, message, suggestion) shape."""
     msg = f"Parameter '{parameter}' validation failed: {value} - {message}"
     if suggestion:
         msg = f"{msg}. Suggestion: {suggestion}"
-    return _ValidationError(
+    return ValidationError(
         msg,
         validation_rules=[parameter] if parameter else None,
         suggestion=suggestion,
@@ -46,21 +41,21 @@ class FitterValidator:
             ValidationError: If image is invalid
         """
         if not isinstance(image, np.ndarray):
-            raise ValidationError(
+            raise _invalid(
                 "image", type(image).__name__, 
                 "must be a numpy array",
                 "Convert your data to numpy.ndarray using np.array()"
             )
         
         if image.ndim != 2:
-            raise ValidationError(
+            raise _invalid(
                 "image_shape", image.shape,
                 f"must be 2D array, got {image.ndim}D",
                 f"Expected shape (height, width), got {image.shape}"
             )
         
         if image.size == 0:
-            raise ValidationError(
+            raise _invalid(
                 "image", image.shape,
                 "cannot be empty",
                 "Provide a non-empty 2D array"
@@ -68,7 +63,7 @@ class FitterValidator:
         
         # Check for minimum size
         if image.shape[0] < 10 or image.shape[1] < 10:
-            raise ValidationError(
+            raise _invalid(
                 "image_size", image.shape,
                 f"too small: {image.shape}. Minimum size is 10x10 pixels",
                 "Use larger images or resize your input"
@@ -77,7 +72,7 @@ class FitterValidator:
         # Check for maximum reasonable size
         max_pixels = max_size * max_size
         if image.shape[0] * image.shape[1] > max_pixels:
-            raise ValidationError(
+            raise _invalid(
                 "image_size", image.shape,
                 f"too large: {image.shape} ({image.shape[0]*image.shape[1]:,} pixels)",
                 f"Maximum allowed: {max_pixels:,} pixels ({max_size}x{max_size})"
@@ -86,7 +81,7 @@ class FitterValidator:
         # Check memory usage
         estimated_memory_mb = image.nbytes / (1024 * 1024)
         if estimated_memory_mb > max_memory_mb:
-            raise ValidationError(
+            raise _invalid(
                 "image_memory", f"{estimated_memory_mb:.1f}MB",
                 f"exceeds memory limit of {max_memory_mb}MB",
                 "Use smaller images or downsample your data"
@@ -95,21 +90,21 @@ class FitterValidator:
         # Check data type and range
         supported_dtypes = {np.float32, np.float64, np.int16, np.int32, np.int64, np.uint8, np.uint16}
         if image.dtype.type not in supported_dtypes:
-            raise ValidationError(
+            raise _invalid(
                 "image_dtype", image.dtype,
                 f"unsupported dtype. Supported: {supported_dtypes}",
                 f"Convert using image.astype(np.float32)"
             )
         
         if np.any(np.isnan(image)):
-            raise ValidationError(
+            raise _invalid(
                 "image_data", "NaN detected",
                 "contains NaN values",
                 "Clean your data using np.nan_to_num() or remove NaN pixels"
             )
         
         if np.any(np.isinf(image)):
-            raise ValidationError(
+            raise _invalid(
                 "image_data", "Inf detected",
                 "contains infinite values",
                 "Clean your data using np.isfinite() mask"
@@ -117,7 +112,7 @@ class FitterValidator:
         
         # Ensure image has reasonable dynamic range
         if image.max() == image.min():
-            raise ValidationError(
+            raise _invalid(
                 "image_dynamic_range", f"min={image.min()}, max={image.max()}",
                 "has no intensity variation (constant values)",
                 "Check if your image contains actual data"
@@ -144,21 +139,21 @@ class FitterValidator:
             ValidationError: If dx is invalid
         """
         if not isinstance(dx, (int, float)):
-            raise ValidationError(
+            raise _invalid(
                 "dx", type(dx).__name__,
                 "must be a number",
                 "Provide a numeric value (int or float)"
             )
         
         if np.isnan(dx) or np.isinf(dx):
-            raise ValidationError(
+            raise _invalid(
                 "dx", dx,
                 "must be finite (not NaN or Inf)",
                 "Check your input data for invalid values"
             )
         
         if dx <= 0:
-            raise ValidationError(
+            raise _invalid(
                 "dx", dx,
                 "must be positive",
                 "Provide a positive value greater than 0"
@@ -166,7 +161,7 @@ class FitterValidator:
         
         # Add reasonable bounds for numerical stability
         if dx < 1e-6:
-            raise ValidationError(
+            raise _invalid(
                 "dx", dx,
                 "too small for numerical stability",
                 "Use dx >= 1e-6 to avoid precision issues"
@@ -261,7 +256,7 @@ class FitterValidator:
             ValidationError: If coordinates are invalid
         """
         if not isinstance(coordinates, np.ndarray):
-            raise ValidationError(
+            raise _invalid(
                 "coordinates", type(coordinates).__name__,
                 "must be a numpy array",
                 "Convert your data to numpy.ndarray using np.array()"
@@ -272,14 +267,14 @@ class FitterValidator:
             return coordinates
         
         if coordinates.ndim != 2:
-            raise ValidationError(
+            raise _invalid(
                 "coordinates_shape", coordinates.shape,
                 f"must be 2D array, got {coordinates.ndim}D",
                 f"Expected shape (N, 2), got {coordinates.shape}"
             )
         
         if coordinates.shape[1] != 2:
-            raise ValidationError(
+            raise _invalid(
                 "coordinates_columns", coordinates.shape[1],
                 "must have exactly 2 columns (x, y)",
                 f"Reshape your array to (N, 2) where N is the number of atoms"
@@ -287,14 +282,14 @@ class FitterValidator:
         
         # Check for valid coordinate values
         if np.any(np.isnan(coordinates)):
-            raise ValidationError(
+            raise _invalid(
                 "coordinates_data", "NaN detected",
                 "contains NaN values",
                 "Clean your data using np.nan_to_num() or remove NaN coordinates"
             )
         
         if np.any(np.isinf(coordinates)):
-            raise ValidationError(
+            raise _invalid(
                 "coordinates_data", "Inf detected",
                 "contains infinite values",
                 "Clean your data using np.isfinite() mask"
@@ -304,7 +299,7 @@ class FitterValidator:
         unique_coords = np.unique(coordinates, axis=0)
         if len(unique_coords) < len(coordinates):
             num_duplicates = len(coordinates) - len(unique_coords)
-            raise ValidationError(
+            raise _invalid(
                 "coordinates_duplicates", f"{num_duplicates} duplicates",
                 "contains duplicate coordinates",
                 "Remove duplicate coordinates using np.unique(..., axis=0)"
@@ -321,7 +316,7 @@ class FitterValidator:
         if np.any(out_of_bounds_x) or np.any(out_of_bounds_y):
             invalid_coords = coordinates[out_of_bounds_x | out_of_bounds_y]
             if strict_bounds:
-                raise ValidationError(
+                raise _invalid(
                     "coordinates_bounds", invalid_coords.tolist(),
                     f"coordinates outside image bounds {image_shape}",
                     "Use strict_bounds=False to clip coordinates to bounds"

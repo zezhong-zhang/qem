@@ -34,7 +34,7 @@ from qem.fit.potential import (
     normalized_root_mean_square_error,
     calculate_residual,
 )
-from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
+from qem.utils.tensors import to_numpy, to_tensor
 
 
 def _bilinear_point_potential(
@@ -207,8 +207,8 @@ class ConvolutionModel(torch.nn.Module):
                 # the legacy NumPy implementation; keep gradients off this
                 # branch by detaching, optimise it via finite differences if
                 # ever needed.
-                psf_np = self._scale_psf(safe_convert_to_numpy(psf), float(scale.detach()))
-                psf = safe_convert_to_tensor(psf_np.astype(np.float32))
+                psf_np = self._scale_psf(to_numpy(psf), float(scale.detach()))
+                psf = to_tensor(psf_np.astype(np.float32))
 
         return _fft_convolve_same(potential, psf)
 
@@ -483,7 +483,7 @@ class PtychoOptimizer:
         self.model.build()
 
         # Prepare target image tensor
-        target_tensor = safe_convert_to_tensor(self.target_image)
+        target_tensor = to_tensor(self.target_image)
         gridshape = np.array([self.ny, self.nx], dtype=np.int32)
 
         # Pure-PyTorch training loop with explicit progress tracking and
@@ -507,7 +507,7 @@ class PtychoOptimizer:
 
             loss_val = float(loss.detach())
             correlation = -loss_val
-            simulated_np = safe_convert_to_numpy(simulated)
+            simulated_np = to_numpy(simulated)
             nrmse = normalized_root_mean_square_error(simulated_np, self.target_image)
             history['loss'].append(loss_val)
             history['correlation'].append(correlation)
@@ -531,26 +531,26 @@ class PtychoOptimizer:
         # Extract optimized parameters
         opt_params = self.model.get_params()
         opt_positions = np.column_stack([
-            safe_convert_to_numpy(opt_params['pos_x']),
-            safe_convert_to_numpy(opt_params['pos_y']),
+            to_numpy(opt_params['pos_x']),
+            to_numpy(opt_params['pos_y']),
         ])
-        opt_phases = safe_convert_to_numpy(opt_params['phases'])
+        opt_phases = to_numpy(opt_params['phases'])
 
         # Extract optional parameters
         opt_tilt_x = 0.0
         opt_tilt_y = 0.0
         if 'tilt_x' in opt_params:
-            opt_tilt_x = float(safe_convert_to_numpy(opt_params['tilt_x']))
+            opt_tilt_x = float(to_numpy(opt_params['tilt_x']))
         if 'tilt_y' in opt_params:
-            opt_tilt_y = float(safe_convert_to_numpy(opt_params['tilt_y']))
+            opt_tilt_y = float(to_numpy(opt_params['tilt_y']))
 
         opt_psf_scale = 1.0
         if 'psf_scale' in opt_params:
-            opt_psf_scale = float(safe_convert_to_numpy(opt_params['psf_scale']))
+            opt_psf_scale = float(to_numpy(opt_params['psf_scale']))
 
         # Calculate final metrics
         simulated = self.model(gridshape)
-        final_sim = safe_convert_to_numpy(simulated)
+        final_sim = to_numpy(simulated)
         final_corr = correlation_coefficient(final_sim, self.target_image)
         final_nrmse = normalized_root_mean_square_error(final_sim, self.target_image)
 

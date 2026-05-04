@@ -241,7 +241,6 @@ class JointLeastSquaresRoute:
             lr_patience=10,
             lr_factor=0.5,
             min_lr=1e-6,
-            snapshot_every=max(self.max_iter, 1),
             post_step=_project_nonneg,
             verbose=False,
         )

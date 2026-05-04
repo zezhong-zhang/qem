@@ -12,9 +12,13 @@ from tqdm import tqdm as progressbar
 from scipy.spatial import cKDTree
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import nullcontext
+
+from scipy.optimize import curve_fit
 from tqdm import tqdm
 
-from qem.utils.params import safe_convert_to_numpy
+from qem.fit.model import gaussian_2d_single
+from qem.utils.tensors import clone_params, to_numpy, to_tensor
 
 if TYPE_CHECKING:
     from qem.fit.fitter import Fitter  # noqa: F401
@@ -418,9 +422,9 @@ def fit_voronoi(
     if max_radius is None:
         max_radius = params["width"].max() * 3
 
-    image = safe_convert_to_numpy(self.image)
-    max_radius = safe_convert_to_numpy(max_radius)
-    coords = safe_convert_to_numpy(coords)
+    image = to_numpy(self.image)
+    max_radius = to_numpy(max_radius)
+    coords = to_numpy(coords)
 
     point_record = voronoi_point_record(image, coords, max_radius)
 
@@ -447,8 +451,8 @@ def fit_voronoi(
         x_c, y_c = torch.meshgrid(
             torch.arange(x0, x1), torch.arange(y0, y1), indexing="xy"
         )
-        x_c = safe_convert_to_numpy(x_c)
-        y_c = safe_convert_to_numpy(y_c)
+        x_c = to_numpy(x_c)
+        y_c = to_numpy(y_c)
 
         # Prepare initial params for this cell
         local_param = {}
@@ -505,8 +509,8 @@ def fit_voronoi(
         return optimized_param, index
 
     converged = False
-    pre_params = safe_deepcopy_params(self.params)
-    current_params = safe_deepcopy_params(self.params)
+    pre_params = clone_params(self.params)
+    current_params = clone_params(self.params)
 
 
     operation_context = (
@@ -537,22 +541,22 @@ def fit_voronoi(
 
                 # Apply updates by creating new tensors (avoid in-place operations)
                 if pos_x_updates:
-                    pos_x_array = safe_convert_to_numpy(current_params["pos_x"]).copy()
-                    pos_y_array = safe_convert_to_numpy(current_params["pos_y"]).copy()
+                    pos_x_array = to_numpy(current_params["pos_x"]).copy()
+                    pos_y_array = to_numpy(current_params["pos_y"]).copy()
 
                     for index, value in pos_x_updates.items():
                         pos_x_array[index] = value
                     for index, value in pos_y_updates.items():
                         pos_y_array[index] = value
 
-                    current_params["pos_x"] = safe_convert_to_tensor(
+                    current_params["pos_x"] = to_tensor(
                         pos_x_array, dtype=torch.float32
                     )
-                    current_params["pos_y"] = safe_convert_to_tensor(
+                    current_params["pos_y"] = to_tensor(
                         pos_y_array, dtype=torch.float32
                     )
             converged = self.convergence(current_params, pre_params, tol)
-            pre_params = safe_deepcopy_params(current_params)
+            pre_params = clone_params(current_params)
     self.params = current_params
     # self.model = self.predict(self.params, self.x_grid, self.y_grid)
     return self.params
@@ -567,16 +571,16 @@ def voronoi_integration(self, max_radius: float = None, plot=False,save=False):
     if self.params is None:
         raise ValueError("Please initialize the parameters first.")
     if self.fit_background:
-        image = (self.image - safe_convert_to_numpy(self.params["background"]))
+        image = (self.image - to_numpy(self.params["background"]))
     else:
         image = (self.image - self.init_background)
     pos_x = self.params["pos_x"]
     pos_y = self.params["pos_y"]
-    pos_x = safe_convert_to_numpy(pos_x)
-    pos_y = safe_convert_to_numpy(pos_y)
+    pos_x = to_numpy(pos_x)
+    pos_y = to_numpy(pos_y)
     if max_radius is None:
         max_radius = self.params["width"].max() * 5
-        max_radius = safe_convert_to_numpy(max_radius)
+        max_radius = to_numpy(max_radius)
     integrated_intensity, intensity_record, point_record = voronoi_integrate(
         image, pos_x, pos_y, max_radius=max_radius, pbc=self.pbc
     )

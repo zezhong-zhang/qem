@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from qem.fit.refine import calculate_center_of_mass
 from qem.fit.voronoi import voronoi_point_record
-from qem.utils.params import safe_convert_to_numpy
+from qem.utils.tensors import to_numpy
 from qem.viz.geometry import remove_close_coordinates as _geom_remove_close_coordinates
 from qem.viz.select import InteractivePlot
 

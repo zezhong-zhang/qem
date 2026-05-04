@@ -27,39 +27,34 @@ def _run(env_overrides: dict[str, str | None], script: str) -> subprocess.Comple
     )
 
 
-def test_import_qem_uses_pytorch_backend():
-    """Bare ``import qem`` must succeed and expose the torch backend."""
+def test_import_qem_uses_pytorch():
+    """Bare ``import qem`` must succeed and pick a torch device."""
     result = _run(
-        {"QEM_BACKEND": None},
+        {"QEM_DEVICE": None},
         """
         import qem  # noqa: F401
-        from qem.utils.backend import get_best_backend
-        print(get_best_backend())
+        from qem.utils.tensors import best_device
+        device = best_device()
+        # Any of cpu / cuda / mps is fine — must be a torch device.
+        assert device.type in ("cpu", "cuda", "mps"), device
+        print("torch")
         """,
     )
     assert result.returncode == 0, result.stderr
     assert _last_line(result.stdout) == "torch"
 
 
-def test_import_qem_reports_missing_torch():
-    """When PyTorch is not importable, backend selection reports the dependency."""
+def test_qem_device_env_override():
+    """QEM_DEVICE=cpu forces best_device() to return CPU."""
     result = _run(
-        {"QEM_BACKEND": None},
+        {"QEM_DEVICE": "cpu"},
         """
-        import importlib.util
-        _real = importlib.util.find_spec
-        def _stub(name, *a, **k):
-            if name == 'torch':
-                return None
-            return _real(name, *a, **k)
-        importlib.util.find_spec = _stub
-
-        from qem.utils.backend import detect_available_backends
-        print(detect_available_backends())
+        from qem.utils.tensors import best_device
+        print(best_device().type)
         """,
     )
     assert result.returncode == 0, result.stderr
-    assert _last_line(result.stdout) == "[]"
+    assert _last_line(result.stdout) == "cpu"
 
 
 def test_legacy_keras_backend_env_is_ignored():
@@ -68,9 +63,10 @@ def test_legacy_keras_backend_env_is_ignored():
         {"KERAS_BACKEND": "numpy"},
         """
         import qem  # noqa: F401
-        from qem.utils.backend import get_best_backend
-        print(get_best_backend())
+        from qem.utils.tensors import best_device
+        # Just exercise the import path — KERAS_BACKEND should be ignored entirely.
+        print(best_device().type in ("cpu", "cuda", "mps"))
         """,
     )
     assert result.returncode == 0, result.stderr
-    assert _last_line(result.stdout) == "torch"
+    assert _last_line(result.stdout) == "True"

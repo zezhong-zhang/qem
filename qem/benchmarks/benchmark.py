@@ -7,7 +7,7 @@ from sklearn.ensemble import IsolationForest
 
 from qem.io.statstem import read_statstem
 from qem.fit.fitter import Fitter
-from qem.utils.params import safe_convert_to_numpy
+from qem.utils.tensors import to_numpy
 
 
 def time_it(func):
@@ -121,8 +121,8 @@ class Benchmark:
         plt.figure(figsize=(15, 5))
         plt.subplot(1, 3, 1)
         im = plt.scatter(
-            safe_convert_to_numpy(self.qem.params["pos_x"]),
-            safe_convert_to_numpy(self.qem.params["pos_y"]),
+            to_numpy(self.qem.params["pos_x"]),
+            to_numpy(self.qem.params["pos_y"]),
             s=1,
             c=self.scs_qem,
             cmap="viridis",
@@ -134,8 +134,8 @@ class Benchmark:
         plt.tight_layout()
         plt.subplot(1, 3, 2)
         im = plt.scatter(
-            safe_convert_to_numpy(self.qem.params["pos_x"]),
-            safe_convert_to_numpy(self.qem.params["pos_y"]),
+            to_numpy(self.qem.params["pos_x"]),
+            to_numpy(self.qem.params["pos_y"]),
             s=1,
             c=self.scs_voronoi,
             cmap="viridis",
@@ -147,8 +147,8 @@ class Benchmark:
         plt.tight_layout()
         plt.subplot(1, 3, 3)
         im = plt.scatter(
-            safe_convert_to_numpy(self.qem.params["pos_x"]),
-            safe_convert_to_numpy(self.qem.params["pos_y"]),
+            to_numpy(self.qem.params["pos_x"]),
+            to_numpy(self.qem.params["pos_y"]),
             s=1,
             c=self.scs_voronoi - self.scs_qem,
             cmap="viridis",
@@ -260,8 +260,8 @@ class Benchmark:
     def compare_scs_map(self, folder_path=None, file_path=None, save=False):
         volume_qem = self.scs_qem
         volume_statstem = self.scs_statstem
-        pos_x = safe_convert_to_numpy(self.params_qem["pos_x"]) * self.dx
-        pos_y = safe_convert_to_numpy(self.params_qem["pos_y"]) * self.dx
+        pos_x = to_numpy(self.params_qem["pos_x"]) * self.dx
+        pos_y = to_numpy(self.params_qem["pos_y"]) * self.dx
         pos_x_statstem = self.output_coordinates[:, 0]
         pos_y_statstem = self.output_coordinates[:, 1]
         index_statstem_in_qem = np.array(
@@ -347,8 +347,8 @@ class Benchmark:
         volume_qem = self.scs_qem
         volume_statstem = self.scs_statstem
         if volume_qem.shape != volume_statstem.shape:
-            pos_x = safe_convert_to_numpy(self.params_qem["pos_x"]) * self.dx
-            pos_y = safe_convert_to_numpy(self.params_qem["pos_y"]) * self.dx
+            pos_x = to_numpy(self.params_qem["pos_x"]) * self.dx
+            pos_y = to_numpy(self.params_qem["pos_y"]) * self.dx
             pos_x_statstem = self.output_coordinates[:, 0]
             pos_y_statstem = self.output_coordinates[:, 1]
             index_statstem_in_qem = np.array(

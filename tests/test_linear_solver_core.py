@@ -8,7 +8,6 @@ from scipy.sparse import coo_matrix
 
 from qem.utils.exceptions import DataError
 from qem.fit.sparse import SparseSolver, clip_height_scale
-from qem.utils.backend import detect_available_backends
 
 
 def test_sparse_solve_success() -> None:
@@ -38,5 +37,3 @@ def test_clip_height_scale_returns_clipped_copy() -> None:
     np.testing.assert_allclose(scale, np.array([0.05, 2.0, 12.0]))
 
 
-def test_backend_detection_handles_broken_optional_backends() -> None:
-    assert isinstance(detect_available_backends(), list)

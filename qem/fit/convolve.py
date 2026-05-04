@@ -133,7 +133,7 @@ from qem.fit.potential import (
     calculate_residual,
 )
 from qem.fit.fitter import Fitter
-from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
+from qem.utils.tensors import to_numpy, to_tensor
 
 
 @dataclass
@@ -417,13 +417,13 @@ class ConvFit(Fitter):
 
         # Extract results
         opt_positions = np.column_stack([
-            safe_convert_to_numpy(optimized_params['pos_x']),
-            safe_convert_to_numpy(optimized_params['pos_y']),
+            to_numpy(optimized_params['pos_x']),
+            to_numpy(optimized_params['pos_y']),
         ])
-        opt_values = safe_convert_to_numpy(optimized_params['height'])
+        opt_values = to_numpy(optimized_params['height'])
 
         # Calculate final metrics
-        sim_image = safe_convert_to_numpy(self.predict(optimized_params))
+        sim_image = to_numpy(self.predict(optimized_params))
         corr = correlation_coefficient(sim_image, self.image)
         nrmse_val = normalized_root_mean_square_error(sim_image, self.image)
 
@@ -444,29 +444,29 @@ class ConvFit(Fitter):
         """Get optimized values (phases/intensities) from current parameters."""
         if self.params is None:
             raise ValueError("No parameters available. Run fit_positions() first.")
-        return safe_convert_to_numpy(self.params['height'])
+        return to_numpy(self.params['height'])
 
     def get_positions(self) -> np.ndarray:
         """Get optimized atomic positions from current parameters."""
         if self.params is None:
             raise ValueError("No parameters available. Run fit_positions() first.")
         return np.column_stack([
-            safe_convert_to_numpy(self.params['pos_x']),
-            safe_convert_to_numpy(self.params['pos_y']),
+            to_numpy(self.params['pos_x']),
+            to_numpy(self.params['pos_y']),
         ])
 
     def get_correlation(self) -> float:
         """Get current correlation coefficient."""
         if self.params is None:
             raise ValueError("No parameters available. Run fit_positions() first.")
-        sim_image = safe_convert_to_numpy(self.predict(self.params))
+        sim_image = to_numpy(self.predict(self.params))
         return correlation_coefficient(sim_image, self.image)
 
     def get_nrmse(self) -> float:
         """Get current normalized RMS error."""
         if self.params is None:
             raise ValueError("No parameters available. Run fit_positions() first.")
-        sim_image = safe_convert_to_numpy(self.predict(self.params))
+        sim_image = to_numpy(self.predict(self.params))
         return normalized_root_mean_square_error(sim_image, self.image)
 
 

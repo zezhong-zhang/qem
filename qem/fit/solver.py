@@ -14,8 +14,8 @@ import torch
 from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import spsolve, lsqr, cg
 
-from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
-from qem.utils.backend import release_backend_memory
+from qem.utils.tensors import to_numpy, to_tensor
+from qem.utils.tensors import release_memory
 from qem.utils.config import get_config
 from qem.utils.exceptions import ParameterError, DataError
 
@@ -400,7 +400,7 @@ class DesignMatrixBuilder:
             rows_tensor = torch.cat([rows_tensor, bg_rows.to(dtype=torch.int32)])
 
             del bg_rows
-            release_backend_memory()
+            release_memory()
 
             cols_tensor = torch.cat([cols_tensor,
                 torch.full((self.nx * self.ny,), num_coordinates, dtype=torch.int32)])
@@ -422,7 +422,7 @@ class DesignMatrixBuilder:
         del rows_tensor
         del cols_tensor
         del data_tensor
-        release_backend_memory()
+        release_memory()
         return sparse_matrix
     
     def _create_sparse_matrix(self, data_tensor, rows_tensor, cols_tensor, shape, device: str = 'cpu'):
@@ -439,8 +439,8 @@ class DesignMatrixBuilder:
             )
         return coo_matrix(
             (
-                safe_convert_to_numpy(data_tensor),
-                (safe_convert_to_numpy(rows_tensor), safe_convert_to_numpy(cols_tensor)),
+                to_numpy(data_tensor),
+                (to_numpy(rows_tensor), to_numpy(cols_tensor)),
             ),
             shape=shape,
         )
@@ -473,7 +473,7 @@ class ParameterValidator:
         
         # Check for invalid values
         for key in required_keys:
-            values = safe_convert_to_numpy(params[key])
+            values = to_numpy(params[key])
             if np.any(np.isnan(values)) or np.any(np.isinf(values)):
                 raise ParameterError(f"Parameter '{key}' contains NaN or infinite values")
         
@@ -503,7 +503,7 @@ class SolutionProcessor:
         """Process and constrain height scaling factors."""
         # Convert to tensor for processing if it's a numpy array
         if isinstance(height_scale, np.ndarray):
-            height_tensor = safe_convert_to_tensor(height_scale)
+            height_tensor = to_tensor(height_scale)
         else:
             height_tensor = height_scale
         
@@ -541,7 +541,7 @@ class SolutionProcessor:
             )
         
         # Convert back to numpy for consistency with original interface
-        return safe_convert_to_numpy(height_tensor)
+        return to_numpy(height_tensor)
 
     @staticmethod
     def process_background(solution, params, init_background, update_threshold=0.2):
@@ -550,14 +550,14 @@ class SolutionProcessor:
         if isinstance(solution, np.ndarray):
             background_val = float(solution[-1])
         else:
-            background_val = float(safe_convert_to_numpy(solution[-1]))
+            background_val = float(to_numpy(solution[-1]))
         
         background = max(background_val, init_background)
         
         # Get previous background value
         prev_background = params["background"]
         if hasattr(prev_background, 'shape'):  # It's a tensor
-            prev_bg_val = float(safe_convert_to_numpy(prev_background))
+            prev_bg_val = float(to_numpy(prev_background))
         else:
             prev_bg_val = float(prev_background)
         
@@ -664,7 +664,7 @@ def _prepare_target_vector(self, params: dict) -> np.ndarray:
     Returns:
         Flattened target vector
     """
-    # target = safe_convert_to_numpy(self.image_tensor).ravel()
+    # target = to_numpy(self.image_tensor).ravel()
     target = self.image_tensor.ravel()
     
     if not self.fit_background:
@@ -707,7 +707,7 @@ def _process_solution(self, solution: np.ndarray, params: dict, update_threshold
             if 0.01 < background_scale < 100.0:  # Reasonable bounds
                 self.update_2d_background_scale(float(background_scale))
                 # Update the background_scale parameter
-                params["background_scale"] = safe_convert_to_tensor(float(background_scale))
+                params["background_scale"] = to_tensor(float(background_scale))
                 # Remove old background parameter if it exists
                 if "background" in params:
                     del params["background"]
@@ -725,7 +725,7 @@ def _process_solution(self, solution: np.ndarray, params: dict, update_threshold
                 return params
             
             # Convert background to Keras tensor to match parameter types
-            params["background"] = safe_convert_to_tensor(background)
+            params["background"] = to_tensor(background)
             height_scale = solution[:-1]
     else:
         height_scale = solution
@@ -734,7 +734,7 @@ def _process_solution(self, solution: np.ndarray, params: dict, update_threshold
     processed_scale = processor.process_height_scaling(height_scale)
     
     # Convert processed scale to Keras tensor to match parameter types
-    processed_scale_tensor = safe_convert_to_tensor(processed_scale)
+    processed_scale_tensor = to_tensor(processed_scale)
     
     # Update height parameters
     params["height"] *= processed_scale_tensor

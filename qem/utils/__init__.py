@@ -1,28 +1,24 @@
-"""
-Utility functions and helpers for QEM.
-"""
+"""Utility functions for QEM."""
 
-from .params import *
-from .log import *
-from .backend import *
-from .arrays import *
-from .memory import *
+from .arrays import *  # noqa: F401, F403
+from .log import *  # noqa: F401, F403
+from .memory import *  # noqa: F401, F403
+from .tensors import *  # noqa: F401, F403
+
+# Importing backend.py for its side-effect (sets default torch dtype).
+from . import backend  # noqa: F401
 
 __all__ = [
-    # General utilities
-    'export_params',
-    
-    # Backend utilities
-    'safe_convert_to_numpy',
-    'safe_convert_to_tensor',
-    'safe_deepcopy_params',
-    
-    # Array utilities
-    'find_duplicate_row_indices',
-    'find_row_indices',
-    'find_element_indices',
-    'get_random_indices_in_batches',
-    
-    # Logging
-    # Add logging exports here
+    # Tensor / numpy interop.
+    "to_numpy",
+    "to_tensor",
+    "stop_grad",
+    "clone_params",
+    "release_memory",
+    "best_device",
+    # Array helpers.
+    "find_duplicate_row_indices",
+    "find_row_indices",
+    "find_element_indices",
+    "get_random_indices_in_batches",
 ]

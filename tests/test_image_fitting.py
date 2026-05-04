@@ -1,18 +1,12 @@
-"""Tests for the new Keras-based image fitting implementation."""
+"""Tests for the Fitter image-fitting orchestrator."""
 
 import numpy as np
 import pytest
-
-# Configure backend automatically
-from qem.utils.backend import setup_test_backend
-backend = setup_test_backend()
-
-import torch
 import torch
 
 from qem.fit.fitter import Fitter
 from qem.fit.model import GaussianModel, LorentzianModel, VoigtModel
-from qem.utils.params import safe_convert_to_numpy
+from qem.utils.tensors import to_numpy
 
 
 @pytest.mark.parametrize(
@@ -64,7 +58,7 @@ def test_global_fitting(model_type, model_class):
     model.build()
 
     synthetic_image = model.sum(x_grid, y_grid, local=False)
-    synthetic_image_np = safe_convert_to_numpy(synthetic_image)
+    synthetic_image_np = to_numpy(synthetic_image)
 
     # Add some noise
     noise_level = 0.01
@@ -90,9 +84,9 @@ def test_global_fitting(model_type, model_class):
     fitted_params = fitter.params
 
     # Convert to numpy for comparison
-    fitted_pos_x = safe_convert_to_numpy(fitted_params["pos_x"])
-    fitted_pos_y = safe_convert_to_numpy(fitted_params["pos_y"])
-    fitted_height = safe_convert_to_numpy(fitted_params["height"])
+    fitted_pos_x = to_numpy(fitted_params["pos_x"])
+    fitted_pos_y = to_numpy(fitted_params["pos_y"])
+    fitted_height = to_numpy(fitted_params["height"])
 
     # Set tolerances - be more lenient for VoigtModel as it's more complex
     if model_type == "voigt":
@@ -165,7 +159,7 @@ def test_stochastic_fitting():
     model.build()
 
     synthetic_image = model.sum(x_grid, y_grid, local=False)
-    synthetic_image_np = safe_convert_to_numpy(synthetic_image)
+    synthetic_image_np = to_numpy(synthetic_image)
 
     # Initialize Fitter
     fitter = Fitter(image=synthetic_image_np, dx=1.0, model_type="gaussian")
@@ -228,7 +222,7 @@ def synthetic_test_data():
     model.build()
     
     synthetic_image = model.sum(x_grid, y_grid, local=False)
-    synthetic_image_np = safe_convert_to_numpy(synthetic_image)
+    synthetic_image_np = to_numpy(synthetic_image)
     
     # Add some noise
     rng = np.random.default_rng(42)
@@ -274,8 +268,8 @@ def test_comprehensive_fitting_methods(synthetic_test_data):
         
         # Check that fitting completed
         assert fitter.params is not None, "Global fitting failed"
-        global_pos_x = safe_convert_to_numpy(fitter.params['pos_x'])
-        global_pos_y = safe_convert_to_numpy(fitter.params['pos_y'])
+        global_pos_x = to_numpy(fitter.params['pos_x'])
+        global_pos_y = to_numpy(fitter.params['pos_y'])
         
         # Check position accuracy
         position_tolerance = 1.0
@@ -309,8 +303,8 @@ def test_comprehensive_fitting_methods(synthetic_test_data):
         
         # Check that fitting completed
         assert fitter.params is not None, "Stochastic fitting failed"
-        stoch_pos_x = safe_convert_to_numpy(fitter.params['pos_x'])
-        stoch_pos_y = safe_convert_to_numpy(fitter.params['pos_y'])
+        stoch_pos_x = to_numpy(fitter.params['pos_x'])
+        stoch_pos_y = to_numpy(fitter.params['pos_y'])
         
         # Check position accuracy (more lenient for stochastic)
         position_tolerance = 2.0
@@ -353,8 +347,8 @@ def test_comprehensive_fitting_methods(synthetic_test_data):
         
         # Check that fitting completed
         assert fitted_params is not None, "Voronoi fitting failed"
-        voronoi_pos_x = safe_convert_to_numpy(fitted_params['pos_x'])
-        voronoi_pos_y = safe_convert_to_numpy(fitted_params['pos_y'])
+        voronoi_pos_x = to_numpy(fitted_params['pos_x'])
+        voronoi_pos_y = to_numpy(fitted_params['pos_y'])
         
         # Check position accuracy
         position_tolerance = 2.0
@@ -383,8 +377,8 @@ def test_comprehensive_fitting_methods(synthetic_test_data):
         
         # Check that refinement completed
         assert refined_params is not None, "Center of mass refinement failed"
-        refined_pos_x = safe_convert_to_numpy(refined_params['pos_x'])
-        refined_pos_y = safe_convert_to_numpy(refined_params['pos_y'])
+        refined_pos_x = to_numpy(refined_params['pos_x'])
+        refined_pos_y = to_numpy(refined_params['pos_y'])
         
         # Check that refined positions are closer to true positions
         initial_error_x = np.abs(offset_coordinates[:, 0] - data['pos_x'])
@@ -433,7 +427,7 @@ def test_voronoi_properties():
     model.build()
 
     synthetic_image = model.sum(x_grid, y_grid, local=False)
-    synthetic_image_np = safe_convert_to_numpy(synthetic_image)
+    synthetic_image_np = to_numpy(synthetic_image)
 
     # Add some noise
     rng = np.random.default_rng(42)
@@ -501,9 +495,9 @@ def test_voronoi_properties():
         assert "height" in fitted_params, "Missing height in fitted parameters"
 
         # Convert to numpy for comparison
-        fitted_pos_x = safe_convert_to_numpy(fitted_params["pos_x"])
-        fitted_pos_y = safe_convert_to_numpy(fitted_params["pos_y"])
-        fitted_height = safe_convert_to_numpy(fitted_params["height"])
+        fitted_pos_x = to_numpy(fitted_params["pos_x"])
+        fitted_pos_y = to_numpy(fitted_params["pos_y"])
+        fitted_height = to_numpy(fitted_params["height"])
 
         # Check that positions are reasonable (within a few pixels of original)
         position_tolerance = 2.0  # Allow 2 pixel deviation
@@ -557,7 +551,7 @@ def test_center_of_mass_refinement():
     model.build()
 
     synthetic_image = model.sum(x_grid, y_grid, local=False)
-    synthetic_image_np = safe_convert_to_numpy(synthetic_image)
+    synthetic_image_np = to_numpy(synthetic_image)
 
     # Initialize Fitter with slightly offset initial coordinates
     fitter = Fitter(image=synthetic_image_np, dx=1.0, model_type="gaussian")
@@ -577,8 +571,8 @@ def test_center_of_mass_refinement():
         assert "pos_y" in refined_params, "Missing pos_y in refined parameters"
 
         # Convert to numpy for comparison
-        refined_pos_x = safe_convert_to_numpy(refined_params["pos_x"])
-        refined_pos_y = safe_convert_to_numpy(refined_params["pos_y"])
+        refined_pos_x = to_numpy(refined_params["pos_x"])
+        refined_pos_y = to_numpy(refined_params["pos_y"])
 
         # Check that refined positions are closer to true positions than initial ones
         initial_error_x = np.abs(initial_coordinates[:, 0] - true_pos_x)

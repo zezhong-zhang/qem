@@ -16,7 +16,7 @@ import numpy as np
 from matplotlib.path import Path
 from matplotlib_scalebar.scalebar import ScaleBar
 
-from qem.utils.params import safe_convert_to_numpy
+from qem.utils.tensors import to_numpy
 
 if TYPE_CHECKING:
     from qem.fit.fitter import Fitter  # noqa: F401
@@ -24,14 +24,14 @@ if TYPE_CHECKING:
 
 def _plot_progress(self, params, index, select_params):
     """Helper function to keep plotting logic separate."""
-    global_prediction = safe_convert_to_numpy(self.predict(params))
+    global_prediction = to_numpy(self.predict(params))
     
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
     
     # Original Image with selected atoms
     axes[0].imshow(self.image, cmap="gray")
     axes[0].set_title("Original + Selected Atoms")
-    axes[0].scatter(safe_convert_to_numpy(params["pos_x"][index]), safe_convert_to_numpy(params["pos_y"][index]), color="r", s=5)
+    axes[0].scatter(to_numpy(params["pos_x"][index]), to_numpy(params["pos_y"][index]), color="r", s=5)
     axes[0].set_aspect("equal")
 
     # Full Prediction
@@ -149,8 +149,8 @@ def plot_scs(
     # plot the scs
     pos_x = self.params["pos_x"] * self.dx
     pos_y = self.params["pos_y"] * self.dx
-    pos_x = safe_convert_to_numpy(pos_x)
-    pos_y = safe_convert_to_numpy(pos_y)
+    pos_x = to_numpy(pos_x)
+    pos_y = to_numpy(pos_y)
     if per_element:
         plt_idx = 1
         col = len(np.unique(self.atom_types)) + 1
@@ -245,8 +245,8 @@ def plot_scs_voronoi(
             element = self.elements[atom_type]
             pos_x = self.params["pos_x"][mask] * self.dx
             pos_y = self.params["pos_y"][mask] * self.dx
-            pos_x = safe_convert_to_numpy(pos_x)
-            pos_y = safe_convert_to_numpy(pos_y) 
+            pos_x = to_numpy(pos_x)
+            pos_y = to_numpy(pos_y) 
             im = plt.scatter(
                 pos_x, pos_y, c=self.voronoi_volume[mask], s=s, label=element
             )
@@ -362,8 +362,8 @@ def plot_atom_count_map(self, element_name=None, save=False, figsize=(12, 8)):
                 pos_x = self.params["pos_x"][mask] * self.dx
                 pos_y = self.params["pos_y"][mask] * self.dx
                 
-                pos_x_np = safe_convert_to_numpy(pos_x)
-                pos_y_np = safe_convert_to_numpy(pos_y)
+                pos_x_np = to_numpy(pos_x)
+                pos_y_np = to_numpy(pos_y)
                 
                 all_counts.extend(counts)
                 all_pos_x.extend(pos_x_np)
@@ -402,8 +402,8 @@ def plot_atom_count_map(self, element_name=None, save=False, figsize=(12, 8)):
         pos_x = self.params["pos_x"][mask] * self.dx
         pos_y = self.params["pos_y"][mask] * self.dx
         
-        pos_x_np = safe_convert_to_numpy(pos_x)
-        pos_y_np = safe_convert_to_numpy(pos_y)
+        pos_x_np = to_numpy(pos_x)
+        pos_y_np = to_numpy(pos_y)
         
         scatter = ax.scatter(
             pos_x_np, pos_y_np,

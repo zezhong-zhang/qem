@@ -1,22 +1,15 @@
-"""Tests for the new Keras-based model implementation."""
+"""Tests for the peak-shape models."""
 import numpy as np
 import pytest
-
-# Configure backend automatically
-from qem.utils.backend import setup_test_backend
-setup_test_backend()
-
-import torch as _torch_mod
 import torch
 
-# Import the model classes
 from qem.fit.model import (
     GaussianModel,
     LorentzianModel,
     VoigtModel,
-    GaussianKernel
+    GaussianKernel,
 )
-from qem.utils import safe_convert_to_numpy
+from qem.utils.tensors import to_numpy
 
 
 
@@ -52,24 +45,24 @@ def test_gaussian_model(grid_2d, peak_params):
     
     # Test sum method
     result = model.sum(x_grid, y_grid, local=False)
-    result_np = safe_convert_to_numpy(result)
+    result_np = to_numpy(result)
     
     # Check shape
     assert result_np.shape == (50, 50)
     
     # Check that peaks are above background
-    background_val = safe_convert_to_numpy(peak_params["background"])
+    background_val = to_numpy(peak_params["background"])
     assert np.all(result_np >= background_val)
     
     # Test volume calculation
     volumes = model.volume(peak_params)
-    volumes_np = safe_convert_to_numpy(volumes)
+    volumes_np = to_numpy(volumes)
     assert len(volumes_np) == 2
     assert np.all(volumes_np > 0)
     
     # Test local vs global calculation
     result_local = model.sum(x_grid, y_grid, local=False)
-    result_local_np = safe_convert_to_numpy(result_local)
+    result_local_np = to_numpy(result_local)
     
     # Results should be close
     np.testing.assert_allclose(result_np, result_local_np, rtol=1e-3, atol=1e-3)
@@ -85,18 +78,18 @@ def test_lorentzian_model(grid_2d, peak_params):
     
     # Test sum method
     result =model.sum(x_grid, y_grid, local=False)
-    result_np = safe_convert_to_numpy(result)
+    result_np = to_numpy(result)
     
     # Check shape
     assert result_np.shape == (50, 50)
     
     # Check that peaks are above background
-    background_val = safe_convert_to_numpy(peak_params["background"])
+    background_val = to_numpy(peak_params["background"])
     assert np.all(result_np >= background_val)
     
     # Test volume calculation
     volumes = model.volume(peak_params)
-    volumes_np = safe_convert_to_numpy(volumes)
+    volumes_np = to_numpy(volumes)
     assert len(volumes_np) == 2
     assert np.all(volumes_np > 0)
 
@@ -111,18 +104,18 @@ def test_voigt_model(grid_2d, peak_params):
     
     # Test sum method
     result = model.sum(x_grid, y_grid, local=False)
-    result_np = safe_convert_to_numpy(result)
+    result_np = to_numpy(result)
     
     # Check shape
     assert result_np.shape == (50, 50)
     
     # Check that peaks are above background
-    background_val = safe_convert_to_numpy(peak_params["background"])
+    background_val = to_numpy(peak_params["background"])
     assert np.all(result_np >= background_val)
     
     # Test volume calculation
     volumes = model.volume(peak_params)
-    volumes_np = safe_convert_to_numpy(volumes)
+    volumes_np = to_numpy(volumes)
     assert len(volumes_np) == 2
     assert np.all(volumes_np > 0)
 
@@ -133,7 +126,7 @@ def test_gaussian_kernel():
     
     # Test kernel creation
     kernel_array = kernel.gaussian_kernel(sigma)
-    kernel_np = safe_convert_to_numpy(kernel_array)
+    kernel_np = to_numpy(kernel_array)
     
     # Check kernel is symmetric
     np.testing.assert_allclose(kernel_np, kernel_np.T, rtol=1e-5, atol=1e-8)
@@ -144,12 +137,12 @@ def test_gaussian_kernel():
     # Test Gaussian filter
     image = torch.zeros((20, 20), dtype=torch.float32)
     # Create a simple point source at center
-    image_np = safe_convert_to_numpy(image)
+    image_np = to_numpy(image)
     image_np[10, 10] = 1.0
     image = torch.as_tensor(image_np, dtype=torch.float32)
     
     filtered = kernel.gaussian_filter(image, sigma)
-    filtered_np = safe_convert_to_numpy(filtered)
+    filtered_np = to_numpy(filtered)
     
     # Check shape preserved
     assert filtered_np.shape == (20, 20)
