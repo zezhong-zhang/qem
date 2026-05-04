@@ -37,13 +37,14 @@ from qem.fit.model import (
 )
 from qem.processing import butterworth_window
 from qem.fit.refine import calculate_center_of_mass
-from qem.utils.params import (
-    safe_convert_to_numpy,
-    safe_convert_to_tensor,
-    safe_deepcopy_params,
-    safe_stop_gradient,
+from qem.utils.tensors import (
+    best_device,
+    clone_params,
+    release_memory,
+    stop_grad,
+    to_numpy,
+    to_tensor,
 )
-from qem.utils.backend import release_backend_memory
 from qem.utils.arrays import get_random_indices_in_batches
 from qem.viz.geometry import remove_close_coordinates
 from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
@@ -219,7 +220,7 @@ class Fitter:
                 
                 # Load input image and parameters
                 self.image = f['image'][:]
-                self.image_tensor = safe_convert_to_tensor(self.image)
+                self.image_tensor = to_tensor(self.image)
                 self.dx = float(f.attrs['dx'])
                 self.units = str(f.attrs['units'])
                 self.model_type = str(f.attrs['model_type'])
@@ -256,7 +257,7 @@ class Fitter:
                             if len(value) != num_coords:
                                 raise ValueError(f"Parameter {key} length mismatch with coordinates")
 
-                    self.params = {k: safe_convert_to_tensor(v) for k, v in params.items()}
+                    self.params = {k: to_tensor(v) for k, v in params.items()}
 
                 # Load fitted image
                 if 'prediction' in f:
@@ -349,15 +350,37 @@ class Fitter:
         )
         return out
 
+    def _params_to_device(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Coerce a parameter dict to torch tensors on ``self.device``.
+
+        Bool / config entries (``same_width``) pass through unchanged.
+        """
+        out: dict[str, Any] = {}
+        for k, v in params.items():
+            if isinstance(v, bool):
+                out[k] = v
+                continue
+            tensor = v if torch.is_tensor(v) else torch.as_tensor(v)
+            if k in ("atom_types",):
+                tensor = tensor.to(dtype=torch.int64, device=self.device)
+            else:
+                tensor = tensor.to(dtype=torch.float32, device=self.device)
+            out[k] = tensor
+        return out
+
     # Init grids and models
     def initialize_grid(self):
-        """Initialize the coordinate grids for the model."""
-        self.image_tensor = torch.as_tensor(gaussian_filter(self.image,1), dtype=torch.float32)
-        x = torch.arange(self.nx, dtype=torch.float32)
-        y = torch.arange(self.ny, dtype=torch.float32)
+        """Initialize the coordinate grids for the model on the best device."""
+        device = best_device()
+        self.device = device
+        self.image_tensor = torch.as_tensor(
+            gaussian_filter(self.image, 1), dtype=torch.float32, device=device,
+        )
+        x = torch.arange(self.nx, dtype=torch.float32, device=device)
+        y = torch.arange(self.ny, dtype=torch.float32, device=device)
         x_grid, y_grid = torch.meshgrid(x, y, indexing="xy")
-        self.x_grid = torch.as_tensor(x_grid, dtype=torch.float32)
-        self.y_grid = torch.as_tensor(y_grid, dtype=torch.float32)
+        self.x_grid = x_grid.to(dtype=torch.float32)
+        self.y_grid = y_grid.to(dtype=torch.float32)
         # Pre-batched views for optimize() — torch view, free.
         self.x_grid_batched = self.x_grid.unsqueeze(0)
         self.y_grid_batched = self.y_grid.unsqueeze(0)
@@ -518,21 +541,21 @@ class Fitter:
         
         # Detect edge peaks (within 5 pixels of boundary)
         h, w = self.image.shape
-        pos_x = safe_convert_to_numpy(params_stage1['pos_x'])
-        pos_y = safe_convert_to_numpy(params_stage1['pos_y'])
+        pos_x = to_numpy(params_stage1['pos_x'])
+        pos_y = to_numpy(params_stage1['pos_y'])
         
         edge_mask = (pos_x < 5) | (pos_x > w-5) | (pos_y < 5) | (pos_y > h-5)
         
         if np.any(edge_mask):
             # Boost height and width for edge peaks
-            height = safe_convert_to_numpy(params_stage1['height'])
-            width = safe_convert_to_numpy(params_stage1['width'])
+            height = to_numpy(params_stage1['height'])
+            width = to_numpy(params_stage1['width'])
             
             height[edge_mask] *= 2.0  # Double height
             width[edge_mask] *= 1.8   # Increase width by 80%
             
-            params_stage1['height'] = safe_convert_to_tensor(height)
-            params_stage1['width'] = safe_convert_to_tensor(width)
+            params_stage1['height'] = to_tensor(height)
+            params_stage1['width'] = to_tensor(width)
             
             if verbose:
                 n_edge = np.sum(edge_mask)
@@ -556,7 +579,7 @@ class Fitter:
             logging.info("Two-stage fitting complete")
         
         self.params = params_final
-        self.prediction = safe_convert_to_numpy(self.predict(params_final, local=True))
+        self.prediction = to_numpy(self.predict(params_final, local=True))
         
         return params_final
     
@@ -716,10 +739,10 @@ class Fitter:
             reciprocal=reciprocal, sigma=sigma
         )
         # remove the self.coordinates in the column mask and append the new coordinates find in the atomic_column_list
-        coordinates = np.delete(self.coordinates, np.where(column_mask), dim=0)
+        coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
         coordinates = np.vstack([coordinates, atomic_column_list.positions_pixel])
         self.coordinates = coordinates
-        atom_types = np.delete(self.atom_types, np.where(column_mask), dim=0)
+        atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
         atom_types = np.append(atom_types, atomic_column_list.atom_types)
         self.atom_types = atom_types
         crystal_analyzer.plot_unitcell()
@@ -794,11 +817,14 @@ class Fitter:
         if model is None:
             model = self.model
         model.set_params(params)
-        
+
         # # Ensure model is built
         if not model.built:
             model.build()
-        
+
+        # Place parameters on the active device (CUDA / MPS / CPU).
+        model.to(self.device)
+
         prediction = model.sum(self.x_grid, self.y_grid, local=local)
 
         # Handle periodic boundary conditions by rolling the image
@@ -815,14 +841,14 @@ class Fitter:
             ]:
                 # Temporarily set shifted grids for periodic boundary conditions
                 prediction += model.sum(self.x_grid + i * self.nx, self.y_grid + j * self.ny, local=local)
-        # self.prediction = safe_convert_to_numpy(prediction)
+        # self.prediction = to_numpy(prediction)
         return prediction
 
     def residual(self, params: dict):
         # Compute the sum of the Gaussians
         prediction = self.predict(params)
         diff = self.image_tensor - prediction
-        diff = safe_convert_to_numpy(diff)
+        diff = to_numpy(diff)
         return diff
 
     # fitting
@@ -865,14 +891,19 @@ class Fitter:
         # Build the model if not already built
         if not model.built:
             model.build()
-        
+
+        # Move all model parameters to the chosen accelerator (CUDA / MPS / CPU).
+        # initialize_grid() set self.device; the model parameters were created
+        # on CPU by nn.Parameter(...) and must follow.
+        model.to(self.device)
+
         # Store reference to model being optimized so loss function can access it
         self._optimization_model = model
 
         if verbose:
-            print(f"Using {optimizer} optimizer for fitting.")
+            print(f"Using {optimizer} optimizer for fitting on {self.device}.")
         # PyTorch expects a leading batch dimension on inputs.
-        image_tensor = image_tensor.unsqueeze(0)
+        image_tensor = image_tensor.to(self.device).unsqueeze(0)
         model_inputs = [self.x_grid_batched, self.y_grid_batched]
         
         operation_context = (
@@ -950,7 +981,7 @@ class Fitter:
         )
         
         self.params = params
-        self.prediction = safe_convert_to_numpy(self.predict(params, local=local))
+        self.prediction = to_numpy(self.predict(params, local=local))
         return params
 
     def fit_stochastic(
@@ -987,35 +1018,37 @@ class Fitter:
         """
         if params is None:
             params = self.params if self.params is not None else self.init_params()
-        params = {k: safe_stop_gradient(v) for k, v in params.items()}
+        params = {k: stop_grad(v) for k, v in params.items()}
 
         self.converged = False
         operation_context = (
-            self.memory_monitor.monitor_operation("fit_stochastic") 
+            self.memory_monitor.monitor_operation("fit_stochastic")
             if self.memory_monitor else nullcontext()
         )
-        
+
         # Pre-condition heights with a least-squares pass. The stochastic
         # fitter is robust to a no-op pre-conditioning, so swallow failures
         # here rather than aborting the whole run.
         params = self.linear_estimator(params, best_effort=True)
+        # Move everything to the active device once; subsequent batch
+        # operations rely on params already being torch tensors there.
+        params = self._params_to_device(params)
 
         with operation_context:
             for epoch in tqdm(range(num_epoch), desc="Training epochs", leave=False):
-                pre_params = safe_deepcopy_params(params)
+                pre_params = clone_params(params)
                 random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
 
                 for batch_indices in tqdm(random_batches, desc="Fitting batch", leave=False):
                     # Calculate local target (subtract other atoms' contributions)
                     if batch_size < self.num_coordinates:
-                        # in cuda
-                        params_without_batch = safe_deepcopy_params(params)
+                        params_without_batch = clone_params(params)
                         height_tensor = params_without_batch['height']
-                        batch_indices_tensor = torch.as_tensor(batch_indices, dtype=torch.int64)
-                        update_indices = torch.unsqueeze(batch_indices_tensor, dim=-1)
-                        update_values = torch.zeros(tuple(batch_indices_tensor.shape))
+                        batch_indices_tensor = torch.as_tensor(
+                            batch_indices, dtype=torch.int64, device=height_tensor.device,
+                        )
                         new_height = height_tensor.clone()
-                        new_height.view(-1)[batch_indices_tensor] = update_values.to(new_height.dtype)
+                        new_height.view(-1)[batch_indices_tensor] = 0.0
                         params_without_batch['height'] = new_height
                         params_without_batch['background'] = torch.zeros_like(params_without_batch['background'])
 
@@ -1027,8 +1060,7 @@ class Fitter:
                         del params_without_batch
                         del prediction_from_others
                         del height_tensor
-                        del update_values
-                        release_backend_memory()
+                        release_memory()
                     else:
                         local_target = self.image_tensor
 
@@ -1052,7 +1084,7 @@ class Fitter:
                         **optimizer_kwargs
                     )
                     del local_target
-                    release_backend_memory()
+                    release_memory()
                     params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, select_params)
@@ -1064,7 +1096,7 @@ class Fitter:
                     break
         
         self.params = params
-        self.prediction = safe_convert_to_numpy(self.predict(params, local=local))
+        self.prediction = to_numpy(self.predict(params, local=local))
         logging.info("Stochastic fitting complete.")
         return self.params
 
@@ -1090,9 +1122,14 @@ class Fitter:
         for key, value in params.items():
             if key not in pre_params:
                 continue  # Skip keys that are not in pre_params
+            if not torch.is_tensor(value):
+                continue
+            other = pre_params[key]
+            if torch.is_tensor(other) and other.device != value.device:
+                other = other.to(value.device)
 
             # Calculate the update difference
-            update = torch.abs(value - pre_params[key])
+            update = torch.abs(value - other)
 
             # Check convergence based on parameter type
             if key in ["pos_x", "pos_y"]:
@@ -1149,11 +1186,14 @@ class Fitter:
                 params[key] = params[key] * (1 - weight) + value * weight                
             else:
                 # --- Logic for per-atom parameters ---
-                # This part uses the robust scatter_update function.
-                update_indices = torch.as_tensor(np.where(mask)[0], dtype=torch.int64)
-                value_tensor = torch.as_tensor(value)
                 new_param = params[key].clone()
-                new_param.view(-1)[update_indices] = value_tensor.to(new_param.dtype)
+                update_indices = torch.as_tensor(
+                    np.where(mask)[0], dtype=torch.int64, device=new_param.device,
+                )
+                value_tensor = torch.as_tensor(
+                    value, dtype=new_param.dtype, device=new_param.device,
+                )
+                new_param.view(-1)[update_indices] = value_tensor
                 params[key] = new_param
                 
         return params
@@ -1336,7 +1376,7 @@ class Fitter:
             if "ratio" in params:
                 params["ratio"] = params["ratio"][self.atom_types]
         volume = self.model.volume(params)
-        return safe_convert_to_numpy(volume)
+        return to_numpy(volume)
 
     @property
     def scalebar(self):

@@ -62,7 +62,6 @@ def fit_loop(
     lr_patience: int = 10,
     lr_factor: float = 0.1,
     min_lr: float = 1e-6,
-    snapshot_every: int = 50,
     post_step: Callable[[nn.Module], None] | None = None,
     verbose: bool = False,
 ) -> FitResult:
@@ -124,19 +123,15 @@ def fit_loop(
         last_loss = loss_val
         epochs_run = epoch + 1
 
-        # Track best (relative-improvement criterion to mirror the LR scheduler).
+        # Track best — snapshot every meaningful improvement (≥ 0.1%
+        # relative). The relative-improvement criterion is itself the
+        # throttle; on a converging fit, late epochs stop firing.
         if loss_val < best_loss * (1.0 - 1e-3):
             best_loss = loss_val
-            should_snapshot = (
-                best_state is None
-                or (epoch + 1) % snapshot_every == 0
-                or (epoch + 1) == epochs
-            )
-            if should_snapshot:
-                best_state = {
-                    k: v.detach().clone()
-                    for k, v in model.state_dict().items()
-                }
+            best_state = {
+                k: v.detach().clone()
+                for k, v in model.state_dict().items()
+            }
             epochs_no_improve = 0
         else:
             epochs_no_improve += 1

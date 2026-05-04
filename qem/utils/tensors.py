@@ -85,11 +85,15 @@ def release_memory() -> None:
 
 
 def best_device() -> torch.device:
-    """Auto-detect the best torch device.
+    """Auto-detect the best torch device for QEM fitting.
 
-    Priority: CUDA (covers NVIDIA + AMD/ROCm via the same API) → MPS
-    (Apple Silicon) → CPU. Override with the ``QEM_DEVICE`` environment
-    variable (``cuda`` / ``mps`` / ``cpu``).
+    Priority: CUDA (covers NVIDIA + AMD/ROCm via the same API) → CPU.
+    Apple's MPS backend is **not** picked automatically because its
+    ``scatter_add`` reduction has precision issues that hurt fitting
+    quality (~14% worse residuals on the StatSTEM Au benchmark).
+
+    Override with the ``QEM_DEVICE`` environment variable
+    (``cuda`` / ``mps`` / ``cpu``).
     """
     import os
     override = os.environ.get("QEM_DEVICE", "").strip().lower()
@@ -97,9 +101,6 @@ def best_device() -> torch.device:
         return torch.device(override)
     if torch.cuda.is_available():
         return torch.device("cuda")
-    mps = getattr(torch.backends, "mps", None)
-    if mps is not None and mps.is_available():
-        return torch.device("mps")
     return torch.device("cpu")
 
 

@@ -174,8 +174,10 @@ def loss(self, y_true, y_pred, use_adaptive_edge_loss=None):
         use_adaptive_edge_loss = getattr(self, 'use_adaptive_edge_loss', False)
     
     diff = y_true - y_pred
-    if self._window_t is None:
-        self._window_t = torch.as_tensor(self.window, dtype=torch.float32)
+    if self._window_t is None or self._window_t.device != diff.device:
+        self._window_t = torch.as_tensor(
+            self.window, dtype=torch.float32, device=diff.device,
+        )
     diff = torch.mul(diff, self._window_t)
     
     # Base MSE loss
