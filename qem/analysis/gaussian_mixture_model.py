@@ -775,13 +775,28 @@ class GaussianMixtureModel:
         Returns:
             int: Selected number of components
         """
+        import matplotlib
         import matplotlib.pyplot as plt
-        
+
         try:
             from matplotlib.widgets import Button, Slider
         except ImportError:
             logging.warning("Interactive widgets not available. Using non-interactive mode.")
             interactive_selection = False
+
+        # Non-GUI matplotlib backends (e.g. ``Agg`` used by pytest /
+        # nbmake / headless scripts) cannot display the interactive
+        # selector — the wait-for-close loop would hang forever.
+        # Auto-fall-back to non-interactive mode in that case.
+        if interactive_selection:
+            backend = matplotlib.get_backend().lower()
+            interactive_backends = ("qt", "tk", "wx", "gtk", "macosx", "ipympl")
+            if not any(backend.startswith(b) for b in interactive_backends):
+                logging.info(
+                    "Non-interactive matplotlib backend %r detected; "
+                    "skipping interactive component-selection prompt.", backend,
+                )
+                interactive_selection = False
         
         # Create color palette for components
         colors = plt.cm.Set3(np.linspace(0, 1, 12))  # Get 12 distinct colors

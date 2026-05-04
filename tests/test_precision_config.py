@@ -35,30 +35,6 @@ def test_safe_precision_falls_back_to_float32_when_float64_unsupported():
         assert config.get_safe_precision("float64") == "float32"
 
 
-def test_scipy_solver_uses_configured_precision():
-    from qem.fit.solver import SciPySolver
-    from qem.utils.config import get_config
-
-    n_rows, n_cols = 10, 5
-    A = coo_matrix(
-        (
-            np.array([1.0, 1.0, 1.0, 1.0, 1.0]),
-            (np.arange(n_cols), np.arange(n_cols)),
-        ),
-        shape=(n_rows, n_cols),
-    )
-    b = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-
-    target_dtype = get_config().linear_solver_numpy_dtype
-    solution = SciPySolver.solve_direct(A, b)
-    assert solution.dtype == target_dtype
-    assert solution.shape == (n_cols,)
-
-    solution_iter = SciPySolver.solve_iterative(A, b, max_iter=100, tol=1e-6)
-    assert solution_iter.dtype == target_dtype
-    assert solution_iter.shape == (n_cols,)
-
-
 @pytest.fixture
 def env_precision_override(monkeypatch):
     monkeypatch.setenv("QEM_PRECISION", "float32")

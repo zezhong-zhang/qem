@@ -1,809 +1,426 @@
-"""
-Linear solver module for QEM image fitting.
+"""Linear estimation for image-fitting heights and background.
 
-Sparse linear system solving with a simple two-step fallback: try direct,
-on memory / singular / linalg error fall back to iterative.
+Three responsibilities:
+
+* :class:`DesignMatrixBuilder` — render the per-atom Gaussian peak
+  windows into a sparse design matrix.
+* :class:`LinearSystemSolver` — non-negative ridge LS dispatcher.
+  The non-negative path uses :func:`qem.fit.sparse_torch.pg_nnls`
+  (torch sparse CSR + projected gradient with BB step). The
+  unconstrained path uses ``scipy.sparse.linalg.lsqr`` as a thin
+  fallback for the rare case when callers actually want it.
+* :func:`linear_estimator` — public Fitter method that wires the
+  two together and updates the height parameter from the solution.
 """
+
+from __future__ import annotations
 
 import logging
 from contextlib import nullcontext
-from typing import Dict, Optional, Tuple, Protocol
+from typing import Any, Dict, Optional
 
 import numpy as np
 import torch
 from scipy.sparse import coo_matrix
-from scipy.sparse.linalg import spsolve, lsqr, cg
+from scipy.sparse.linalg import lsqr
 
-from qem.utils.tensors import to_numpy, to_tensor
-from qem.utils.tensors import release_memory
-from qem.utils.config import get_config
-from qem.utils.exceptions import ParameterError, DataError
+from qem.utils.exceptions import DataError, ParameterError
+from qem.utils.tensors import release_memory, to_numpy, to_tensor
 
 
-class BackendSolver(Protocol):
-    """Protocol for sparse linear solvers."""
-
-    def solve_direct(self, A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
-        """Solve using direct method (computes AtA)."""
-        ...
-
-    def solve_iterative(self, A, b: np.ndarray, non_negative: bool = False,
-                       max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
-        """Solve using iterative method (avoids AtA computation)."""
-        ...
-
-
-class TorchSolver:
-    """PyTorch-specific sparse linear solver with MPS fallback."""
-    
-    @staticmethod
-    def _is_mps_device(device):
-        """Check if device is MPS (Apple Silicon) or if MPS is available."""
-        import torch
-        # Check if device is explicitly MPS or if MPS is available (indicating Apple Silicon)
-        return (hasattr(torch.backends, 'mps') and 
-                (str(device).startswith('mps') or torch.backends.mps.is_available()))
-    
-    @staticmethod
-    def _convert_target_to_numpy(b):
-        """Convert target vector to numpy with configured precision."""
-        b_numpy = b.cpu().numpy() if hasattr(b, 'cpu') else np.asarray(b)
-        return create_linear_solver_array(b_numpy)
-    
-    @staticmethod
-    def _convert_to_scipy_matrix(A):
-        """Convert PyTorch tensor to scipy sparse matrix with configured precision."""
-        import torch
-        from scipy.sparse import coo_matrix
-        
-        config = get_config()
-        target_dtype = config.linear_solver_numpy_dtype
-        
-        if hasattr(A, 'tocsr'):
-            # Already a scipy sparse matrix - ensure correct precision
-            if A.dtype != target_dtype:
-                return A.astype(target_dtype)
-            return A
-        elif hasattr(A, 'is_sparse') and A.is_sparse:
-            # PyTorch sparse tensor
-            A_coo = A.coalesce()
-            indices = A_coo.indices().cpu().numpy()
-            values = A_coo.values().cpu().numpy().astype(target_dtype)
-            shape = A_coo.shape
-            return coo_matrix((values, (indices[0], indices[1])), shape=shape)
-        elif hasattr(A, 'cpu'):
-            # PyTorch dense tensor
-            return coo_matrix(A.cpu().numpy().astype(target_dtype))
-        else:
-            # Assume it's already numpy or scipy
-            data = np.asarray(A, dtype=target_dtype)
-            return coo_matrix(data)
-    
-    @staticmethod
-    def solve_direct(A, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
-        import torch
-        
-        # Check for MPS device and fallback to scipy if needed
-        device = getattr(A, 'device', torch.device('cpu'))
-        if TorchSolver._is_mps_device(device):
-            logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
-            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = TorchSolver._convert_target_to_numpy(b)
-            return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
-        
-        try:
-            if not isinstance(b, torch.Tensor):
-                b = torch.tensor(b, device=A.device, dtype=A.dtype)
-            
-            AtA = torch.sparse.mm(A.t(), A).to_dense()
-            Atb = torch.sparse.mm(A.t(), b.unsqueeze(1)).squeeze()
-            
-            # Regularization for stability
-            reg = 1e-8 * torch.trace(AtA) / AtA.shape[0]
-            AtA += reg * torch.eye(AtA.shape[0], device=AtA.device, dtype=AtA.dtype)
-            
-            try:
-                solution = torch.linalg.solve(AtA, Atb)
-            except Exception:
-                solution = torch.linalg.lstsq(AtA, Atb).solution
-            
-            if non_negative:
-                solution = torch.clamp(solution, min=0.0)
-            return solution.detach().cpu().numpy()
-            
-        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
-            error_msg = str(e)
-            
-            # Check for MPS-specific errors
-            if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
-                logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
-                logging.info("Falling back to scipy sparse solver")
-                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = TorchSolver._convert_target_to_numpy(b)
-                return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
-            
-            # Check for memory errors
-            elif any(keyword in error_msg.lower() for keyword in ["out of memory", "cuda out of memory", "mps out of memory", "memory"]):
-                logging.warning(f"PyTorch out of memory: {e}")
-                logging.info("Falling back to memory-efficient scipy sparse solver")
-                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = TorchSolver._convert_target_to_numpy(b)
-                return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
-            
-            else:
-                raise
-        except MemoryError as e:
-            logging.warning(f"System memory error in PyTorch: {e}")
-            logging.info("Falling back to memory-efficient scipy sparse solver")
-            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = TorchSolver._convert_target_to_numpy(b)
-            return SciPySolver.solve_direct(A_scipy, b_numpy, non_negative)
-    
-    @staticmethod
-    def solve_iterative(A, b: np.ndarray, non_negative: bool = False, 
-                       max_iter: int = 1000, tol: float = 1e-6) -> np.ndarray:
-        import torch
-        
-        # Check for MPS device and fallback to scipy if needed
-        device = getattr(A, 'device', torch.device('cpu'))
-        if TorchSolver._is_mps_device(device):
-            logging.warning("MPS backend detected, falling back to scipy sparse solver for compatibility")
-            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = TorchSolver._convert_target_to_numpy(b)
-            return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
-        
-        try:
-            if not isinstance(b, torch.Tensor):
-                b = torch.tensor(b, device=A.device, dtype=A.dtype)
-            
-            # Conjugate gradient for A^T A x = A^T b
-            x = torch.zeros(A.shape[1], device=A.device, dtype=A.dtype)
-            r = torch.sparse.mm(A.t(), b.unsqueeze(1)).squeeze()  # A^T b
-            p = r.clone()
-            rsold = torch.dot(r, r)
-            
-            for i in range(max_iter):
-                Ap = torch.sparse.mm(A, p.unsqueeze(1)).squeeze()
-                AtAp = torch.sparse.mm(A.t(), Ap.unsqueeze(1)).squeeze()
-                
-                alpha = rsold / torch.dot(p, AtAp)
-                x += alpha * p
-                r -= alpha * AtAp
-                rsnew = torch.dot(r, r)
-                
-                if torch.sqrt(rsnew) < tol:
-                    break
-                
-                p = r + (rsnew / rsold) * p
-                rsold = rsnew
-            
-            if non_negative:
-                x = torch.clamp(x, min=0.0)
-            return x.detach().cpu().numpy()
-            
-        except (RuntimeError, torch.cuda.OutOfMemoryError) as e:
-            error_msg = str(e)
-            
-            # Check for MPS-specific errors
-            if any(keyword in error_msg for keyword in ["SparseMPS", "_sparse_coo_tensor_with_dims_and_tensors", "aten::addmm", "SparseCsrMPS"]):
-                logging.warning(f"PyTorch sparse operation failed on MPS: {e}")
-                logging.info("Falling back to scipy sparse solver")
-                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = TorchSolver._convert_target_to_numpy(b)
-                return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
-            
-            # Check for memory errors
-            elif any(keyword in error_msg.lower() for keyword in ["out of memory", "cuda out of memory", "mps out of memory", "memory"]):
-                logging.warning(f"PyTorch out of memory: {e}")
-                logging.info("Falling back to memory-efficient scipy sparse solver")
-                A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-                b_numpy = TorchSolver._convert_target_to_numpy(b)
-                return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
-            
-            else:
-                raise
-        except MemoryError as e:
-            logging.warning(f"System memory error in PyTorch: {e}")
-            logging.info("Fallback to memory-efficient scipy sparse solver")
-            A_scipy = TorchSolver._convert_to_scipy_matrix(A)
-            b_numpy = TorchSolver._convert_target_to_numpy(b)
-            return SciPySolver.solve_iterative(A_scipy, b_numpy, non_negative, max_iter, tol)
-
-
-class SciPySolver:
-    """SciPy-specific sparse linear solver."""
-    
-    @staticmethod
-    def solve_direct(A: coo_matrix, b: np.ndarray, non_negative: bool = False) -> np.ndarray:
-        # Ensure inputs use configured precision
-        config = get_config()
-        target_dtype = config.linear_solver_numpy_dtype
-        
-        # Convert to target precision if needed
-        if A.dtype != target_dtype:
-            A = A.astype(target_dtype)
-        if b.dtype != target_dtype:
-            b = b.astype(target_dtype)
-        
-        A_csr = A.tocsr()
-        AtA = A_csr.T @ A_csr
-        Atb = A_csr.T @ b
-        
-        try:
-            solution = spsolve(AtA, Atb)
-        except Exception:
-            AtA_dense = AtA.toarray()
-            solution = np.linalg.lstsq(AtA_dense, Atb, rcond=None)[0]
-        
-        if non_negative:
-            solution = np.maximum(solution, 0.0)
-        
-        # Ensure output precision
-        return solution.astype(target_dtype)
-    
-    @staticmethod
-    def solve_iterative(
-        A: coo_matrix, b: np.ndarray, non_negative: bool = False,
-        max_iter: int = 1000, tol: float = 1e-6, ridge: float = 0.0,
-    ) -> np.ndarray:
-        """Solve the sparse least-squares system.
-
-        Non-negative path uses :func:`qem.fit.sparse_torch.pg_nnls` —
-        projected gradient with Barzilai-Borwein step, built on
-        ``torch.sparse_csr_tensor`` matvecs which are ~3.4× faster
-        than scipy's ``csr_matvec`` on CPU. End-to-end ~20× faster
-        than the previous ``scipy.optimize.lsq_linear`` bounded path
-        with matching solutions (and supports ``ridge`` natively
-        without augmenting the matrix).
-
-        Unconstrained path falls back to scipy ``lsqr``. ``ridge`` adds
-        Tikhonov regularization (λ‖x‖²) to dampen ill-conditioning.
-        """
-        config = get_config()
-        target_dtype = config.linear_solver_numpy_dtype
-
-        if A.dtype != target_dtype:
-            A = A.astype(target_dtype)
-        if b.dtype != target_dtype:
-            b = b.astype(target_dtype)
-
-        if non_negative:
-            # Torch-native projected-gradient NNLS — much faster than
-            # scipy.optimize.lsq_linear on this matrix shape.
-            from qem.fit.sparse_torch import pg_nnls
-
-            solution = pg_nnls(
-                A.tocsr(), b, ridge=ridge,
-                max_iter=max(max_iter, 200),
-                tol=max(tol, 1e-5),
-            )
-            return solution.astype(target_dtype)
-
-        # Unconstrained: scipy lsqr (with ridge augmentation).
-        from scipy.sparse import eye as sp_eye, vstack as sp_vstack
-
-        A_csr = A.tocsr()
-        if ridge > 0.0:
-            n_cols = A_csr.shape[1]
-            ridge_block = (np.sqrt(ridge) * sp_eye(n_cols, dtype=target_dtype)).tocsr()
-            A_csr = sp_vstack([A_csr, ridge_block]).tocsr()
-            b = np.concatenate([b, np.zeros(n_cols, dtype=target_dtype)])
-
-        try:
-            solution = lsqr(A_csr, b, iter_lim=max_iter, atol=tol, btol=tol)[0]
-        except Exception:
-            Atb = A_csr.T @ b
-            from scipy.sparse.linalg import LinearOperator
-
-            def matvec(x):
-                return A_csr.T @ (A_csr @ x)
-
-            AtA_op = LinearOperator(
-                (A_csr.shape[1], A_csr.shape[1]), matvec=matvec,
-            )
-            solution, _ = cg(AtA_op, Atb, maxiter=max_iter, tol=tol)
-
-        return solution.astype(target_dtype)
-
-
-class LinearSystemSolver:
-    """Sparse linear system solver: try direct, fall back to iterative.
-
-    Replaces the previous "memory-aware strategy selection" + nested
-    try/except. The cost of always *trying* the direct solver and
-    falling back on actual failure is much lower than psutil polling
-    every solve.
-    """
-
-    def __init__(self):
-        self.solver = TorchSolver
-
-    def solve_system(self, design_matrix, target: np.ndarray,
-                     non_negative: bool = False,
-                     ridge: float = 0.0) -> Optional[np.ndarray]:
-        """Solve ``design_matrix @ x = target``.
-
-        scipy sparse inputs always go through the iterative scipy path.
-        For backend tensors: try direct; on memory / singular / linalg
-        error fall back to iterative; on a second failure raise DataError.
-
-        ``ridge`` adds Tikhonov regularization (λ‖x‖²) to dampen
-        ill-conditioned systems — only applied on the iterative path.
-        """
-        # Coerce target to numpy (MPS tensors live on accelerators).
-        if hasattr(target, "cpu"):
-            target = target.cpu().numpy()
-        elif not isinstance(target, np.ndarray):
-            target = np.asarray(target)
-
-        # scipy sparse matrices skip the direct path — they have no
-        # backend solver attached.
-        if hasattr(design_matrix, "tocsr"):
-            return SciPySolver.solve_iterative(
-                design_matrix, target, non_negative, ridge=ridge,
-            )
-
-        try:
-            return self.solver.solve_direct(design_matrix, target, non_negative)
-        except (MemoryError, np.linalg.LinAlgError) as exc:
-            logging.info("Direct solver fallback (%s); trying iterative.", exc)
-        except Exception as exc:
-            err = str(exc).lower()
-            if not any(k in err for k in ("singular", "memory", "out of memory")):
-                raise
-            logging.info("Direct solver hit numerical issue (%s); trying iterative.", exc)
-
-        try:
-            return self.solver.solve_iterative(design_matrix, target, non_negative)
-        except Exception as exc:
-            raise DataError(
-                f"Linear solve failed: {exc}",
-                technical_details={"matrix_shape": getattr(design_matrix, "shape", None)},
-            ) from exc
-
+# ---------------------------------------------------------------------------
+# Design matrix
+# ---------------------------------------------------------------------------
 
 class DesignMatrixBuilder:
+    """Builds the per-pixel sparse design matrix for height linear estimation.
+
+    Each column corresponds to one atom (plus an optional background
+    column at the end). Each non-zero entry is the peak shape value
+    at that pixel.
     """
-    Builds sparse design matrices for linear estimation.
-    
-    This class handles the construction of sparse design matrices from peak
-    representations, including background terms and backend-specific sparse
-    matrix formats.
-    """
-    
+
     def __init__(self, model, nx: int, ny: int):
         self.model = model
         self.nx = nx
         self.ny = ny
-    
-    def build_local_peaks(self, params: Dict, same_width: bool, atom_types: np.ndarray) -> Tuple:
-        """Build local peak representations."""
+
+    def build_local_peaks(self, params: Dict, same_width: bool, atom_types: np.ndarray):
+        """Render each atom's peak on its local window.
+
+        Returns ``(peak_local, global_x, global_y, mask)`` where
+        ``peak_local`` has shape ``(2W+1, 2W+1, N)`` with W set to
+        5σ to keep enough tail for the linear estimator (vs 3σ in the
+        Adam loop's ``_sum_local`` — accuracy matters more than speed
+        here since this runs once per fit).
+        """
         pos_x, pos_y = params["pos_x"], params["pos_y"]
         width, height = params["width"], params["height"]
         ratio = params.get("ratio", None)
-        
+
         if same_width:
             width = width[atom_types]
             if ratio is not None:
                 ratio = ratio[atom_types]
-        
-        # Create local coordinate system
+
         window_size = (torch.max(width) * 5).to(dtype=torch.int32)
         x = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
         y = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
         local_x, local_y = torch.meshgrid(x, y, indexing="xy")
-        
-        # Generate local peaks
-        input_params = (torch.remainder(pos_x, 1), torch.remainder(pos_y, 1), height, width)
+
+        peak_args = (torch.remainder(pos_x, 1), torch.remainder(pos_y, 1), height, width)
         if ratio is not None:
-            input_params += (ratio,)
-        
-        peak_local = self.model.model_fn(local_x[..., None], local_y[..., None], *input_params)
-        
-        # Calculate global coordinates and mask
+            peak_args += (ratio,)
+        peak_local = self.model.model_fn(local_x[..., None], local_y[..., None], *peak_args)
+
         pos_x_int, pos_y_int = torch.floor(pos_x), torch.floor(pos_y)
-        global_x = torch.unsqueeze(local_x, -1) + pos_x_int
-        global_y = torch.unsqueeze(local_y, -1) + pos_y_int
-        
-        mask = ((global_x >= 0) & (global_x < self.nx) & 
-                (global_y >= 0) & (global_y < self.ny))
-        
+        global_x = local_x.unsqueeze(-1) + pos_x_int
+        global_y = local_y.unsqueeze(-1) + pos_y_int
+        mask = (
+            (global_x >= 0) & (global_x < self.nx)
+            & (global_y >= 0) & (global_y < self.ny)
+        )
         return peak_local, global_x, global_y, mask
-    
-    def build_sparse_matrix(self, peak_local, global_x, global_y, mask, 
-                          fit_background: bool, num_coordinates: int, x_grid, y_grid,
-                          background_2d: np.ndarray = None):
-        """Build sparse design matrix from peak data with optional 2D background."""
-        # Extract valid data
-        valid_indices = torch.where(mask)
-        shape = tuple(peak_local.shape)
-        
-        flat_indices = (valid_indices[0] * (shape[1] * shape[2]) + 
-                       valid_indices[1] * shape[2] + valid_indices[2])
-        
-        data_tensor = torch.take(torch.reshape(peak_local, (-1,)), flat_indices)
-        global_x_valid = torch.take(torch.reshape(global_x, (-1,)), flat_indices)
-        global_y_valid = torch.take(torch.reshape(global_y, (-1,)), flat_indices)
-        
-        # Calculate matrix indices
-        cols_tensor = valid_indices[2]
-        rows_tensor = (global_y_valid.to(dtype=torch.int32) * self.nx +
-                       global_x_valid.to(dtype=torch.int32))
-        
-        # Add background terms if needed
-        if fit_background:
-            dev = cols_tensor.device
-            bg_rows = torch.reshape(y_grid * self.nx + x_grid, (-1,))
-            rows_tensor = torch.cat([rows_tensor, bg_rows.to(dtype=torch.int32, device=dev)])
 
-            del bg_rows
-            release_memory()
+    def build_sparse_matrix(
+        self,
+        peak_local,
+        global_x,
+        global_y,
+        mask,
+        fit_background: bool,
+        num_coordinates: int,
+        x_grid,
+        y_grid,
+        background_2d: Optional[np.ndarray] = None,
+    ) -> coo_matrix:
+        """Stack ``(peak, x, y, mask)`` into a scipy ``coo_matrix``.
 
-            cols_tensor = torch.cat([cols_tensor,
-                torch.full((self.nx * self.ny,), num_coordinates, dtype=torch.int32, device=dev)])
-
-            if background_2d is not None:
-                # Use 2D background values instead of ones
-                bg_data = torch.as_tensor(background_2d.ravel(), dtype=torch.float32, device=dev)
-                data_tensor = torch.cat([data_tensor, bg_data])
-            else:
-                # Use scalar background (ones)
-                data_tensor = torch.cat([data_tensor,
-                    torch.ones((self.nx * self.ny,), dtype=torch.float32, device=dev)])
-
-            shape = (self.nx * self.ny, num_coordinates + 1)
-
-        else:
-            shape = (self.nx * self.ny, num_coordinates)
-        sparse_matrix = self._create_sparse_matrix(data_tensor, rows_tensor, cols_tensor, shape)
-        del rows_tensor
-        del cols_tensor
-        del data_tensor
-        release_memory()
-        return sparse_matrix
-    
-    def _create_sparse_matrix(self, data_tensor, rows_tensor, cols_tensor, shape, device: str = 'cpu'):
-        """Build a SciPy COO design matrix from PyTorch tensors.
-
-        We always materialise design matrices on CPU as ``scipy.sparse.coo_matrix``
-        because the downstream solvers (``SciPySolver`` and the SciPy fallback in
-        ``TorchSolver``) operate on SciPy matrices, and PyTorch sparse tensors on
-        MPS/CUDA do not support all the operations we need.
+        Always returns a CPU scipy matrix because the downstream solver
+        (:func:`qem.fit.sparse_torch.pg_nnls`) works on torch CSR built
+        from scipy at call time.
         """
-        if device != 'cpu':
-            logging.debug(
-                "DesignMatrixBuilder: forcing CPU/SciPy sparse matrix (requested device=%s)", device
-            )
-        return coo_matrix(
-            (
-                to_numpy(data_tensor),
-                (to_numpy(rows_tensor), to_numpy(cols_tensor)),
-            ),
-            shape=shape,
+        valid = torch.where(mask)
+        shape = tuple(peak_local.shape)
+        flat_idx = (
+            valid[0] * (shape[1] * shape[2])
+            + valid[1] * shape[2]
+            + valid[2]
         )
 
+        data = torch.take(peak_local.reshape(-1), flat_idx)
+        gx_valid = torch.take(global_x.reshape(-1), flat_idx)
+        gy_valid = torch.take(global_y.reshape(-1), flat_idx)
+
+        cols = valid[2].to(dtype=torch.int32)
+        rows = (
+            gy_valid.to(dtype=torch.int32) * self.nx
+            + gx_valid.to(dtype=torch.int32)
+        )
+
+        if fit_background:
+            dev = cols.device
+            bg_rows = (y_grid * self.nx + x_grid).reshape(-1).to(
+                dtype=torch.int32, device=dev,
+            )
+            rows = torch.cat([rows, bg_rows])
+            cols = torch.cat([
+                cols,
+                torch.full((self.nx * self.ny,), num_coordinates,
+                           dtype=torch.int32, device=dev),
+            ])
+            if background_2d is not None:
+                bg_data = torch.as_tensor(
+                    background_2d.ravel(), dtype=torch.float32, device=dev,
+                )
+            else:
+                bg_data = torch.ones(
+                    (self.nx * self.ny,), dtype=torch.float32, device=dev,
+                )
+            data = torch.cat([data, bg_data])
+            shape_out = (self.nx * self.ny, num_coordinates + 1)
+        else:
+            shape_out = (self.nx * self.ny, num_coordinates)
+
+        sparse = coo_matrix(
+            (to_numpy(data), (to_numpy(rows), to_numpy(cols))),
+            shape=shape_out,
+        )
+        del data, rows, cols
+        release_memory()
+        return sparse
+
+
+# ---------------------------------------------------------------------------
+# Solver
+# ---------------------------------------------------------------------------
+
+class LinearSystemSolver:
+    """Solve ``A x = b`` (sparse, possibly with bounds and ridge).
+
+    Non-negative path: torch sparse CSR + projected gradient (BB step)
+    via :func:`qem.fit.sparse_torch.pg_nnls`. Roughly 5× faster than
+    ``scipy.optimize.lsq_linear`` with bounds on the design matrices
+    QEM builds.
+
+    Unconstrained path: scipy ``lsqr`` with optional Tikhonov ridge.
+    Rarely called — most callers want non-negativity (heights ≥ 0).
+    """
+
+    def solve_system(
+        self,
+        design_matrix: coo_matrix,
+        target: np.ndarray,
+        non_negative: bool = True,
+        ridge: float = 1e-4,
+    ) -> np.ndarray:
+        if hasattr(target, "cpu"):
+            target = target.cpu().numpy()
+        elif not isinstance(target, np.ndarray):
+            target = np.asarray(target)
+        target = target.astype(np.float32)
+
+        if non_negative:
+            from qem.fit.sparse_torch import pg_nnls
+
+            return pg_nnls(design_matrix, target, ridge=ridge)
+
+        # Unconstrained ridge LS via scipy lsqr (rare path).
+        from scipy.sparse import eye as sp_eye
+        from scipy.sparse import vstack as sp_vstack
+
+        A = design_matrix.tocsr().astype(np.float32)
+        b = target
+        if ridge > 0.0:
+            n = A.shape[1]
+            A = sp_vstack([A, np.sqrt(ridge) * sp_eye(n, dtype=np.float32)]).tocsr()
+            b = np.concatenate([b, np.zeros(n, dtype=np.float32)])
+        try:
+            return lsqr(A, b)[0].astype(np.float32)
+        except Exception as exc:
+            raise DataError(f"lsqr failed: {exc}") from exc
+
+
+# ---------------------------------------------------------------------------
+# Validation / solution post-processing
+# ---------------------------------------------------------------------------
 
 class ParameterValidator:
-    """Validates and processes input parameters for linear estimation."""
-    
+    """Validate the parameter dict before linear estimation."""
+
     @staticmethod
     def validate_params(params: Dict) -> Dict:
-        """Validate and clean input parameters."""
         if not isinstance(params, dict):
             raise ParameterError("Parameters must be a dictionary")
-        
-        required_keys = ["pos_x", "pos_y", "height", "width"]
-        missing_keys = [key for key in required_keys if key not in params]
-        if missing_keys:
-            raise ParameterError(f"Missing required parameters: {missing_keys}")
-        
-        # Validate shapes and values
-        pos_x, pos_y, height = params["pos_x"], params["pos_y"], params["height"]
 
-        lengths = {
-            tuple(pos_x.shape)[0],
-            tuple(pos_y.shape)[0],
-            tuple(height.shape)[0],
-        }
+        required = ("pos_x", "pos_y", "height", "width")
+        missing = [k for k in required if k not in params]
+        if missing:
+            raise ParameterError(f"Missing required parameters: {missing}")
+
+        lengths = {tuple(params[k].shape)[0] for k in ("pos_x", "pos_y", "height")}
         if len(lengths) != 1:
             raise ParameterError("pos_x, pos_y, and height must have same length")
-        
-        # Check for invalid values
-        for key in required_keys:
-            values = to_numpy(params[key])
-            if np.any(np.isnan(values)) or np.any(np.isinf(values)):
-                raise ParameterError(f"Parameter '{key}' contains NaN or infinite values")
-        
+
+        for key in required:
+            arr = to_numpy(params[key])
+            if np.any(np.isnan(arr)) or np.any(np.isinf(arr)):
+                raise ParameterError(f"Parameter {key!r} contains NaN or infinite values")
         return params
 
 
 class SolutionProcessor:
-    """Processes and validates linear system solutions."""
-    
+    """Post-process the LS solution back into Fitter parameters."""
+
     @staticmethod
     def validate_solution(solution: np.ndarray) -> bool:
-        """Validate solution for common issues."""
         if solution is None:
             return False
-        
-        # Check for NaN or infinite values (input may be numpy or tensor).
-        if np.any(np.isnan(np.asarray(solution))) or np.any(np.isinf(np.asarray(solution))):
+        a = np.asarray(solution)
+        if np.any(np.isnan(a)) or np.any(np.isinf(a)):
             logging.warning("Solution contains NaN or infinite values")
             return False
-        
         return True
-    
-    @staticmethod
-    def process_height_scaling(height_scale: np.ndarray,
-                             min_scale: float = 0.5,
-                             max_scale: float = 2.0) -> np.ndarray:
-        """Process and constrain height scaling factors."""
-        # Convert to tensor for processing if it's a numpy array
-        if isinstance(height_scale, np.ndarray):
-            height_tensor = to_tensor(height_scale)
-        else:
-            height_tensor = height_scale
-        
-        # Count out-of-bounds values for logging
-        too_small = torch.sum(height_tensor < min_scale)
-        too_large = torch.sum(height_tensor > max_scale)
-
-        # Replace nan with 1
-        height_tensor = torch.where(torch.isnan(height_tensor), 
-                                      torch.ones_like(height_tensor), height_tensor)
-        
-        # Apply constraints
-        height_tensor = torch.clamp(height_tensor, min_scale, max_scale)
-        
-        # Log warnings if constraints were applied
-        if too_small > 0:
-            logging.warning(
-                f"Clipped {too_small} height scale values below {min_scale:.2f}. "
-                "Consider improving peak initialization."
-            )
-        
-        if too_large > 0:
-            logging.warning(
-                f"Clipped {too_large} height scale values above {max_scale:.2f}. "
-                "Linear estimation may be inaccurate."
-            )
-        
-        # Warn if too many values were clipped
-        total_clipped = too_small + too_large
-        if total_clipped > len(height_scale) * 0.3:
-            logging.warning(
-                f"Over {total_clipped/len(height_scale)*100:.2f}% of height values were clipped "
-                f"({total_clipped}/{len(height_scale)}). "
-                "Consider refining peak positions or checking model parameters."
-            )
-        
-        # Convert back to numpy for consistency with original interface
-        return to_numpy(height_tensor)
 
     @staticmethod
-    def process_background(solution, params, init_background, update_threshold=0.2):
-        """Process and update the background parameter based on the solution."""
-        # Extract background value (last element of solution)
-        if isinstance(solution, np.ndarray):
-            background_val = float(solution[-1])
-        else:
-            background_val = float(to_numpy(solution[-1]))
-        
-        background = max(background_val, init_background)
-        
-        # Get previous background value
-        prev_background = params["background"]
-        if hasattr(prev_background, 'shape'):  # It's a tensor
-            prev_bg_val = float(to_numpy(prev_background))
-        else:
-            prev_bg_val = float(prev_background)
-        
-        update_rel = (background - prev_bg_val) / (prev_bg_val + 1e-10)
-        
-        if abs(update_rel) > update_threshold * 2:
-            # Update too large, skip update
-            return prev_bg_val, False
-        
-        if abs(update_rel) > update_threshold:
-            update_rel_clip = max(-update_threshold, min(update_threshold, update_rel))
-            background = prev_bg_val * (1 + update_rel_clip)
-        
+    def process_height_scaling(
+        height_scale: np.ndarray, min_scale: float = 0.5, max_scale: float = 2.0,
+    ) -> np.ndarray:
+        """Clamp height-scale corrections; replace NaNs with 1.0."""
+        h = to_tensor(height_scale) if isinstance(height_scale, np.ndarray) else height_scale
+        h = torch.where(torch.isnan(h), torch.ones_like(h), h)
+        too_small = int((h < min_scale).sum())
+        too_large = int((h > max_scale).sum())
+        h = torch.clamp(h, min_scale, max_scale)
+        if too_small + too_large > len(height_scale) * 0.3:
+            logging.warning(
+                "%.0f%% of height scales clipped (%d/%d) — refine peak positions or check init",
+                100.0 * (too_small + too_large) / len(height_scale),
+                too_small + too_large,
+                len(height_scale),
+            )
+        return to_numpy(h)
+
+    @staticmethod
+    def process_background(
+        solution, params, init_background, update_threshold: float = 0.2,
+    ):
+        """Validate the background update; clip large jumps."""
+        background = max(float(np.asarray(solution[-1])), init_background)
+        prev = params["background"]
+        prev_val = float(to_numpy(prev)) if hasattr(prev, "shape") else float(prev)
+        rel = (background - prev_val) / (prev_val + 1e-10)
+        if abs(rel) > update_threshold * 2:
+            return prev_val, False
+        if abs(rel) > update_threshold:
+            rel = max(-update_threshold, min(update_threshold, rel))
+            background = prev_val * (1 + rel)
         return background, True
 
 
+# ---------------------------------------------------------------------------
+# Public Fitter methods (bound onto Fitter via _bind)
+# ---------------------------------------------------------------------------
+
 def linear_estimator(
     self,
-    params: dict = None,
+    params: Optional[Dict] = None,
     *,
     non_negative: bool = True,
     ridge: float = 1e-4,
     best_effort: bool = False,
-) -> dict:
-    """
-    Refine peak heights via constrained ridge least-squares.
+) -> Dict:
+    """Refine peak heights via non-negative ridge least-squares.
 
-    Builds a sparse design matrix from the current peak model and
-    solves ``min ‖A·x − b‖² + λ‖x‖²`` subject to ``x ≥ 0`` (when
-    ``non_negative=True``). The non-negative path uses
-    ``scipy.optimize.lsq_linear`` (TRF / interior-point), not a
-    post-hoc projection — the historic ``lsqr → max(0, x)`` was the
-    main source of fit_stochastic preconditioning bouncing.
+    Solves ``min ‖A x − b‖² + λ‖x‖²`` subject to ``x ≥ 0``. Updates
+    ``params["height"]`` in place by multiplying by the per-atom scale
+    factor (clamped to ``[0.5, 2.0]``).
 
     Args:
-        params: Model parameters dictionary. If ``None``, uses
-            ``self.params``.
-        non_negative: Enforce per-atom non-negativity (default
-            ``True`` — heights are physically non-negative).
-        ridge: Tikhonov regularization strength. ``0`` disables.
-            Default ``1e-4`` is enough to stabilize without biasing
-            scales meaningfully on typical STEM data.
-        best_effort: If ``True``, log and swallow exceptions and
-            return the input parameters unchanged. Defaults to
-            ``False`` so callers see real failures (parameter
-            validation errors, numerical breakdowns, OOM).
+        params: parameter dict (defaults to ``self.params``).
+        non_negative: enforce x ≥ 0 (default ``True`` — heights are
+            physically non-negative).
+        ridge: Tikhonov ridge strength. ``1e-4`` stabilises without
+            biasing scales meaningfully on STEM data.
+        best_effort: swallow errors and return the input params
+            unchanged (used by ``fit_stochastic``'s pre-conditioner).
 
     Returns:
-        Updated parameters dictionary with refined heights, or the
-        input parameters when ``best_effort`` swallows a failure.
-
-    Raises:
-        ParameterError: If ``params`` fails validation.
-        QEMError: For backend / memory / numerical solver failures
-            (when ``best_effort=False``).
+        Updated parameters dict.
     """
-    # Initialize parameters if needed
     if params is None:
         if self.params is None:
             self.init_params()
         params = self.params
 
-    operation_context = (
+    op = (
         self.memory_monitor.monitor_operation("linear_estimator")
-        if self.memory_monitor else nullcontext()
+        if self.memory_monitor
+        else nullcontext()
     )
 
-    def _run() -> dict:
-        validated_params = ParameterValidator.validate_params(params)
-
-        matrix_builder = DesignMatrixBuilder(self.model, self.nx, self.ny)
-        peak_local, global_x, global_y, mask = matrix_builder.build_local_peaks(
-            validated_params, self.same_width, self.atom_types
+    def _run() -> Dict:
+        validated = ParameterValidator.validate_params(params)
+        builder = DesignMatrixBuilder(self.model, self.nx, self.ny)
+        peak_local, gx, gy, mask = builder.build_local_peaks(
+            validated, self.same_width, self.atom_types,
         )
-
-        background_2d_for_matrix = None
-        if self.background_estimator.use_2d_background:
-            background_2d_for_matrix = self.background_estimator.get_background_for_linear_estimation()
-
-        design_matrix = matrix_builder.build_sparse_matrix(
-            peak_local, global_x, global_y, mask,
+        bg_2d = (
+            self.background_estimator.get_background_for_linear_estimation()
+            if self.background_estimator.use_2d_background
+            else None
+        )
+        A = builder.build_sparse_matrix(
+            peak_local, gx, gy, mask,
             self.fit_background, self.num_coordinates,
-            self.x_grid, self.y_grid,
-            background_2d_for_matrix,
+            self.x_grid, self.y_grid, bg_2d,
         )
-        target = self._prepare_target_vector(validated_params)
-        solver = LinearSystemSolver()
-        solution = solver.solve_system(
-            design_matrix, target, non_negative=non_negative, ridge=ridge,
+        target = self._prepare_target_vector(validated)
+        solution = LinearSystemSolver().solve_system(
+            A, target, non_negative=non_negative, ridge=ridge,
         )
-        return self._process_solution(solution, validated_params)
+        return self._process_solution(solution, validated)
 
-    with operation_context:
+    with op:
         if not best_effort:
-            # Default path: surface real failures to the caller.
             return _run()
         try:
             return _run()
-        except Exception as e:
-            # Opt-in best-effort behaviour for resilient outer loops
-            # (e.g. the stochastic fitter that pre-conditions params).
+        except Exception as exc:
             logging.warning(
                 "linear_estimator failed in best_effort mode; "
-                "returning input parameters unchanged: %s", e,
+                "returning input parameters unchanged: %s", exc,
             )
             return params
 
-def _prepare_target_vector(self, params: dict) -> np.ndarray:
-    """
-    Prepare target vector for linear system.
-    
-    Args:
-        params: Model parameters
-        
-    Returns:
-        Flattened target vector
-    """
-    # target = to_numpy(self.image_tensor).ravel()
+
+def _prepare_target_vector(self, params: Dict) -> np.ndarray:
+    """Flatten the image, subtract scalar/2D background if not jointly fit."""
     target = self.image_tensor.ravel()
-    
     if not self.fit_background:
         if self.background_estimator.use_2d_background:
-            # Subtract current 2D background
-            current_bg = self.get_current_background()
-            target = target - current_bg.ravel()
+            target = target - self.get_current_background().ravel()
         else:
-            # Subtract scalar background
             bg_key = "background_scale" if "background_scale" in params else "background"
             target = target - params[bg_key]
-        
     return target
 
-def _process_solution(self, solution: np.ndarray, params: dict, update_threshold: float = 0.2) -> dict:
-    """
-    Process linear system solution and update parameters.
-    
-    Args:
-        solution: Solution vector from linear solver (numpy array from scipy fallback)
-        params: Original parameters dictionary
-        
-    Returns:
-        Updated parameters dictionary
-    """
-    processor = SolutionProcessor()
-    
-    # Validate solution
-    if not processor.validate_solution(solution):
+
+def _process_solution(
+    self, solution: np.ndarray, params: Dict, update_threshold: float = 0.2,
+) -> Dict:
+    """Apply the LS solution back onto ``params`` (height + optional background)."""
+    proc = SolutionProcessor()
+    if not proc.validate_solution(solution):
         logging.warning("Invalid solution obtained, returning original parameters")
         return params
-    
-    # Extract height scaling and background
+
     if self.fit_background:
         if self.background_estimator.use_2d_background:
-            # For 2D background, the last element is the scaling factor
-            background_scale = solution[-1]
-            
-            # Validate and update 2D background scale
-            if 0.01 < background_scale < 100.0:  # Reasonable bounds
-                self.update_2d_background_scale(float(background_scale))
-                # Update the background_scale parameter
-                params["background_scale"] = to_tensor(float(background_scale))
-                # Remove old background parameter if it exists
-                if "background" in params:
-                    del params["background"]
+            bg_scale = float(solution[-1])
+            if 0.01 < bg_scale < 100.0:
+                self.update_2d_background_scale(bg_scale)
+                params["background_scale"] = to_tensor(bg_scale)
+                params.pop("background", None)
             else:
-                logging.warning("2D background scale out of bounds: %.3f, keeping current scale", background_scale)
-            
+                logging.warning(
+                    "2D background scale out of bounds: %.3f, keeping current scale", bg_scale,
+                )
             height_scale = solution[:-1]
         else:
-            # Scalar background processing
-            background, valid = processor.process_background(
-                solution, params, self.init_background, update_threshold
+            background, ok = proc.process_background(
+                solution, params, self.init_background, update_threshold,
             )
-            if not valid:
-                logging.warning("Background update too large, skipping parameter update with linear estimator")
+            if not ok:
+                logging.warning(
+                    "Background update too large, skipping parameter update with linear estimator",
+                )
                 return params
-            
-            # Convert background to Keras tensor to match parameter types
             params["background"] = to_tensor(background)
             height_scale = solution[:-1]
     else:
         height_scale = solution
-    
-    # Process height scaling factors
-    processed_scale = processor.process_height_scaling(height_scale)
-    
-    # Convert processed scale to Keras tensor to match parameter types
-    processed_scale_tensor = to_tensor(processed_scale)
-    
-    # Update height parameters
-    params["height"] *= processed_scale_tensor
 
-    # Update instance parameters
+    scale = to_tensor(proc.process_height_scaling(height_scale))
+    params["height"] = params["height"] * scale
     self.params = params
     return params
 
 
-
 def _bind(cls) -> None:
-    """Attach extracted methods back onto Fitter at class-load time."""
+    """Attach the linear-estimator methods back onto Fitter at load time."""
     cls.linear_estimator = linear_estimator
     cls._prepare_target_vector = _prepare_target_vector
     cls._process_solution = _process_solution
 
 
 __all__ = [
+    "DesignMatrixBuilder",
+    "LinearSystemSolver",
+    "ParameterValidator",
+    "SolutionProcessor",
     "linear_estimator",
     "_prepare_target_vector",
     "_process_solution",
     "_bind",
 ]
-

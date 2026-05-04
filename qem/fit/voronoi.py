@@ -12,12 +12,9 @@ from tqdm import tqdm as progressbar
 from scipy.spatial import cKDTree
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import nullcontext
 
-from scipy.optimize import curve_fit
 from tqdm import tqdm
 
-from qem.fit.model import gaussian_2d_single
 from qem.utils.tensors import clone_params, to_numpy, to_tensor
 
 if TYPE_CHECKING:
@@ -728,183 +725,21 @@ def fit_voronoi(
     max_radius: int = None,  # optional, for Voronoi cell size
     tol: float = 1e-3,
     border: int = 0,  # optional, exclude border pixels
-    batched: bool = True,    # use the torch batched solver
-    refine: bool = False,    # batched only: per-atom Levenberg-Marquardt
+    refine: bool = False,    # extra per-atom Levenberg-Marquardt
 ):
+    """Refine atomic positions to per-cell Gaussian centroids.
+
+    Closed-form per-cell COM with a global-model acceptance guard
+    (a candidate position is kept only if it improves that atom's
+    contribution to the global residual). All N cells in a single
+    batched torch op. Set ``refine=True`` for an extra per-atom
+    Levenberg-Marquardt step (custom batched torch impl, useful when
+    positions are coarsely initialised).
     """
-    Refine atomic positions to per-cell Gaussian centroids.
-
-    When ``batched=True`` (default), all N cells are processed in one
-    torch op: closed-form per-cell COM with a global-model acceptance
-    guard (a candidate position is kept only if it improves that
-    atom's contribution to the global residual). 3–5× faster than the
-    legacy per-cell ``scipy.optimize.curve_fit`` path with comparable
-    accuracy. Set ``refine=True`` for an extra per-atom Levenberg-
-    Marquardt step (custom batched torch impl, useful when positions
-    are coarsely initialised). Set ``batched=False`` for the legacy
-    thread-pool path.
-    """
-    if batched:
-        return _fit_voronoi_batched(
-            self, params=params, max_radius=max_radius, tol=tol,
-            border=border, refine=refine,
-        )
-    if params is None:
-        if self.params is not None:
-            if "pos_x" in self.params and "pos_y" in self.params:
-                params = self.params
-            else:
-                params = self.init_params()
-        else:
-            params = self.init_params()
-
-    pos_x = params["pos_x"]
-    pos_y = params["pos_y"]
-    coords = torch.stack([pos_y, pos_x])
-    num_coordinates = coords.shape[1]
-
-    # Generate Voronoi cell map
-    if max_radius is None:
-        max_radius = params["width"].max() * 3
-
-    image = to_numpy(self.image)
-    max_radius = to_numpy(max_radius)
-    coords = to_numpy(coords)
-
-    point_record = voronoi_point_record(image, coords, max_radius)
-
-    # Prepare per-cell fitting function
-    def fit_cell(index, params):
-        mask = point_record == index + 1
-        if not np.any(mask):
-            return None  # No pixels in this cell
-
-        cell_img = image * mask
-        # Crop to bounding box for efficiency
-        ys, xs = np.where(mask)
-        y0, y1 = ys.min(), ys.max() + 1
-        x0, x1 = xs.min(), xs.max() + 1
-        cropped_img = cell_img[y0:y1, x0:x1]
-        cropped_mask = mask[y0:y1, x0:x1]
-
-        # Subtract local min (only over masked region)
-        local_min = cropped_img[cropped_mask].min()
-        cropped_img = cropped_img - local_min
-        cropped_img[~cropped_mask] = 0
-
-        # Prepare grid for fitting
-        x_c, y_c = torch.meshgrid(
-            torch.arange(x0, x1), torch.arange(y0, y1), indexing="xy"
-        )
-        x_c = to_numpy(x_c)
-        y_c = to_numpy(y_c)
-
-        # Prepare initial params for this cell
-        local_param = {}
-        local_param["pos_x"] = [params["pos_x"][index]]
-        local_param["pos_y"] = [params["pos_y"][index]]
-        local_param["height"] = (
-            params["height"][index] + params["background"] - local_min
-        )
-        local_param["width"] = params["width"]
-        local_param["background"] = [0.0]
-        self.fit_background = False
-
-        atoms_selected = np.zeros(self.num_coordinates, dtype=bool)
-        atoms_selected[index] = True
-
-        p0 = [
-            local_param["pos_x"][0],
-            local_param["pos_y"][0],
-            local_param["height"],
-            local_param["width"][self.atom_types[index]],
-            local_param["background"][0],
-        ]
-        if border > 0 and (
-            pos_x.min() < border
-            or pos_x.max() > self.nx - border
-            or pos_y.min() < border
-            or pos_y.max() > self.ny - border
-        ):
-            popt = p0
-        else:
-            try:
-                popt, _ = curve_fit(  # pylint: disable=unbalanced-tuple-unpacking
-                    gaussian_2d_single,
-                    (x_c, y_c),
-                    cropped_img.ravel(),
-                    p0=p0,
-                    maxfev=2000,
-                )
-            except Exception as _:
-                popt = p0  # fallback if fit fails
-
-        # if popt[0] < 0 or popt[1] < 0:
-        #     popt = p0
-        # if popt[0] > self.image.shape[0] or popt[1] > self.image.shape[1]:
-        #     popt = p0
-
-        optimized_param = {
-            "pos_x": popt[0],
-            "pos_y": popt[1],
-            "height": popt[2],
-            "width": popt[3],
-            "background": popt[4],
-        }
-        return optimized_param, index
-
-    converged = False
-    pre_params = clone_params(self.params)
-    current_params = clone_params(self.params)
-
-
-    operation_context = (
-        self.memory_monitor.monitor_operation("fit_voronoi") 
-        if self.memory_monitor else nullcontext()
+    return _fit_voronoi_batched(
+        self, params=params, max_radius=max_radius, tol=tol,
+        border=border, refine=refine,
     )
-    
-    with operation_context:
-        while not converged:
-            with ThreadPoolExecutor() as executor:
-                futures = [
-                    executor.submit(fit_cell, i, current_params)
-                    for i in range(num_coordinates)
-                ]
-                # Collect all updates first
-                pos_x_updates = {}
-                pos_y_updates = {}
-
-                for future in tqdm(
-                    as_completed(futures), total=num_coordinates, desc="Fitting cells"
-                ):
-                    result = future.result()
-                    if result is None:
-                        continue
-                    optimized_param, index = result
-                    pos_x_updates[index] = optimized_param["pos_x"]
-                    pos_y_updates[index] = optimized_param["pos_y"]
-
-                # Apply updates by creating new tensors (avoid in-place operations)
-                if pos_x_updates:
-                    pos_x_array = to_numpy(current_params["pos_x"]).copy()
-                    pos_y_array = to_numpy(current_params["pos_y"]).copy()
-
-                    for index, value in pos_x_updates.items():
-                        pos_x_array[index] = value
-                    for index, value in pos_y_updates.items():
-                        pos_y_array[index] = value
-
-                    current_params["pos_x"] = to_tensor(
-                        pos_x_array, dtype=torch.float32
-                    )
-                    current_params["pos_y"] = to_tensor(
-                        pos_y_array, dtype=torch.float32
-                    )
-            converged = self.convergence(current_params, pre_params, tol)
-            pre_params = clone_params(current_params)
-    self.params = current_params
-    # self.model = self.predict(self.params, self.x_grid, self.y_grid)
-    return self.params
 
 def voronoi_integration(self, max_radius: float = None, plot=False,save=False):
     """

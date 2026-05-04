@@ -1,42 +1,30 @@
-import torch
-# Standard library imports
 import copy
 import logging
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import nullcontext
 from typing import Any
 
-# Third-party library imports
+import h5py
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from matplotlib_scalebar.scalebar import ScaleBar
-from numpy.typing import NDArray
-from scipy.optimize import curve_fit
-from skimage.feature import peak_local_max
-from scipy.ndimage import sobel, binary_erosion, binary_dilation, gaussian_filter,laplace
-from skimage.morphology import remove_small_objects, label
-from skimage.measure import find_contours
-from matplotlib.path import Path
+from scipy.ndimage import gaussian_filter
 from tqdm import tqdm
 
-# Application-specific imports
 from qem.analysis.crystal_analyzer import CrystalAnalyzer
-from qem.analysis.region import Regions, Region
-from qem.viz.select import (
-    GetAtomSelection,
-    GetRegionSelection,
-    InteractivePlot,
-)
+from qem.analysis.region import Region, Regions
+from qem.fit.background import Background
+from qem.viz.select import GetAtomSelection, GetRegionSelection
 from qem.fit.model import (
-    ImageModel,
     GaussianKernel,
     GaussianModel,
+    ImageModel,
     LorentzianModel,
     VoigtModel,
-    gaussian_2d_single,
 )
 from qem.processing import butterworth_window
-from qem.fit.refine import calculate_center_of_mass
+from qem.utils.arrays import get_random_indices_in_batches
+from qem.utils.memory import MemoryMonitor
 from qem.utils.tensors import (
     best_device,
     clone_params,
@@ -45,20 +33,6 @@ from qem.utils.tensors import (
     to_numpy,
     to_tensor,
 )
-from qem.utils.arrays import get_random_indices_in_batches
-from qem.viz.geometry import remove_close_coordinates
-from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
-from qem.fit.background import Background, estimate_background
-from qem.fit.solver import (
-    ParameterValidator,
-    DesignMatrixBuilder,
-    LinearSystemSolver,
-    SolutionProcessor,
-)
-from qem.fit.validation import FitterValidator, FitParamsValidator
-from qem.utils.memory import MemoryMonitor
-
-import h5py
 
 # Only configure logging if not already configured
 if not logging.getLogger().handlers:

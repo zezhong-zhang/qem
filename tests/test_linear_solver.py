@@ -147,8 +147,7 @@ class TestLinearSystemSolver:
     """Test linear system solving functionality."""
 
     def test_solve_system_success(self):
-        """Test successful system solving."""
-        # Create a simple test system
+        """Test successful system solving (default non-negative path)."""
         A = coo_matrix(np.array([[1, 0], [0, 1]], dtype=np.float32))
         b = np.array([1, 2], dtype=np.float32)
 
@@ -156,7 +155,8 @@ class TestLinearSystemSolver:
         solution = solver.solve_system(A, b)
         assert solution is not None
         assert len(solution) == 2
-        np.testing.assert_array_almost_equal(solution, [1, 2])
+        # PG-NNLS converges to within ~1e-3 of the exact solution.
+        np.testing.assert_array_almost_equal(solution, [1, 2], decimal=2)
 
     def test_solve_system_non_negative(self):
         """Test non-negative constraint solving."""
