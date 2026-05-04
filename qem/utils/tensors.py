@@ -74,9 +74,33 @@ def clone_params(params: dict[str, Any]) -> dict[str, Any]:
 
 
 def release_memory() -> None:
-    """Release CUDA cached memory if available; no-op on CPU."""
+    """Release accelerator cached memory if available; no-op on CPU."""
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        empty_cache = getattr(getattr(torch, "mps", None), "empty_cache", None)
+        if empty_cache is not None:
+            empty_cache()
+
+
+def best_device() -> torch.device:
+    """Auto-detect the best torch device.
+
+    Priority: CUDA (covers NVIDIA + AMD/ROCm via the same API) → MPS
+    (Apple Silicon) → CPU. Override with the ``QEM_DEVICE`` environment
+    variable (``cuda`` / ``mps`` / ``cpu``).
+    """
+    import os
+    override = os.environ.get("QEM_DEVICE", "").strip().lower()
+    if override:
+        return torch.device(override)
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
 
 
 __all__ = [
@@ -85,4 +109,5 @@ __all__ = [
     "stop_grad",
     "clone_params",
     "release_memory",
+    "best_device",
 ]

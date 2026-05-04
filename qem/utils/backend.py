@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from .tensors import (
+    best_device,
     clone_params as safe_deepcopy_params,
     release_memory as release_backend_memory,
     to_numpy as safe_convert_to_numpy,
@@ -65,6 +66,7 @@ __all__ = [
     "safe_convert_to_tensor",
     "safe_deepcopy_params",
     "release_backend_memory",
+    "best_device",
     "detect_available_backends",
     "get_best_backend",
     "configure_backend",

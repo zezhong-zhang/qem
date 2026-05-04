@@ -63,6 +63,7 @@ def fit_loop(
     lr_factor: float = 0.1,
     min_lr: float = 1e-6,
     snapshot_every: int = 50,
+    post_step: Callable[[nn.Module], None] | None = None,
     verbose: bool = False,
 ) -> FitResult:
     """Adam-style training loop with early stopping and LR reduction.
@@ -112,6 +113,10 @@ def fit_loop(
             loss = loss_fn(target, prediction)
             loss.backward()
             optimizer.step()
+
+        if post_step is not None:
+            with torch.no_grad():
+                post_step(model)
 
         loss_val = float(loss.detach())
         if scheduler is not None:

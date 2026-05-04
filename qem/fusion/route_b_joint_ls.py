@@ -6,9 +6,13 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional
 
 import numpy as np
+import torch
+from torch import nn
 
+from qem.fit._loop import fit_loop, make_optimizer
 from qem.utils.exceptions import DataError, ParameterError
 from qem.utils.elements import chemical_symbols
+from qem.utils.tensors import best_device
 
 from .dataset import MultiModalDataset
 
@@ -60,19 +64,6 @@ def _resize_spectrum_image(data: np.ndarray, target_shape) -> np.ndarray:
         preserve_range=True,
         anti_aliasing=True,
     ).astype(np.float64)
-
-
-def _tv_gradient(concentrations: np.ndarray, epsilon: float = 1e-8) -> np.ndarray:
-    grad = np.zeros_like(concentrations)
-    dx = np.diff(concentrations, axis=1)
-    dy = np.diff(concentrations, axis=0)
-    wx = dx / np.sqrt(dx * dx + epsilon)
-    wy = dy / np.sqrt(dy * dy + epsilon)
-    grad[:, :-1, :] -= wx
-    grad[:, 1:, :] += wx
-    grad[:-1, :, :] -= wy
-    grad[1:, :, :] += wy
-    return grad
 
 
 class JointLeastSquaresRoute:
@@ -151,62 +142,124 @@ class JointLeastSquaresRoute:
         edx_ref = self._normalise_reference(dataset.edx_reference)
         eels_ref = self._normalise_reference(dataset.eels_reference)
 
-        x = self._initial_concentrations(dataset, edx, eels, edx_ref, eels_ref, initial)
+        x_init = self._initial_concentrations(dataset, edx, eels, edx_ref, eels_ref, initial)
+
+        device = best_device()
+        dtype = torch.float32
+
+        adf_t = torch.as_tensor(adf, dtype=dtype, device=device)
+        edx_t = torch.as_tensor(edx, dtype=dtype, device=device) if edx is not None else None
+        eels_t = torch.as_tensor(eels, dtype=dtype, device=device) if eels is not None else None
+        edx_ref_t = (
+            torch.as_tensor(edx_ref, dtype=dtype, device=device)
+            if edx_ref is not None and edx is not None else None
+        )
+        eels_ref_t = (
+            torch.as_tensor(eels_ref, dtype=dtype, device=device)
+            if eels_ref is not None and eels is not None else None
+        )
+        weights_norm = self.adf_weights / np.max(self.adf_weights)
+        weights_t = torch.as_tensor(weights_norm, dtype=dtype, device=device)
+
+        n_elements = max(1, len(self.elements))
+        scale = 1.0 / float(n_elements)
+
         costs = {"total": [], "adf": [], "edx": [], "eels": [], "tv": []}
 
-        previous_total = np.inf
-        for iteration in range(self.max_iter):
-            grad = np.zeros_like(x)
+        class _ConcentrationModel(nn.Module):
+            def __init__(self, x0: torch.Tensor) -> None:
+                super().__init__()
+                self.x = nn.Parameter(x0)
 
-            adf_pred = self._adf_forward(x)
-            adf_residual = adf_pred - adf
-            grad += self.lambda_adf * self._adf_gradient(x, adf_residual)
-            adf_cost = 0.5 * self.lambda_adf * float(np.mean(adf_residual ** 2))
+            def forward(self, _inputs):  # noqa: ARG002
+                return self.x
 
-            edx_cost = 0.0
-            if edx is not None and edx_ref is not None:
-                edx_pred = np.tensordot(x, edx_ref.T, axes=([-1], [0]))
-                edx_residual = edx_pred - edx
-                grad += self.lambda_edx * np.tensordot(edx_residual, edx_ref, axes=([-1], [0]))
-                edx_cost = 0.5 * self.lambda_edx * float(np.mean(edx_residual ** 2))
+        gamma = self.gamma
+        lambda_adf = self.lambda_adf
+        lambda_edx = self.lambda_edx
+        lambda_eels = self.lambda_eels
+        lambda_tv = self.lambda_tv
 
-            eels_cost = 0.0
-            if eels is not None and eels_ref is not None:
-                eels_pred = np.tensordot(x, eels_ref.T, axes=([-1], [0]))
-                eels_residual = eels_pred - eels
-                grad += self.lambda_eels * np.tensordot(eels_residual, eels_ref, axes=([-1], [0]))
-                eels_cost = 0.5 * self.lambda_eels * float(np.mean(eels_residual ** 2))
+        def joint_loss(_target, x_param: torch.Tensor) -> torch.Tensor:
+            # Gradient is scaled by 1/n_elements to mirror the historic
+            # `grad /= max(1.0, n_elements)` from the numpy loop.
+            x_pos = torch.clamp(x_param, min=0.0)
+            adf_pred = torch.tensordot(
+                torch.pow(x_pos, gamma), weights_t, dims=([-1], [0])
+            )
+            adf_residual = adf_pred - adf_t
+            adf_cost = 0.5 * lambda_adf * torch.mean(adf_residual ** 2)
+            cost = adf_cost
+            edx_cost = torch.zeros((), dtype=dtype, device=device)
+            eels_cost = torch.zeros((), dtype=dtype, device=device)
+            tv_cost = torch.zeros((), dtype=dtype, device=device)
 
-            tv_cost = 0.0
-            if self.lambda_tv:
-                grad += self.lambda_tv * _tv_gradient(x)
-                tv_cost = self.lambda_tv * self._tv_value(x)
+            if edx_t is not None and edx_ref_t is not None:
+                edx_pred = torch.tensordot(x_param, edx_ref_t.T, dims=([-1], [0]))
+                edx_cost = 0.5 * lambda_edx * torch.mean((edx_pred - edx_t) ** 2)
+                cost = cost + edx_cost
+            if eels_t is not None and eels_ref_t is not None:
+                eels_pred = torch.tensordot(x_param, eels_ref_t.T, dims=([-1], [0]))
+                eels_cost = 0.5 * lambda_eels * torch.mean((eels_pred - eels_t) ** 2)
+                cost = cost + eels_cost
+            if lambda_tv:
+                dx = x_param[:, 1:, :] - x_param[:, :-1, :]
+                dy = x_param[1:, :, :] - x_param[:-1, :, :]
+                tv_cost = lambda_tv * (torch.mean(torch.abs(dx)) + torch.mean(torch.abs(dy)))
+                cost = cost + tv_cost
 
-            grad /= max(1.0, float(x.shape[-1]))
-            x = np.maximum(x - self.step_size * grad, 0.0)
+            costs["adf"].append(float(adf_cost.detach()))
+            costs["edx"].append(float(edx_cost.detach()))
+            costs["eels"].append(float(eels_cost.detach()))
+            costs["tv"].append(float(tv_cost.detach()))
+            costs["total"].append(float(cost.detach()))
+            return cost * scale
 
-            total = adf_cost + edx_cost + eels_cost + tv_cost
-            costs["total"].append(total)
-            costs["adf"].append(adf_cost)
-            costs["edx"].append(edx_cost)
-            costs["eels"].append(eels_cost)
-            costs["tv"].append(tv_cost)
+        model = _ConcentrationModel(
+            torch.as_tensor(x_init, dtype=dtype, device=device)
+        )
 
-            if abs(previous_total - total) <= self.tolerance * max(1.0, previous_total):
-                break
-            previous_total = total
+        # Project to the non-negative cone after each optimizer step
+        # (PGD: take the step, then project).
+        def _project_nonneg(m: nn.Module) -> None:
+            m.x.clamp_(min=0.0)  # type: ignore[union-attr]
+
+        # SGD mirrors the historic projected-gradient loop (fixed step,
+        # no momentum). Adam at the user-supplied LR — typically ~0.5 —
+        # would wildly overshoot since its per-step update magnitude is
+        # O(lr) regardless of the gradient scale.
+        optimizer = make_optimizer("sgd", model.parameters(), self.step_size)
+        result = fit_loop(
+            model=model,
+            inputs=None,
+            target=None,  # type: ignore[arg-type]  # loss_fn ignores target
+            loss_fn=joint_loss,
+            optimizer=optimizer,
+            epochs=self.max_iter,
+            tol=self.tolerance,
+            patience=self.max_iter,
+            lr_patience=10,
+            lr_factor=0.5,
+            min_lr=1e-6,
+            snapshot_every=max(self.max_iter, 1),
+            post_step=_project_nonneg,
+            verbose=False,
+        )
+
+        x = torch.clamp(model.x.detach(), min=0.0).cpu().numpy().astype(np.float64)
 
         self.result_ = FusionResult(
             concentrations=x,
             elements=self.elements.copy(),
             cost_history=costs,
             metadata={
-                "iterations": iteration + 1,
+                "iterations": result.epochs_run,
                 "gamma": self.gamma,
                 "lambda_adf": self.lambda_adf,
                 "lambda_edx": self.lambda_edx,
                 "lambda_eels": self.lambda_eels,
                 "lambda_tv": self.lambda_tv,
+                "device": str(device),
             },
         )
         return self
@@ -270,20 +323,3 @@ class JointLeastSquaresRoute:
         guess = np.repeat(adf[..., None], len(self.elements), axis=-1)
         return np.maximum(guess / np.maximum(weights, 1e-12), 0.0)
 
-    def _adf_forward(self, concentrations: np.ndarray) -> np.ndarray:
-        weights = self.adf_weights / np.max(self.adf_weights)
-        return np.tensordot(
-            np.power(np.maximum(concentrations, 0.0), self.gamma),
-            weights,
-            axes=([-1], [0]),
-        )
-
-    def _adf_gradient(self, concentrations: np.ndarray, residual: np.ndarray) -> np.ndarray:
-        weights = self.adf_weights / np.max(self.adf_weights)
-        base = np.power(np.maximum(concentrations, 1e-12), self.gamma - 1.0)
-        return self.gamma * residual[..., None] * base * weights
-
-    def _tv_value(self, concentrations: np.ndarray) -> float:
-        dx = np.diff(concentrations, axis=1)
-        dy = np.diff(concentrations, axis=0)
-        return float(np.mean(np.abs(dx)) + np.mean(np.abs(dy)))
