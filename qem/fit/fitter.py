@@ -57,7 +57,6 @@ from qem.fit.solver import (
 from qem.fit.validation import FitterValidator, FitParamsValidator
 from qem.utils.memory import MemoryMonitor
 
-from qem.fit.lbfgs import LBFGSOptimizer
 import h5py
 
 # Only configure logging if not already configured
@@ -1637,50 +1636,23 @@ class Fitter:
         )
         
         with operation_context:
-            # Choose optimizer based on type
-            if optimizer.lower() == "lbfgs":
+            from qem.fit._loop import fit_loop, make_optimizer
 
-                lbfgs_optimizer = LBFGSOptimizer(
-                    learning_rate=step_size,
-                    maxiter=20,
-                    tolerance_grad=optimizer_kwargs.get('tolerance_grad', 1e-7),
-                    tolerance_change=optimizer_kwargs.get('tolerance_change', 1e-9),
-                    )
-                        
-                # def loss_fn(outputs, targets):
-                #     return F.mse_loss(outputs, targets)
-                
-                results = lbfgs_optimizer.optimize(
-                    model=model,
-                    loss_fn=self.loss,
-                    inputs=model_inputs,
-                    targets=image_tensor,
-                    maxiter=maxiter,
-                    verbose=verbose
-                )
-                
-                if verbose:
-                    logging.info(f"L-BFGS optimization: Loss = {results['final_loss']:.6f}, "
-                                f"Converged = {results['converged']}")
-            # Use standard first-order optimizers (explicit PyTorch loop).
-            else:
-                from qem.fit._loop import fit_loop, make_optimizer
-
-                opt = make_optimizer(optimizer, model.parameters(), step_size)
-                fit_loop(
-                    model=model,
-                    inputs=model_inputs,
-                    target=image_tensor,
-                    loss_fn=self.loss,
-                    optimizer=opt,
-                    epochs=maxiter,
-                    tol=tol,
-                    patience=100,
-                    lr_patience=10,
-                    lr_factor=0.1,
-                    min_lr=1e-6,
-                    verbose=verbose,
-                )
+            opt = make_optimizer(optimizer, model.parameters(), step_size)
+            fit_loop(
+                model=model,
+                inputs=model_inputs,
+                target=image_tensor,
+                loss_fn=self.loss,
+                optimizer=opt,
+                epochs=maxiter,
+                tol=tol,
+                patience=100,
+                lr_patience=10,
+                lr_factor=0.1,
+                min_lr=1e-6,
+                verbose=verbose,
+            )
         
         # Clean up model reference
         self._optimization_model = None

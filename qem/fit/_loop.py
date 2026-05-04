@@ -34,14 +34,18 @@ def make_optimizer(
     learning_rate: float,
     **kwargs: Any,
 ) -> torch.optim.Optimizer:
-    """Build a torch optimiser by short name (``'adam' / 'adamw' / 'sgd'``)."""
+    """Build a torch optimiser by short name (``'adam' / 'adamw' / 'sgd' / 'lbfgs'``)."""
     cls = {
         "adam": torch.optim.Adam,
         "adamw": torch.optim.AdamW,
         "sgd": torch.optim.SGD,
+        "lbfgs": torch.optim.LBFGS,
     }.get(name.lower())
     if cls is None:
-        raise ValueError(f"Unknown optimizer {name!r}; expected 'adam', 'adamw', or 'sgd'.")
+        raise ValueError(
+            f"Unknown optimizer {name!r}; expected one of "
+            "'adam', 'adamw', 'sgd', 'lbfgs'."
+        )
     return cls(parameters, lr=learning_rate, **kwargs)
 
 
@@ -67,17 +71,25 @@ def fit_loop(
     with restore-best-weights + ReduceLROnPlateau), without their
     overhead.
     """
-    # Use relative-threshold mode so the scheduler doesn't crash the LR
-    # when the loss already starts near the optimum.
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer,
-        mode="min",
-        factor=lr_factor,
-        patience=lr_patience,
-        threshold=1e-2,
-        threshold_mode="rel",
-        min_lr=min_lr,
-    )
+    is_lbfgs = isinstance(optimizer, torch.optim.LBFGS)
+    if is_lbfgs:
+        # L-BFGS reevaluates the loss multiple times per .step(); the closure
+        # pattern is the only supported API. ReduceLROnPlateau is meaningful
+        # for first-order optimisers but not for L-BFGS — it manages its own
+        # line search.
+        scheduler = None
+    else:
+        # Use relative-threshold mode so the scheduler doesn't crash the LR
+        # when the loss already starts near the optimum.
+        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+            optimizer,
+            mode="min",
+            factor=lr_factor,
+            patience=lr_patience,
+            threshold=1e-2,
+            threshold_mode="rel",
+            min_lr=min_lr,
+        )
 
     best_loss = float("inf")
     best_state: dict[str, torch.Tensor] | None = None
@@ -86,14 +98,24 @@ def fit_loop(
     epochs_run = 0
 
     for epoch in range(epochs):
-        optimizer.zero_grad(set_to_none=True)
-        prediction = model(inputs)
-        loss = loss_fn(target, prediction)
-        loss.backward()
-        optimizer.step()
+        if is_lbfgs:
+            def closure():
+                optimizer.zero_grad(set_to_none=True)
+                pred = model(inputs)
+                _loss = loss_fn(target, pred)
+                _loss.backward()
+                return _loss
+            loss = optimizer.step(closure)
+        else:
+            optimizer.zero_grad(set_to_none=True)
+            prediction = model(inputs)
+            loss = loss_fn(target, prediction)
+            loss.backward()
+            optimizer.step()
 
         loss_val = float(loss.detach())
-        scheduler.step(loss_val)
+        if scheduler is not None:
+            scheduler.step(loss_val)
         last_loss = loss_val
         epochs_run = epoch + 1
 
