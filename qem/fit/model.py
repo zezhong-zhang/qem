@@ -39,6 +39,9 @@ class ImageModel(nn.Module):
         # See _sum_local — re-allocating these every forward pass is the
         # single biggest hot-loop allocation in fit_global.
         self._window_cache: dict[tuple, tuple[torch.Tensor, torch.Tensor]] = {}
+        # Cache window_size to avoid a per-forward .item() sync on MPS.
+        # Refreshed on set_params / set_window_size.
+        self._cached_window_size: int | None = None
 
     # ------------------------------------------------------------------
     # parameter management
@@ -47,6 +50,7 @@ class ImageModel(nn.Module):
     def set_params(self, params: Mapping[str, Any]) -> None:
         """Stash an initial parameter set; build lazily on first use."""
         self.input_params = {k: to_tensor(v) for k, v in params.items()}
+        self._cached_window_size = None  # widths may have changed
         if self.built:
             self.update_params(self.input_params)
 
@@ -175,11 +179,20 @@ class ImageModel(nn.Module):
         the static window grid and skip the per-call allocation.
         """
         assert self.input_params is not None
-        # width is a Parameter on the right device — no numpy round-trip.
-        max_width = float(self.width.detach().max().item())
-        # 3σ covers 99.7% of a Gaussian; 4σ was 35% wider with no
-        # measurable accuracy gain but ~78% more scatter_add elements.
-        window_size = max(int(max_width * 3), 1)
+        # Cache window_size at set_params time. Recomputing every
+        # forward pass triggers a CPU sync via .item() — on MPS each
+        # sync costs hundreds of µs, dominating the fit-loop overhead.
+        # Widths drift slowly during Adam; the initial max-width × 1.5
+        # safety factor is plenty.
+        if self._cached_window_size is None:
+            init_w = self.input_params["width"]
+            init_w_t = init_w if torch.is_tensor(init_w) else torch.as_tensor(init_w)
+            max_width = float(init_w_t.detach().max().item())
+            # 3σ covers 99.7% of a Gaussian. Adam updates widths
+            # slowly; if widths grow significantly between set_params
+            # calls the cache is invalidated there.
+            self._cached_window_size = max(int(max_width * 3), 1)
+        window_size = self._cached_window_size
         cache_key = (window_size, x_grid.dtype, x_grid.device)
         cached = self._window_cache.get(cache_key)
         if cached is None:
