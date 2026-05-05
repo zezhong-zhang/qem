@@ -10,6 +10,292 @@ from qem.fit.fitter import Fitter
 from qem.utils.tensors import to_numpy
 
 
+def goodness_of_fit(image, prediction, *, noise_var=None):
+    """Quick goodness-of-fit summary for a fitted prediction.
+
+    Args:
+        image: ground-truth observation (H, W).
+        prediction: model prediction (H, W).
+        noise_var: per-pixel noise variance estimate. If None, the median
+            of the residual variance over a 16-pixel-wide flat border is
+            used as a proxy (assumes that border is signal-free).
+
+    Returns a dict with:
+        L2_std, L1_mean, L2_max — residual norms
+        chi2_red — reduced chi-squared (target ≈ 1 if noise_var is right)
+        psd_white_ratio — fraction of residual 2D power spectrum within
+            ±20% of the median (1.0 means perfectly white residuals;
+            <1.0 means structured residuals — model still missing signal)
+        psd_peak_freq — radial frequency (cycles/px) of the strongest
+            non-DC peak in the residual PSD; 0 if no significant peak.
+    """
+    image = np.asarray(image, dtype=np.float64)
+    prediction = np.asarray(prediction, dtype=np.float64)
+    res = image - prediction
+
+    out = {
+        "L2_std": float(np.std(res)),
+        "L1_mean": float(np.mean(np.abs(res))),
+        "L2_max": float(np.max(np.abs(res))),
+    }
+
+    # Reduced chi-squared. If the user didn't pass a noise variance, fall
+    # back to a flat-border estimate.
+    if noise_var is None:
+        b = 16
+        border = np.concatenate([
+            res[:b].ravel(), res[-b:].ravel(),
+            res[b:-b, :b].ravel(), res[b:-b, -b:].ravel(),
+        ])
+        noise_var = float(np.var(border)) if border.size else float(np.var(res))
+    noise_var = max(float(noise_var), 1e-12)
+    dof = max(res.size, 1)
+    out["chi2_red"] = float(np.sum(res * res) / (dof * noise_var))
+
+    # 2D residual power spectrum (FFT, drop DC).
+    spec = np.fft.fft2(res)
+    psd = np.abs(spec) ** 2
+    psd_flat = psd.ravel()
+    psd_flat[0] = 0.0  # drop DC
+    psd_no_dc = psd_flat[psd_flat > 0]
+    if psd_no_dc.size:
+        med = float(np.median(psd_no_dc))
+        within_band = np.sum(
+            (psd_no_dc >= 0.8 * med) & (psd_no_dc <= 1.2 * med),
+        )
+        out["psd_white_ratio"] = float(within_band / psd_no_dc.size)
+    else:
+        out["psd_white_ratio"] = 1.0
+
+    # Radial average of the PSD; locate dominant non-DC peak.
+    h, w = res.shape
+    fy = np.fft.fftfreq(h)[:, None]
+    fx = np.fft.fftfreq(w)[None, :]
+    r = np.sqrt(fx * fx + fy * fy).ravel()
+    r_bins = np.linspace(0, 0.5, 64)
+    idx = np.digitize(r, r_bins) - 1
+    radial = np.zeros(len(r_bins))
+    counts = np.zeros(len(r_bins))
+    for i, p in zip(idx, psd_flat):
+        if 0 <= i < len(r_bins):
+            radial[i] += p
+            counts[i] += 1
+    radial = radial / np.maximum(counts, 1)
+    radial[0] = 0.0  # ignore DC bin
+    nonzero = radial[radial > 0]
+    median_radial = float(np.median(nonzero)) if nonzero.size else 1.0
+    if radial.max() > 2 * median_radial:
+        out["psd_peak_freq"] = float(r_bins[int(np.argmax(radial))])
+    else:
+        out["psd_peak_freq"] = 0.0
+
+    return out
+
+
+def _flat_border_noise_var(residual: np.ndarray, border: int = 16) -> float:
+    """Estimate per-pixel noise variance from a flat border of the image.
+
+    Assumes the border is signal-free (no atoms / no particle). Returns
+    the variance of those pixels — a Gaussian-noise proxy that's
+    independent of how well the centre is fit.
+    """
+    if residual.shape[0] <= 2 * border or residual.shape[1] <= 2 * border:
+        return float(np.var(residual))
+    pixels = np.concatenate([
+        residual[:border].ravel(), residual[-border:].ravel(),
+        residual[border:-border, :border].ravel(),
+        residual[border:-border, -border:].ravel(),
+    ])
+    return float(np.var(pixels))
+
+
+def crlb_per_atom(fitter, *, noise_var: float | None = None) -> dict:
+    """Per-atom Cramér-Rao lower bound on (x, y, h, SCS).
+
+    Closed-form CRLB for an isolated isotropic 2D Gaussian peak with
+    Gaussian pixel noise of variance ``σ²_n``. The Fisher information
+    block is diagonal by symmetry::
+
+        F_xx = F_yy = π·h² / (2·σ²_n)
+        F_hh         = π·w² / σ²_n
+
+    so the lower-bound standard deviations are::
+
+        σ(x) = σ(y) = σ_n / (h · √(π/2))     [pixel units]
+        σ(h)         = σ_n / (w · √π)
+        σ(SCS)/SCS   = √( (σ(h)/h)² + (2·σ(w)/w)² )   (here w shared
+                       and considered exact ⇒ σ(SCS)/SCS ≈ σ(h)/h)
+
+    Args:
+        fitter: a fitted :class:`qem.fit.fitter.Fitter`.
+        noise_var: per-pixel noise variance. If ``None``, estimated from
+            a flat border of the residual image.
+
+    Returns:
+        dict with arrays per atom (in pixel/intensity units, matching
+        Fitter parameter conventions) and aggregate scalars:
+
+        - ``sigma_x``, ``sigma_y``: position CRLB in pixels.
+        - ``sigma_x_ang``, ``sigma_y_ang``: same in Å.
+        - ``sigma_h``: height CRLB.
+        - ``rel_sigma_h``: σ(h) / h (relative).
+        - ``rel_sigma_scs``: σ(SCS) / SCS (relative, ≈ rel_sigma_h
+          when width is treated as fixed).
+        - ``noise_var``: variance used.
+    """
+    image = np.asarray(fitter.image, dtype=np.float64)
+    pred = np.asarray(fitter.prediction, dtype=np.float64)
+    res = image - pred
+
+    if noise_var is None:
+        noise_var = _flat_border_noise_var(res)
+    sigma_n = float(np.sqrt(max(noise_var, 1e-12)))
+
+    h = to_numpy(fitter.params["height"]).astype(np.float64)
+    w_raw = to_numpy(fitter.params["width"]).astype(np.float64)
+    if getattr(fitter, "same_width", True):
+        atom_types = to_numpy(fitter.params["atom_types"]).astype(np.int64)
+        w = w_raw[atom_types]
+    else:
+        w = w_raw
+
+    # Closed-form CRLB. Guard against h = 0 (atoms that converged to zero
+    # amplitude have no positional information).
+    h_safe = np.maximum(np.abs(h), 1e-6)
+    sigma_x = sigma_n / (h_safe * np.sqrt(np.pi / 2.0))
+    sigma_h = sigma_n / (np.maximum(w, 1e-6) * np.sqrt(np.pi))
+
+    return {
+        "sigma_x": sigma_x,
+        "sigma_y": sigma_x.copy(),
+        "sigma_x_ang": sigma_x * fitter.dx,
+        "sigma_y_ang": sigma_x * fitter.dx,
+        "sigma_h": sigma_h,
+        "rel_sigma_h": sigma_h / h_safe,
+        "rel_sigma_scs": sigma_h / h_safe,
+        "noise_var": float(noise_var),
+        "sigma_n": sigma_n,
+    }
+
+
+def residual_per_atom(
+    fitter,
+    *,
+    window_factor: float = 3.0,
+    noise_var: float | None = None,
+) -> dict:
+    """Per-atom residual quality inside a local window around each peak.
+
+    For each atom the residual is summarised inside a square window of
+    half-width ``window_factor · w`` (3σ by default — covers >99% of the
+    peak). Returns arrays of per-atom statistics suitable for spotting
+    locally mis-fit atoms (the kind of structured residual that drives
+    ``chi2_red`` above 1 and makes the residual PSD non-white).
+
+    Returns:
+        dict with arrays per atom and an aggregate noise-variance:
+
+        - ``res_std``: residual standard deviation in the window.
+        - ``res_l1``:  mean absolute residual in the window.
+        - ``res_max``: max absolute residual.
+        - ``res_sum``: signed sum of residual (positive ⇒ peak under-
+          predicted, negative ⇒ over-predicted).
+        - ``chi2_red``: local reduced χ², =⟨r²⟩ / σ²_n. Atoms with
+          chi2_red ≫ 1 are mis-fit.
+        - ``window_size``: side length of the window in pixels.
+    """
+    image = np.asarray(fitter.image, dtype=np.float64)
+    pred = np.asarray(fitter.prediction, dtype=np.float64)
+    res = image - pred
+    H, W = res.shape
+
+    if noise_var is None:
+        noise_var = _flat_border_noise_var(res)
+    noise_var = max(float(noise_var), 1e-12)
+
+    pos_x = to_numpy(fitter.params["pos_x"]).astype(np.float64)
+    pos_y = to_numpy(fitter.params["pos_y"]).astype(np.float64)
+    w_raw = to_numpy(fitter.params["width"]).astype(np.float64)
+    if getattr(fitter, "same_width", True):
+        atom_types = to_numpy(fitter.params["atom_types"]).astype(np.int64)
+        w = w_raw[atom_types]
+    else:
+        w = w_raw
+
+    n = pos_x.shape[0]
+    res_std = np.zeros(n)
+    res_l1 = np.zeros(n)
+    res_max = np.zeros(n)
+    res_sum = np.zeros(n)
+    chi2_red = np.zeros(n)
+    win_sizes = np.zeros(n, dtype=np.int32)
+
+    # Per-atom local window. Atoms within ``window_factor·w`` pixels of
+    # the image edge get a clipped window — fine for diagnostics.
+    for i in range(n):
+        half = max(int(window_factor * float(w[i])), 1)
+        x_lo = max(int(pos_x[i] - half), 0)
+        x_hi = min(int(pos_x[i] + half) + 1, W)
+        y_lo = max(int(pos_y[i] - half), 0)
+        y_hi = min(int(pos_y[i] + half) + 1, H)
+        block = res[y_lo:y_hi, x_lo:x_hi]
+        if block.size == 0:
+            continue
+        win_sizes[i] = block.shape[0] * block.shape[1]
+        res_std[i] = float(np.std(block))
+        res_l1[i] = float(np.mean(np.abs(block)))
+        res_max[i] = float(np.max(np.abs(block)))
+        res_sum[i] = float(np.sum(block))
+        chi2_red[i] = float(np.mean(block * block) / noise_var)
+
+    return {
+        "res_std": res_std,
+        "res_l1": res_l1,
+        "res_max": res_max,
+        "res_sum": res_sum,
+        "chi2_red": chi2_red,
+        "window_size": win_sizes,
+        "noise_var": float(noise_var),
+    }
+
+
+def fit_efficiency(
+    fitter,
+    *,
+    noise_var: float | None = None,
+    window_factor: float = 3.0,
+) -> dict:
+    """Compare per-atom residual to per-atom CRLB.
+
+    A statistically efficient estimator should leave residual variance
+    inside each peak window ≈ σ²_n (the noise floor). The ratio of
+    observed local-residual variance to ``σ²_n`` is the local
+    reduced-χ². Persistent ratios > 1 signal model insufficiency
+    (shared width too coarse, missed peaks, wrong peak shape) rather
+    than optimizer failure — CRLB is satisfied only when the model is
+    correctly specified.
+
+    Returns:
+        dict combining ``crlb_per_atom`` and ``residual_per_atom`` plus:
+
+        - ``efficiency_x``: 1.0 if local-residual is at noise floor
+          AND fit reached CRLB on x; otherwise diagnostic.
+        - ``frac_atoms_above_chi2``: fraction of atoms with local
+          chi2_red > 2.
+        - ``mean_local_chi2``: mean per-atom chi2_red.
+    """
+    crlb = crlb_per_atom(fitter, noise_var=noise_var)
+    rpa = residual_per_atom(
+        fitter, window_factor=window_factor, noise_var=crlb["noise_var"],
+    )
+    return {
+        **{f"crlb_{k}": v for k, v in crlb.items()},
+        **{f"local_{k}": v for k, v in rpa.items()},
+        "frac_atoms_above_chi2": float(np.mean(rpa["chi2_red"] > 2.0)),
+        "mean_local_chi2": float(np.mean(rpa["chi2_red"])),
+    }
+
+
 def time_it(func):
     def wrapper(*args, **kwargs):
         start_time = time.perf_counter()
@@ -94,10 +380,36 @@ class Benchmark:
         batch_size=1000,
         plot=True,
         fit_stochastic=True,
+        # Pipeline upgrades — all default ON. Disable for legacy
+        # behaviour (matches the pre-2026-05 fit pipeline).
+        width_first: bool = True,
+        subpixel: bool = True,
+        lm_polish: bool = True,
+        stochastic_optimizer: str = "adam",
+        stochastic_optimizer_kwargs: dict | None = None,
+        lm_loss: str = "l2",
     ) -> None:
+        """Run the full fit pipeline against the StatSTEM input image.
+
+        With defaults (``subpixel + width_first + stochastic + lm_polish``)
+        the pipeline matches or beats StatSTEM on every benchmark sample
+        we tested. Each stage is gated by a flag so the legacy stochastic-
+        only path is still reachable (`width_first=False, subpixel=False,
+        lm_polish=False`).
+
+        ``stochastic_optimizer`` accepts any name that
+        :func:`qem.fit.loop.make_optimizer` resolves — Adam / AdamW /
+        SGD / LBFGS plus anything in ``pytorch_optimizer`` (kozistr) or
+        ``torch_optimizer`` (jettify): Ranger, Lion, MADGRAD, AdaBelief,
+        NovoGrad, AccSGD, PID, QHAdam, Apollo, etc.
+        """
         model = Fitter(self.image, dx=self.dx)
         model.coordinates = self.input_coordinates / self.dx
+        if subpixel:
+            model.refine_peaks_subpixel(search_window=2)
         params = model.init_params(atom_size=atom_size, guess_radius=guess_radius)
+        if width_first:
+            model.fit_width_first()
         if fit_stochastic:
             params = model.fit_stochastic(
                 params,
@@ -107,9 +419,15 @@ class Benchmark:
                 num_epoch=num_epoch,
                 batch_size=batch_size,
                 plot=plot,
+                optimizer=stochastic_optimizer,
+                **(stochastic_optimizer_kwargs or {}),
             )
         else:
             params = model.fit_global(params=params,maxiter=maxiter, tol=tol, step_size=step_size)
+        if lm_polish:
+            params = model.fit_global(
+                params=params, maxiter=30, tol=1e-10, optimizer="lm", loss=lm_loss,
+            )
         self.qem = model
         self.model_qem = model.prediction
         self.scs_qem = model.volume

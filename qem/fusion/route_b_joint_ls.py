@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Mapping, Optional
 
@@ -15,6 +16,19 @@ from qem.utils.elements import chemical_symbols
 from qem.utils.tensors import best_device
 
 from .dataset import MultiModalDataset
+
+
+# torch.compile gating — skip on MPS (graph compilation not supported) and
+# respect QEM_COMPILE=0 opt-out.
+_CUDA_AVAILABLE = torch.cuda.is_available()
+_COMPILE_ENABLED = os.getenv("QEM_COMPILE", "1") != "0" and _CUDA_AVAILABLE
+
+
+def _maybe_compile(fn):
+    """Decorator: apply torch.compile on CUDA, passthrough everywhere else."""
+    if _COMPILE_ENABLED:
+        return torch.compile(fn, mode="default")
+    return fn
 
 
 @dataclass
@@ -180,6 +194,7 @@ class JointLeastSquaresRoute:
         lambda_eels = self.lambda_eels
         lambda_tv = self.lambda_tv
 
+        @_maybe_compile
         def joint_loss(_target, x_param: torch.Tensor) -> torch.Tensor:
             # Gradient is scaled by 1/n_elements to mirror the historic
             # `grad /= max(1.0, n_elements)` from the numpy loop.

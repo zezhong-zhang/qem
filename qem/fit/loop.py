@@ -34,19 +34,47 @@ def make_optimizer(
     learning_rate: float,
     **kwargs: Any,
 ) -> torch.optim.Optimizer:
-    """Build a torch optimiser by short name (``'adam' / 'adamw' / 'sgd' / 'lbfgs'``)."""
-    cls = {
+    """Build a torch optimiser by short name.
+
+    Built-ins: ``'adam' / 'adamw' / 'sgd' / 'lbfgs'``. Anything else is
+    looked up in :mod:`pytorch_optimizer` (case-insensitive) — gives
+    access to AdaBelief, Lion, MADGRAD, Adan, Ranger, SAM, Lookahead,
+    DAdaptAdam, etc. without bespoke wiring per optimiser.
+    """
+    builtin = {
         "adam": torch.optim.Adam,
         "adamw": torch.optim.AdamW,
         "sgd": torch.optim.SGD,
         "lbfgs": torch.optim.LBFGS,
-    }.get(name.lower())
-    if cls is None:
-        raise ValueError(
-            f"Unknown optimizer {name!r}; expected one of "
-            "'adam', 'adamw', 'sgd', 'lbfgs'."
-        )
-    return cls(parameters, lr=learning_rate, **kwargs)
+    }
+    cls = builtin.get(name.lower())
+    if cls is not None:
+        return cls(parameters, lr=learning_rate, **kwargs)
+
+    # Try the two common third-party optimiser packages in order.
+    # pytorch_optimizer (kozistr) is the larger of the two; torch_optimizer
+    # (jettify) ships some classics it doesn't (e.g. AccSGD, AdaMod, PID,
+    # NovoGrad, QHAdam, Apollo, SWATS).
+    cls = None
+    for pkg_name in ("pytorch_optimizer", "torch_optimizer"):
+        try:
+            mod = __import__(pkg_name)
+        except ImportError:
+            continue
+        cls = getattr(mod, name, None)
+        if cls is None:
+            for attr in dir(mod):
+                if attr.lower() == name.lower():
+                    cls = getattr(mod, attr)
+                    break
+        if cls is not None and callable(cls):
+            return cls(parameters, lr=learning_rate, **kwargs)
+
+    raise ValueError(
+        f"Unknown optimizer {name!r}; not in builtins {list(builtin)} "
+        "and not found in pytorch_optimizer or torch_optimizer. "
+        "Install via `pip install pytorch_optimizer torch-optimizer`."
+    )
 
 
 def fit_loop(
@@ -114,7 +142,7 @@ def fit_loop(
             optimizer.step()
 
         if post_step is not None:
-            with torch.no_grad():
+            with torch.inference_mode():
                 post_step(model)
 
         loss_val = float(loss.detach())

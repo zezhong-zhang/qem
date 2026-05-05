@@ -54,8 +54,12 @@ Each dock corresponds to one Fitter step:
 * **🎯 Peaks** — :meth:`Fitter.find_peaks` with min-distance, threshold,
   smoothing; ``Refine via CoM`` button calls
   :meth:`Fitter.refine_center_of_mass`.
-* **⚙️ Fit** — pick ``fit_global`` / ``fit_stochastic`` and an optimizer
-  (``adam`` / ``adamw`` / ``sgd`` / ``lbfgs``). Long ops run in
+* **⚙️ Fit** — pick a stage (``fit_pipeline`` / ``fit_global`` /
+  ``fit_stochastic``) and an optimizer. Built-ins (``adam`` /
+  ``adamw`` / ``sgd`` / ``lbfgs``) and the matrix-free LM (``lm``)
+  are first-class; any class from ``pytorch_optimizer`` (Lion,
+  MADGRAD, Ranger, Adan, …) or ``torch_optimizer`` (NovoGrad, PID,
+  Apollo, …) is also accepted by name. Long ops run in
   ``napari.qt.thread_worker`` so the UI stays responsive. The model
   and residual layers auto-toggle visible after the fit completes.
 * **📊 Voronoi** — :meth:`Fitter.fit_voronoi` (with optional

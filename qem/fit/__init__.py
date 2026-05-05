@@ -11,10 +11,14 @@ from typing import TYPE_CHECKING
 
 from .background import Background, estimate_background
 from .solver import (
-    DesignMatrixBuilder,
-    LinearSystemSolver,
-    ParameterValidator,
-    SolutionProcessor,
+    build_local_peaks,
+    build_sparse_matrix,
+    solve_system,
+    validate_params,
+    validate_solution,
+    process_height_scaling,
+    process_background,
+    linear_estimator,
 )
 from .model import GaussianKernel, GaussianModel, ImageModel, LorentzianModel, VoigtModel
 from .potential import (
@@ -74,11 +78,15 @@ __all__ = [
     # Main fitting class
     "Fitter",
 
-    # Linear solver components
-    "LinearSystemSolver",
-    "DesignMatrixBuilder",
-    "ParameterValidator",
-    "SolutionProcessor",
+    # Linear solver pipeline (functions, not classes — see qem.fit.solver)
+    "build_local_peaks",
+    "build_sparse_matrix",
+    "solve_system",
+    "validate_params",
+    "validate_solution",
+    "process_height_scaling",
+    "process_background",
+    "linear_estimator",
 
     # Ptychography / convolution-based fitting
     "PtychoOptimizer",

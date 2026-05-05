@@ -270,18 +270,19 @@ def export_gmm_updated_structure(self, region_index: int = 0, filename: str = No
 
 
 
-def _bind(cls) -> None:
-    """Attach extracted methods back onto Fitter at class-load time."""
-    cls.estimate_atom_counts_with_gmm = estimate_atom_counts_with_gmm
-    cls.integrate_gmm_with_crystal_analyzer = integrate_gmm_with_crystal_analyzer
-    cls.update_all_regions_with_gmm = update_all_regions_with_gmm
-    cls.export_gmm_updated_structure = export_gmm_updated_structure
+class FitterGMMMixin:
+    """Gaussian-mixture atom counting for :class:`Fitter`."""
+
+    estimate_atom_counts_with_gmm = estimate_atom_counts_with_gmm
+    integrate_gmm_with_crystal_analyzer = integrate_gmm_with_crystal_analyzer
+    update_all_regions_with_gmm = update_all_regions_with_gmm
+    export_gmm_updated_structure = export_gmm_updated_structure
 
 
 __all__ = [
+    "FitterGMMMixin",
     "estimate_atom_counts_with_gmm",
     "integrate_gmm_with_crystal_analyzer",
     "update_all_regions_with_gmm",
     "export_gmm_updated_structure",
-    "_bind",
 ]

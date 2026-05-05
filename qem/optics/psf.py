@@ -29,6 +29,7 @@ q-space CTF and inverse-transformed.
 from __future__ import annotations
 
 import math
+import os
 from typing import Optional
 
 import numpy as np
@@ -39,6 +40,19 @@ from .chi import chi
 from .envelopes import partial_coherence_envelope
 from .grid import Grid
 from .probe import Probe, probe_wave_q
+
+
+# torch.compile gating — skip on MPS (graph compilation not supported) and
+# respect QEM_COMPILE=0 opt-out.
+_CUDA_AVAILABLE = torch.cuda.is_available()
+_COMPILE_ENABLED = os.getenv("QEM_COMPILE", "1") != "0" and _CUDA_AVAILABLE
+
+
+def _maybe_compile(fn):
+    """Decorator: apply torch.compile on CUDA, passthrough everywhere else."""
+    if _COMPILE_ENABLED:
+        return torch.compile(fn, mode="default")
+    return fn
 
 
 # ---------------------------------------------------------------------------
@@ -71,6 +85,7 @@ def _psf_to_ctf(psf: torch.Tensor) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
+@_maybe_compile
 def ssb_ctf(
     grid: Grid,
     probe: Probe,
@@ -127,6 +142,7 @@ def ssb_psf(grid: Grid, probe: Probe, **kw) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
+@_maybe_compile
 def adf_psf(
     grid: Grid,
     probe: Probe,
@@ -167,6 +183,7 @@ def adf_ctf(grid: Grid, probe: Probe, **kw) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
+@_maybe_compile
 def icom_ctf(
     grid: Grid,
     probe: Probe,
@@ -206,6 +223,7 @@ def icom_psf(grid: Grid, probe: Probe, **kw) -> torch.Tensor:
 # ---------------------------------------------------------------------------
 
 
+@_maybe_compile
 def epie_ctf(
     grid: Grid,
     probe: Probe,

@@ -97,20 +97,10 @@ def _fft_convolve_same(image: torch.Tensor, kernel: torch.Tensor) -> torch.Tenso
     return full[start_y : start_y + H, start_x : start_x + W]
 
 
-@dataclass
-class OptimizationResult:
-    """Result of ptychography optimization."""
-
-    positions: np.ndarray  # Optimized atomic positions (N x 2)
-    phases: np.ndarray  # Optimized phase values (N,)
-    correlation: float  # Final correlation coefficient
-    nrmse: float  # Final normalized RMS error
-    tilt_x: float  # Optimized x-tilt in mrad
-    tilt_y: float  # Optimized y-tilt in mrad
-    psf_width: float  # Optimized PSF width
-    n_iterations: int  # Number of iterations performed
-    converged: bool  # Whether optimization converged
-    history: Optional[dict]  # Optimization history
+# OptimizationResult was duplicated here and in convolve.py (with slightly
+# different field names: this version had `phases`, convolve's has `values`
+# with a `phases` alias). Single source of truth lives in convolve.py.
+from qem.fit.convolve import OptimizationResult  # noqa: E402  (top-of-file import would create a cycle)
 
 
 class ConvolutionModel(torch.nn.Module):
@@ -131,7 +121,7 @@ class ConvolutionModel(torch.nn.Module):
 
     def update_params(self, params):
         """Copy new values into the existing nn.Parameter slots."""
-        with torch.no_grad():
+        with torch.inference_mode():
             for key, value in params.items():
                 if hasattr(self, key):
                     target = getattr(self, key)
@@ -559,7 +549,7 @@ class PtychoOptimizer:
 
         return OptimizationResult(
             positions=opt_positions,
-            phases=opt_phases,
+            values=opt_phases,
             correlation=final_corr,
             nrmse=final_nrmse,
             tilt_x=opt_tilt_x,
@@ -570,108 +560,3 @@ class PtychoOptimizer:
             history=history,
         )
 
-
-class AdfConvFit:
-    """ADF fitting treating image as probe ⊗ potential convolution."""
-
-    def __init__(
-        self,
-        image: np.ndarray,
-        eV: float,
-        alpha: float,
-        detector_inner: float,
-        detector_outer: float,
-        df: float = 0.0,
-        aberrations: Optional[list] = None,
-    ):
-        """
-        Initialize ADF convolution fitting.
-
-        Parameters
-        ----------
-        image : np.ndarray
-            ADF image to fit
-        eV : float
-            Acceleration voltage (eV)
-        alpha : float
-            Probe convergence angle (mrad)
-        detector_inner : float
-            Inner detector angle (mrad)
-        detector_outer : float
-            Outer detector angle (mrad)
-        df : float, optional
-            Defocus (Å)
-        aberrations : list, optional
-            List of aberration objects
-        """
-        self.image = image.astype(np.float32)
-        self.ny, self.nx = image.shape
-
-        # Remember construction params so :meth:`fit` can pass them through
-        self.alpha = alpha
-        self.eV = eV
-        self.df = df
-        self.aberrations = aberrations
-        self.detector_inner = detector_inner
-        self.detector_outer = detector_outer
-
-        # Build ADF PSF directly via the new optics API
-        ab = aberrations if isinstance(aberrations, Aberrations) else (
-            Aberrations(defocus=df) if df else Aberrations()
-        )
-        probe = Probe(energy=eV, aperture=alpha, aberrations=ab)
-        grid = Grid(pixels=(self.ny, self.nx), extent=(self.ny, self.nx))
-        self.psf = adf_psf(grid, probe).detach().cpu().numpy()
-        self.potential_model = PointPotentialModel()
-
-    def fit(
-        self,
-        initial_positions: np.ndarray,
-        initial_intensities: np.ndarray,
-        optimize_tilt: bool = False,
-        optimize_psf_width: bool = False,
-        **kwargs,
-    ) -> OptimizationResult:
-        """
-        Fit ADF image using convolution model.
-
-        Parameters
-        ----------
-        initial_positions : np.ndarray (N x 2)
-            Initial atomic positions [x, y] in pixels
-        initial_intensities : np.ndarray (N,)
-            Initial intensity values
-        optimize_tilt : bool, optional
-            Whether to optimize sample tilt. Defaults to False.
-        optimize_psf_width : bool, optional
-            Whether to optimize PSF width. Defaults to False.
-        **kwargs : additional arguments passed to optimizer
-
-        Returns
-        -------
-        result : OptimizationResult
-            Fitting results
-        """
-        # Create a specialized optimizer for ADF
-        optimizer = PtychoOptimizer(
-            target_image=self.image,
-            ctf_type="ADF",
-            alpha=self.alpha,
-            eV=self.eV,
-            df=self.df,
-            aberrations=self.aberrations,
-            detector_inner=self.detector_inner,
-            detector_outer=self.detector_outer,
-            psf_kernel=self.psf,
-        )
-
-        # Run optimization (phases = intensities for ADF)
-        result = optimizer.optimize(
-            initial_positions=initial_positions,
-            initial_phases=initial_intensities,
-            optimize_tilt=optimize_tilt,
-            optimize_psf_width=optimize_psf_width,
-            **kwargs,
-        )
-
-        return result

@@ -1,318 +1,243 @@
-Basic Analysis Tutorial
-======================
+Basic analysis tutorial
+=======================
 
-This tutorial introduces the core QEM workflow using the **ImageFitting** class and **Model** classes for analyzing atomic-resolution STEM images.
+Walks through the recommended QEM workflow on a STEM image:
+detect peaks → fit → analyse → visualise. Uses
+:meth:`qem.fit.Fitter.fit_pipeline` (or its one-line variant
+:meth:`Fitter.fit`), which mirrors StatSTEM's ``fitGauss.m`` flow plus
+a Levenberg–Marquardt polish.
 
-Learning Objectives
+Learning objectives
 -------------------
 
-By the end of this tutorial, you will:
+By the end of this tutorial you will:
 
-- Understand QEM's core **ImageFitting** class
-- Use different **Model** types (Gaussian, Lorentzian, Voigt)
-- Load and visualize STEM data
-- Find atomic column positions automatically
-- Fit models to experimental data
-- Analyze and interpret results
+* Build a :class:`qem.fit.Fitter` from raw STEM data.
+* Detect atomic columns and refine to sub-pixel accuracy.
+* Run the bundled fit pipeline (or each stage individually).
+* Extract scattering cross-sections and atom counts.
+* Visualise model, residual, and SCS distributions.
 
-Core QEM Components
--------------------
+Core components
+---------------
 
-**ImageFitting Class**
-   The main analysis engine that handles:
-   - Peak detection
-   - Parameter initialization  
-   - Model fitting and optimization
-   - Results extraction and visualization
-
-**Model Classes**
-   Mathematical models for atomic peaks:
-   - ``GaussianModel``: Standard 2D Gaussian peaks
-   - ``LorentzianModel``: Lorentzian peak shapes
-   - ``VoigtModel``: Convolution of Gaussian and Lorentzian
+* :class:`qem.fit.Fitter` — the analysis engine. Composed of capability
+  mixins (see :doc:`/user_guide/optimization` for the optimisation
+  layer in particular).
+* Peak shape models in :mod:`qem.fit.model`: ``GaussianModel``,
+  ``LorentzianModel``, ``VoigtModel``. Selected via the
+  ``model_type=`` constructor argument; you rarely need to touch the
+  classes directly.
 
 Prerequisites
 -------------
 
-- QEM installed
-- Basic Python/NumPy knowledge
-- Sample STEM image (or use provided example)
+* QEM installed (``pip install -e .``).
+* A STEM image (numpy array). The example below uses the bundled
+  ``Example_Au.mat`` from a StatSTEM dataset.
 
-Step 1: Import Libraries and Load Data
---------------------------------------
+Step 1 — load data
+------------------
 
 .. code-block:: python
 
    import numpy as np
    import matplotlib.pyplot as plt
-   from qem.fit.image_fitting import ImageFitting
-   from qem import io
-   
-   # Load example STO data
-   image, metadata = io.load_example_data('STO')
-   dx = metadata.get('pixel_size', 0.01)  # Angstroms per pixel
-   
-   print(f"Image shape: {image.shape}")
-   print(f"Pixel size: {dx} Å")
+   from qem.fit import Fitter
+   from qem.io import read_statstem
 
-Step 2: Visualize the Raw Data
-------------------------------
+   legacy = read_statstem("data/Au/Example_Au.mat")
+   image = legacy["input"]["obs"]      # (H, W) float
+   dx = legacy["input"]["dx"]          # Å per pixel
 
-.. code-block:: python
+   plt.imshow(image, cmap="gray")
+   plt.title("Raw STEM image"); plt.colorbar(); plt.show()
 
-   plt.figure(figsize=(10, 8))
-   plt.imshow(image, cmap='gray')
-   plt.colorbar(label='Intensity')
-   plt.title('Raw STEM Image')
-   plt.xlabel('x (pixels)')
-   plt.ylabel('y (pixels)')
-   plt.show()
-
-Step 3: Initialize ImageFitting
--------------------------------
-
-.. code-block:: python
-
-   # Create ImageFitting instance
-   fitter = ImageFitting(
-       image=image,
-       dx=dx,
-       model_type="gaussian"  # Can be 'gaussian', 'lorentzian', or 'voigt'
-   )
-   
-   print(f"Using backend: {fitter.backend}")
-   print(f"Image size: {fitter.image.shape}")
-
-Step 4: Find Atomic Column Positions
-------------------------------------
-
-.. code-block:: python
-
-   # Automatic peak finding
-   coordinates = fitter.find_peaks(
-       min_distance=8,      # Minimum distance between peaks (pixels)
-       threshold_abs=0.3,   # Absolute intensity threshold
-       threshold_rel=0.1    # Relative threshold (fraction of max intensity)
-   )
-   
-   print(f"Found {len(coordinates)} atomic columns")
-   
-   # Visualize detected peaks
-   plt.figure(figsize=(10, 8))
-   plt.imshow(image, cmap='gray')
-   plt.scatter(coordinates[:, 1], coordinates[:, 0], 
-               c='red', s=30, marker='+', linewidth=2)
-   plt.title(f'Detected Atomic Columns ({len(coordinates)} peaks)')
-   plt.colorbar()
-   plt.show()
-
-Step 5: Initialize Model Parameters
------------------------------------
-
-.. code-block:: python
-
-   # Set coordinates and initialize parameters
-   fitter.coordinates = coordinates
-   
-   # Initialize parameters with reasonable starting values
-   params = fitter.init_params(
-       atom_size=2.0,       # Initial Gaussian width in pixels
-       intensity_guess=1.0,  # Initial intensity
-       background=None      # Auto-estimate background
-   )
-   
-   print("Initial parameters set")
-   print(f"Number of atomic columns: {fitter.num_coordinates}")
-
-Step 6: Perform the Fit
------------------------
-
-.. code-block:: python
-
-   # Fit the model
-   result = fitter.fit(
-       max_iterations=200,   # Maximum optimization steps
-       learning_rate=0.01,   # Optimization step size
-       tolerance=1e-6,       # Convergence criterion
-       verbose=True          # Show progress
-   )
-   
-   print(f"\nFitting completed!")
-   print(f"Iterations: {result['iterations']}")
-   print(f"Final loss: {result['final_loss']:.8f}")
-   print(f"Converged: {result['converged']}")
-
-Step 7: Analyze Results
------------------------
-
-.. code-block:: python
-
-   # Get fitted parameters
-   fitted_positions = fitter.get_positions()
-   fitted_intensities = fitter.get_intensities()
-   fitted_widths = fitter.get_widths()
-   
-   print("Summary of fitted parameters:")
-   print(f"Position precision: {np.std(fitted_positions, axis=0)} pixels")
-   print(f"Intensity range: {np.min(fitted_intensities):.3f} - {np.max(fitted_intensities):.3f}")
-   print(f"Width range: {np.min(fitted_widths):.3f} - {np.max(fitted_widths):.3f} pixels")
-
-Step 8: Visualize Results
+Step 2 — fit in one line
 ------------------------
 
 .. code-block:: python
 
-   # Generate model prediction
-   prediction = fitter.predict()
-   residuals = image - prediction
-   
-   # Create comprehensive plot
-   fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-   
-   # Original image
-   im1 = axes[0, 0].imshow(image, cmap='gray')
-   axes[0, 0].set_title('Original Image')
-   axes[0, 0].scatter(fitted_positions[:, 1], fitted_positions[:, 0], 
-                      c='red', s=20, marker='+')
-   plt.colorbar(im1, ax=axes[0, 0])
-   
-   # Model prediction
-   im2 = axes[0, 1].imshow(prediction, cmap='gray')
-   axes[0, 1].set_title('Model Fit')
-   plt.colorbar(im2, ax=axes[0, 1])
-   
-   # Residuals
-   im3 = axes[0, 2].imshow(residuals, cmap='RdBu_r')
-   axes[0, 2].set_title('Residuals (Data - Model)')
-   plt.colorbar(im3, ax=axes[0, 2])
-   
-   # Intensity histogram
-   axes[1, 0].hist(fitted_intensities, bins=20, alpha=0.7)
-   axes[1, 0].set_xlabel('Fitted Intensity')
-   axes[1, 0].set_ylabel('Count')
-   axes[1, 0].set_title('Intensity Distribution')
-   
-   # Width histogram
-   axes[1, 1].hist(fitted_widths, bins=20, alpha=0.7)
-   axes[1, 1].set_xlabel('Fitted Width (pixels)')
-   axes[1, 1].set_ylabel('Count')
-   axes[1, 1].set_title('Width Distribution')
-   
-   # Convergence plot
-   if 'loss_history' in result:
-       axes[1, 2].plot(result['loss_history'])
-       axes[1, 2].set_xlabel('Iteration')
-       axes[1, 2].set_ylabel('Loss')
-       axes[1, 2].set_title('Convergence')
-       axes[1, 2].set_yscale('log')
-   
-   plt.tight_layout()
-   plt.show()
+   fitter = Fitter.fit(image, dx=dx, atom_size=0.7, elements=["Au"])
 
-Step 9: Quality Assessment
---------------------------
+That's the whole pipeline: default peak detection, sub-pixel
+refinement, σ warmup, stochastic Adam, then a Gauss–Newton polish.
+``fitter`` now holds:
+
+* ``fitter.coordinates`` — refined atomic positions (px).
+* ``fitter.params`` — fitted parameter dict (``pos_x``, ``pos_y``,
+  ``height``, ``width``, ``background``).
+* ``fitter.prediction`` — model rendering of the image.
+* ``fitter.volume`` — analytical scattering cross-sections (Å²).
+
+Step 3 (alternative) — explicit stages, when you want control
+-------------------------------------------------------------
+
+The one-liner is identical to running each stage by hand:
 
 .. code-block:: python
 
-   # Calculate quality metrics
-   r_squared = fitter.calculate_r_squared()
-   rmse = fitter.calculate_rmse()
-   
-   print(f"\nFit Quality Metrics:")
-   print(f"R² (coefficient of determination): {r_squared:.4f}")
-   print(f"RMSE (root mean square error): {rmse:.6f}")
-   
-   # Residual statistics
-   residual_std = np.std(residuals)
-   residual_mean = np.mean(residuals)
-   
-   print(f"Residual mean: {residual_mean:.6f}")
-   print(f"Residual std: {residual_std:.6f}")
+   fitter = Fitter(image, dx=dx, model_type="gaussian", elements=["Au"])
 
-Step 10: Save Results
---------------------
+   # 3a. Peak detection
+   coords = fitter.find_peaks(
+       min_distance=8,        # min separation in pixels
+       threshold_abs=0.3,     # absolute intensity threshold
+       threshold_rel=0.1,     # fraction of max intensity
+   )
+   print(f"Detected {len(coords)} atomic columns")
+
+   plt.imshow(image, cmap="gray")
+   plt.scatter(coords[:, 0], coords[:, 1], c="r", s=20, marker="+")
+   plt.title("Detected peaks"); plt.show()
+
+   # 3b. Sub-pixel refinement (parabolic fit on the 3×3 around each max)
+   fitter.refine_peaks_subpixel(search_window=2)
+
+   # 3c. Initialise parameters from current coordinates
+   fitter.init_params(atom_size=0.7)   # σ in Å
+
+   # 3d. Width-first warmup — Brent on σ with η, ζ profiled out
+   sigma = fitter.fit_width_first()
+   print(f"σ converged to {sigma:.3f} px")
+
+   # 3e. Stochastic Adam warmup on random batches of atoms
+   fitter.fit_stochastic(num_epoch=10, batch_size=2000, step_size=1e-2)
+
+   # 3f. Levenberg–Marquardt polish
+   fitter.fit_global(maxiter=30, optimizer="lm")
+
+Either route ends up with the same ``fitter`` state.
+
+Step 4 — analyse the fit
+------------------------
 
 .. code-block:: python
 
-   # Save fitted parameters
-   results_dict = {
-       'positions': fitted_positions,
-       'intensities': fitted_intensities,
-       'widths': fitted_widths,
-       'model_prediction': prediction,
-       'residuals': residuals,
-       'fit_metrics': {
-           'r_squared': r_squared,
-           'rmse': rmse,
-           'iterations': result['iterations'],
-           'final_loss': result['final_loss']
-       }
-   }
-   
-   # Save to file (optional)
-   # np.save('analysis_results.npy', results_dict)
-   
-   print("Analysis complete!")
+   # Fitted parameters
+   pos_x = fitter.params["pos_x"].cpu().numpy()
+   pos_y = fitter.params["pos_y"].cpu().numpy()
+   heights = fitter.params["height"].cpu().numpy()
+   width = float(fitter.params["width"].cpu().numpy()[0])
 
-Advanced Tips
+   print(f"N atoms: {len(pos_x)}")
+   print(f"shared σ:  {width:.3f} px ({width * dx:.3f} Å)")
+   print(f"Height range: {heights.min():.0f} – {heights.max():.0f}")
+
+   # Per-atom scattering cross-section (Å²) — analytic Gaussian volume
+   scs = fitter.volume          # 2π · h · σ² · dx²
+   print(f"SCS range: {scs.min():.2f} – {scs.max():.2f} Å²")
+
+Step 5 — goodness of fit
+------------------------
+
+.. code-block:: python
+
+   from qem.benchmarks.benchmark import goodness_of_fit
+
+   gof = goodness_of_fit(image, fitter.prediction)
+   print(f"L2 std        = {gof['L2_std']:.2f}")
+   print(f"L1 mean       = {gof['L1_mean']:.2f}")
+   print(f"χ²_red        = {gof['chi2_red']:.2f}")
+   print(f"PSD whiteness = {gof['psd_white_ratio']:.3f}")
+
+For per-atom diagnostics:
+
+.. code-block:: python
+
+   from qem.benchmarks.benchmark import residual_per_atom, crlb_per_atom
+
+   rpa = residual_per_atom(fitter)        # local χ² inside each atom's window
+   crlb = crlb_per_atom(fitter)            # closed-form Cramér-Rao lower bound
+
+Step 6 — visualise
+------------------
+
+.. code-block:: python
+
+   fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+   axes[0].imshow(image, cmap="gray"); axes[0].set_title("Image")
+   axes[1].imshow(fitter.prediction, cmap="gray"); axes[1].set_title("Fit")
+   axes[2].imshow(image - fitter.prediction, cmap="RdBu_r")
+   axes[2].set_title("Residual")
+   plt.tight_layout(); plt.show()
+
+Built-in plotters:
+
+.. code-block:: python
+
+   fitter.plot_fitting()           # 6-panel image / model / residual
+   fitter.plot_scs()               # SCS scatter map
+   fitter.plot_scs_histogram()     # SCS distribution
+   fitter.plot_coordinates()       # peak positions overlaid
+
+Atom counting (GMM)
+-------------------
+
+.. code-block:: python
+
+   fitter.estimate_atom_counts_with_gmm(max_components=20)
+   fitter.plot_atom_count_map()
+
+Tweaking the pipeline
+---------------------
+
+The pipeline accepts kwargs to swap stages or change optimisers:
+
+.. code-block:: python
+
+   # Robust polish (Huber loss inside LM)
+   fitter.fit_pipeline(lm_loss="huber")
+
+   # Try a different first-order optimiser for the warmup
+   fitter.fit_pipeline(stochastic_optimizer="Lion",
+                       stochastic_optimizer_kwargs={"betas": (0.9, 0.99)})
+
+   # Disable any stage:
+   fitter.fit_pipeline(width_first=False)   # legacy / debugging
+   fitter.fit_pipeline(subpixel=False)
+   fitter.fit_pipeline(lm_polish=False)
+
+See :func:`qem.fit.pipeline.fit_pipeline` for the full kwarg list.
+
+Different peak shapes
+---------------------
+
+.. code-block:: python
+
+   for model_type in ("gaussian", "lorentzian", "voigt"):
+       f = Fitter.fit(image, dx=dx, model_type=model_type)
+       res_std = (image - f.prediction).std()
+       print(f"{model_type:10s}  residual std = {res_std:.2f}")
+
+Common issues
 -------------
 
-**Improving Peak Detection:**
+**Peak detection misses atoms or finds spurious ones**
+    Adjust ``min_distance``, ``threshold_abs``, ``threshold_rel`` on
+    :meth:`Fitter.find_peaks`. For very noisy images, smooth first
+    with :func:`qem.processing.signal.butterworth_window`.
 
-.. code-block:: python
+**Fit converges to a wrong local minimum (high residual at edges)**
+    Make sure ``width_first=True`` (default). Without it, σ is wrong
+    during the joint fit and edge atoms commit to wrong basins.
 
-   # Use a Butterworth window to suppress high-frequency noise before peak finding.
-   from qem.processing.signal import butterworth_window
+**``fit_pipeline`` raises a Brent-bracket error**
+    Older versions used ``scipy.optimize.minimize_scalar`` whose
+    Brent method needed a strict ``f(mid) < f(both endpoints)``
+    bracket condition; current code uses a torch-pipeline-native
+    golden-section search that has no such requirement. Update QEM.
 
-   window = butterworth_window(image.shape, cutoff_radius_ftr=0.4, order=4)
-   filtered_image = image * window
-   fitter_filtered = ImageFitting(filtered_image, dx, "gaussian")
-   coordinates_improved = fitter_filtered.find_peaks(min_distance=8)
+**Memory issues on large images**
+    Reduce ``batch_size`` in ``fit_stochastic``, or run on CPU
+    (``QEM_DEVICE=cpu python script.py``) — MPS in particular has
+    larger transient allocations than CUDA / CPU.
 
-**Manual Peak Selection:**
-
-.. code-block:: python
-
-   # Interactive peak selection (in Jupyter)
-   from qem.visualization.select import InteractivePlot
-
-   interactive = InteractivePlot(image)
-   manual_coordinates = interactive.get_coordinates()
-
-**Different Model Types:**
-
-.. code-block:: python
-
-   # Try different fitting models
-   for model_type in ['gaussian', 'lorentzian', 'voigt']:
-       fitter_test = ImageFitting(image, dx, model_type)
-       fitter_test.coordinates = coordinates
-       fitter_test.init_params(atom_size=2.0)
-       result_test = fitter_test.fit(max_iterations=100)
-       print(f"{model_type}: R² = {fitter_test.calculate_r_squared():.4f}")
-
-Next Steps
+Next steps
 ----------
 
-- Try :doc:`advanced_fitting` for optimization techniques
-- Learn about :doc:`multi_element` analysis
-- Explore :doc:`strain_analysis` for displacement mapping
-
-Common Issues
--------------
-
-**Poor Peak Detection:**
-- Adjust ``threshold_abs`` and ``threshold_rel`` parameters
-- Try image preprocessing (filtering, denoising)
-- Check image contrast and quality
-
-**Fitting Not Converging:**
-- Increase ``max_iterations``
-- Adjust ``learning_rate`` (try 0.001 to 0.1)
-- Check initial parameter estimates
-- Ensure adequate peak separation
-
-**Memory Issues:**
-- Use smaller image regions for testing
-- Consider using JAX backend for large images
-- Process in batches for very large datasets
+* :doc:`/user_guide/optimization` — pick the right optimiser /
+  loss for your data.
+* :doc:`/user_guide/Analysis` — Voronoi integration, GMM atom
+  counting, strain mapping.
+* :doc:`/api/index` — full API reference.

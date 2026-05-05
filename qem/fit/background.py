@@ -409,35 +409,6 @@ def estimate_background(image: np.ndarray,
         return estimator.estimate_scalar_background(method=method)
 
 
-def enable_2d_background(self,
-                       method: str = 'photutils',
-                       **kwargs) -> dict:
-    """
-    Enable 2D background estimation for the image fitting.
-    
-    Args:
-        method: Background estimation method ('photutils', 'median', 'polynomial')
-        **kwargs: Additional parameters for background estimation
-        
-    Returns:
-        Dictionary with background estimation information
-    """
-    logging.info("Enabling 2D background estimation with method: %s", method)
-    
-    # Enable 2D background in the estimator
-    info = self.background_estimator.enable_2d_background(method=method, **kwargs)
-    
-    # Update fit_background to use 2D mode
-    self.fit_background = True
-    
-    logging.info("2D background estimation completed: scale=%.3f", info['initial_scale'])
-    return info
-
-def disable_2d_background(self):
-    """Disable 2D background estimation and revert to scalar background."""
-    self.background_estimator.disable_2d_background()
-    logging.info("2D background estimation disabled")
-
 def get_current_background(self) -> np.ndarray:
     """
     Get the current background (2D or scalar).
@@ -510,21 +481,32 @@ def optimize_2d_background_scale(self) -> float:
 
 
 
-def _bind(cls) -> None:
-    """Attach extracted methods back onto Fitter at class-load time."""
-    cls.enable_2d_background = enable_2d_background
-    cls.disable_2d_background = disable_2d_background
-    cls.get_current_background = get_current_background
-    cls.update_2d_background_scale = update_2d_background_scale
-    cls.optimize_2d_background_scale = optimize_2d_background_scale
+class FitterBackgroundMixin:
+    """Read / scale the 2-D background on a :class:`Fitter`.
+
+    Toggling the 2-D background ON/OFF is no longer a method on
+    ``Fitter``; that was a stateful ``enable_X / disable_X`` smell.
+    Use the :class:`Background` estimator directly::
+
+        fitter.background_estimator.enable_2d_background(method='photutils')
+        # or:
+        fitter.background_estimator.disable_2d_background()
+
+    The methods kept here operate on whatever state the estimator is
+    currently in.
+    """
+
+    get_current_background = get_current_background
+    update_2d_background_scale = update_2d_background_scale
+    optimize_2d_background_scale = optimize_2d_background_scale
 
 
 __all__ = [
-    "enable_2d_background",
-    "disable_2d_background",
+    "FitterBackgroundMixin",
+    "Background",
+    "estimate_background",
     "get_current_background",
     "update_2d_background_scale",
     "optimize_2d_background_scale",
-    "_bind",
 ]
 

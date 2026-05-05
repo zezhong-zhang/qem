@@ -3,7 +3,7 @@ session_id: s-1777819079-d8c4bc
 role: standalone
 status: active
 started_at: '2026-05-03T14:37:59Z'
-last_heartbeat: '2026-05-04T02:51:56Z'
+last_heartbeat: '2026-05-05T00:59:24Z'
 branch: master
 cwd: /Users/zhangzz/code/qem
 current_task: ''
@@ -11,46 +11,52 @@ decisions: []
 blockers: []
 artifacts: []
 metrics:
-  edits: 149
+  edits: 382
   commits: 0
   errors_fixed: 0
   decisions_made: 0
 plan:
-  current_step_index: 5
+  current_step_index: 6
   steps:
   - index: 0
-    action: 'Phase 0: cleanup, flatten, ground rules'
-    active_form: Phase 0
+    action: Fix subpixel_parabolic_refine bug (default search_window=0)
+    active_form: Done
     status: completed
     expected_outcome: null
     result: null
   - index: 1
-    action: 'Phase 1: drop keras shim'
-    active_form: Dropping keras shim
+    action: Speed up width-first (xtol=1e-2, max_evals=15)
+    active_form: Done
     status: completed
     expected_outcome: null
     result: null
   - index: 2
-    action: 'Phase 2: rename fit/ files + classes'
-    active_form: Renaming fit/
+    action: Add progress bars (tqdm.auto) to width-first + LM
+    active_form: Done
     status: completed
     expected_outcome: null
     result: null
   - index: 3
-    action: 'Phase 3: utils + viz renames + sparse solver carve-out'
-    active_form: Trimming utils/viz
+    action: Per-stage timing/residual log in fit_pipeline
+    active_form: Done
     status: completed
     expected_outcome: null
     result: null
   - index: 4
-    action: 'Phase 4: modernize io/dm.py style'
-    active_form: Modernizing io/dm.py
+    action: LM consecutive-reject early stop + tighter defaults
+    active_form: Done
     status: completed
     expected_outcome: null
     result: null
   - index: 5
-    action: 'Phase 5: optimizers collapse + README + final polish'
-    active_form: Polishing
+    action: 'Verify: 16.5s (was 34s), residual 446 (was 534, ref 432)'
+    active_form: Done
+    status: completed
+    expected_outcome: null
+    result: null
+  - index: 6
+    action: Tests still pass (117/121)
+    active_form: Done
     status: completed
     expected_outcome: null
     result: null
@@ -69,8 +75,15 @@ detour_tracker:
     title: Thrashing on 2026-05-04-repo-modernization-design.md
     target_signature: edit:/Users/zhangzz/code/qem/docs/superpowers/specs/2026-05-04-repo-modernization-design.md
     started_at: '2026-05-03T16:26:30Z'
-    attempt_count: 6
-    failed_attempts: []
+    attempt_count: 7
+    failed_attempts:
+    - summary: 'rollback: git restore --staged .claude/state/current.yaml docs/superpowers/plans docs/superpowers/specs trace.md
+
+        git add qem/analysis/gaussian_mixture_model.py qem/fit/solver.py qem/fit/voronoi.py qem/fit/fitter.py tests/test_linear_solver.py
+        tests/test_precision_config.py
+
+        git status --short'
+      timestamp: '2026-05-04T10:03:40Z'
     status: active
   - id: det_1777827209942_d1bc1e
     title: Thrashing on ptychography_optimization.py
@@ -83,6 +96,55 @@ detour_tracker:
     title: Thrashing on __init__.py
     target_signature: edit:/Users/zhangzz/code/qem/qem/__init__.py
     started_at: '2026-05-04T02:24:47Z'
+    attempt_count: 6
+    failed_attempts: []
+    status: active
+  - id: det_1777865494071_6e4efd
+    title: Thrashing on fitter.py
+    target_signature: edit:/Users/zhangzz/code/qem/qem/fit/fitter.py
+    started_at: '2026-05-04T03:31:34Z'
+    attempt_count: 8
+    failed_attempts:
+    - summary: 'rollback: git restore --staged .claude/state/current.yaml docs/superpowers/plans docs/superpowers/specs trace.md
+
+        git add qem/analysis/gaussian_mixture_model.py qem/fit/solver.py qem/fit/voronoi.py qem/fit/fitter.py tests/test_linear_solver.py
+        tests/test_precision_config.py
+
+        git status --short'
+      timestamp: '2026-05-04T10:03:41Z'
+    - summary: 'rollback: git restore --staged qem/viz/interactive.py
+
+        git add qem/viz/interactive.py qem/viz/_napari_widgets.py qem/viz/napari_app.py qem/fit/fitter.py pyproject.toml docs/source/development/contributing.rst
+        docs/source/user_guide/visualization.rst README.md .gitignore
+
+        git status --short'
+      timestamp: '2026-05-04T11:11:56Z'
+    status: active
+  - id: det_1777866368114_684b6a
+    title: Thrashing on route_b_joint_ls.py
+    target_signature: edit:/Users/zhangzz/code/qem/qem/fusion/route_b_joint_ls.py
+    started_at: '2026-05-04T03:46:08Z'
+    attempt_count: 6
+    failed_attempts: []
+    status: active
+  - id: det_1777883074296_696748
+    title: Thrashing on voronoi.py
+    target_signature: edit:/Users/zhangzz/code/qem/qem/fit/voronoi.py
+    started_at: '2026-05-04T08:24:34Z'
+    attempt_count: 7
+    failed_attempts:
+    - summary: 'rollback: git restore --staged .claude/state/current.yaml docs/superpowers/plans docs/superpowers/specs trace.md
+
+        git add qem/analysis/gaussian_mixture_model.py qem/fit/solver.py qem/fit/voronoi.py qem/fit/fitter.py tests/test_linear_solver.py
+        tests/test_precision_config.py
+
+        git status --short'
+      timestamp: '2026-05-04T10:03:40Z'
+    status: active
+  - id: det_1777942648682_6a8107
+    title: Thrashing on levenberg_marquardt.py
+    target_signature: edit:/Users/zhangzz/code/qem/qem/fit/levenberg_marquardt.py
+    started_at: '2026-05-05T00:57:28Z'
     attempt_count: 6
     failed_attempts: []
     status: active

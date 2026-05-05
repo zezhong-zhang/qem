@@ -10,6 +10,7 @@ local windowing.
 
 from __future__ import annotations
 
+import os
 from abc import abstractmethod
 from typing import Any, Mapping
 
@@ -19,6 +20,18 @@ from numba import jit as njit
 from torch import nn
 
 from qem.utils.tensors import to_numpy, to_tensor
+
+
+# torch.compile gating — skip on MPS (graph compilation not supported) and
+# respect QEM_COMPILE=0 opt-out.
+_CUDA_AVAILABLE = torch.cuda.is_available()
+_COMPILE_ENABLED = os.getenv("QEM_COMPILE", "1") != "0" and _CUDA_AVAILABLE
+
+def _maybe_compile(fn):
+    """Decorator: apply torch.compile on CUDA, passthrough everywhere else."""
+    if _COMPILE_ENABLED:
+        return torch.compile(fn, mode="default")
+    return fn
 
 
 def _as_param(value: Any, *, requires_grad: bool = True) -> nn.Parameter:
@@ -57,7 +70,7 @@ class ImageModel(nn.Module):
     def update_params(self, params: Mapping[str, Any]) -> None:
         """Update existing :class:`nn.Parameter` values in-place."""
         config_keys = {"same_width", "atom_types"}
-        with torch.no_grad():
+        with torch.inference_mode():
             for key, value in params.items():
                 if key in config_keys:
                     continue
@@ -240,6 +253,7 @@ class GaussianModel(ImageModel):
         width = to_numpy(params["width"])
         return height * 2 * np.pi * width**2 * self.dx**2
 
+    @_maybe_compile
     def model_fn(self, x, y, pos_x, pos_y, height, width, *args):
         return height * torch.exp(
             -((x - pos_x) ** 2 + (y - pos_y) ** 2) / (2 * width**2)
@@ -254,6 +268,7 @@ class LorentzianModel(ImageModel):
         width = to_numpy(params["width"])
         return height * np.pi * width**2 * self.dx**2
 
+    @_maybe_compile
     def model_fn(self, x, y, pos_x, pos_y, height, width, *args):
         return height / (1 + ((x - pos_x) ** 2 + (y - pos_y) ** 2) / width**2)
 
@@ -286,6 +301,7 @@ class VoigtModel(ImageModel):
         lorentzian = height * np.pi * width**2 * self.dx**2
         return ratio * gaussian + (1 - ratio) * lorentzian
 
+    @_maybe_compile
     def model_fn(self, x, y, pos_x, pos_y, height, width, ratio):
         sigma = width
         gamma = width / torch.sqrt(torch.tensor(2.0 * np.log(2.0)))

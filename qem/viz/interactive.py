@@ -167,16 +167,17 @@ def plot_scs_histogram_interactive(self, *, save: Optional[str] = None):
     return fig
 
 
-def _bind(cls) -> None:
-    """Hook the interactive plotters onto Fitter."""
-    cls.plot_fitting_interactive = plot_fitting_interactive
-    cls.plot_coordinates_interactive = plot_coordinates_interactive
-    cls.plot_scs_histogram_interactive = plot_scs_histogram_interactive
+class FitterInteractiveMixin:
+    """Plotly-based interactive plot helpers for :class:`Fitter`."""
+
+    plot_fitting_interactive = plot_fitting_interactive
+    plot_coordinates_interactive = plot_coordinates_interactive
+    plot_scs_histogram_interactive = plot_scs_histogram_interactive
 
 
 __all__ = [
+    "FitterInteractiveMixin",
     "plot_fitting_interactive",
     "plot_coordinates_interactive",
     "plot_scs_histogram_interactive",
-    "_bind",
 ]

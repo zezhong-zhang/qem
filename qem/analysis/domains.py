@@ -235,18 +235,16 @@ def _create_polygon_enclosures(self, domain_regions):
 
 
 
-def _bind(cls) -> None:
-    """Attach extracted methods back onto Fitter at class-load time."""
-    cls.estimate_complex_domains = estimate_complex_domains
-    cls._separate_vacuum_and_sample = _separate_vacuum_and_sample
-    cls._identify_domain_boundaries = _identify_domain_boundaries
-    cls._create_polygon_enclosures = _create_polygon_enclosures
+class FitterDomainsMixin:
+    """Domain / polygon estimation for :class:`Fitter`."""
+
+    estimate_complex_domains = estimate_complex_domains
+    _separate_vacuum_and_sample = _separate_vacuum_and_sample
+    _identify_domain_boundaries = _identify_domain_boundaries
+    _create_polygon_enclosures = _create_polygon_enclosures
 
 
 __all__ = [
+    "FitterDomainsMixin",
     "estimate_complex_domains",
-    "_separate_vacuum_and_sample",
-    "_identify_domain_boundaries",
-    "_create_polygon_enclosures",
-    "_bind",
 ]

@@ -512,32 +512,30 @@ def _plot_domain_analysis(
 
 
 
-def _bind(cls) -> None:
-    """Attach extracted methods back onto Fitter at class-load time."""
-    cls._plot_progress = _plot_progress
-    cls.plot_coordinates = plot_coordinates
-    cls.plot_fitting = plot_fitting
-    cls.plot_scs = plot_scs
-    cls.plot_scs_voronoi = plot_scs_voronoi
-    cls.plot_voronoi_integration_intensity = plot_voronoi_integration_intensity
-    cls._plot_gmm_results = _plot_gmm_results
-    cls.plot_scs_histogram = plot_scs_histogram
-    cls.plot_atom_count_map = plot_atom_count_map
-    cls.plot_region = plot_region
-    cls._plot_domain_analysis = _plot_domain_analysis
+class FitterPlotMixin:
+    """Visualisation API for :class:`Fitter`."""
+
+    _plot_progress = _plot_progress
+    plot_coordinates = plot_coordinates
+    plot_fitting = plot_fitting
+    plot_scs = plot_scs
+    plot_scs_voronoi = plot_scs_voronoi
+    plot_voronoi_integration_intensity = plot_voronoi_integration_intensity
+    _plot_gmm_results = _plot_gmm_results
+    plot_scs_histogram = plot_scs_histogram
+    plot_atom_count_map = plot_atom_count_map
+    plot_region = plot_region
+    _plot_domain_analysis = _plot_domain_analysis
 
 
 __all__ = [
-    "_plot_progress",
+    "FitterPlotMixin",
     "plot_coordinates",
     "plot_fitting",
     "plot_scs",
     "plot_scs_voronoi",
     "plot_voronoi_integration_intensity",
-    "_plot_gmm_results",
     "plot_scs_histogram",
     "plot_atom_count_map",
     "plot_region",
-    "_plot_domain_analysis",
-    "_bind",
 ]

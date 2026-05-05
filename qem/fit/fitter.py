@@ -39,7 +39,51 @@ if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 
 
-class Fitter:
+from qem.fit.background import FitterBackgroundMixin
+from qem.fit.edge import FitterEdgeMixin
+from qem.fit.optimization import FitterOptimizationMixin
+from qem.fit.peaks import FitterPeaksMixin
+from qem.fit.pipeline import FitterPipelineMixin
+from qem.fit.plot import FitterPlotMixin
+from qem.fit.solver import FitterSolverMixin
+from qem.fit.voronoi import FitterVoronoiMixin
+from qem.analysis.domains import FitterDomainsMixin
+from qem.analysis.gmm import FitterGMMMixin
+from qem.viz.interactive import FitterInteractiveMixin
+
+
+class Fitter(
+    # Public API mixins.
+    FitterPipelineMixin,        # fit_pipeline, .fit() classmethod
+    FitterOptimizationMixin,    # fit_global, fit_stochastic, optimize,
+                                # fit_width_first, loss
+    FitterPeaksMixin,           # find_peaks, refine_*, subpixel
+    FitterPlotMixin,            # plot_*
+    # Internal-ish helpers:
+    FitterBackgroundMixin,      # 2D background controls
+    FitterSolverMixin,          # linear_estimator (NNLS)
+    FitterVoronoiMixin,         # voronoi_integration, fit_voronoi
+    FitterEdgeMixin,            # boundary penalty + adaptive edge loss
+    # Analysis mixins:
+    FitterDomainsMixin,         # estimate_complex_domains
+    FitterGMMMixin,             # estimate_atom_counts_with_gmm
+    FitterInteractiveMixin,     # plotly-based interactive plots
+):
+    """Image fitter — Gaussian / Lorentzian / Voigt peak model.
+
+    Capabilities are composed via mixin classes (visible in the MRO,
+    type-checkable, ``super()``-friendly). Each mixin owns a coherent
+    slice of the API; see the imports above for the canonical map of
+    method-to-module.
+
+    * :class:`qem.fit.optimization.FitterOptimizationMixin` — provides
+      ``optimize``, ``fit_global``, ``fit_stochastic``,
+      ``fit_width_first``, ``convergence``, ``select_params``,
+      ``update_from_local_params``.
+    * :class:`qem.fit.pipeline.FitterPipelineMixin` — provides
+      ``fit_pipeline`` and the :meth:`fit` classmethod.
+    """
+
     def __init__(
         self,
         image: np.ndarray,
@@ -91,11 +135,11 @@ class Fitter:
         self._coordinates = np.array([])
         self.coordinates_history: dict = {}
 
-        # Boundary penalty + adaptive edge loss off by default.
-        self.use_boundary_penalty = False
-        self.boundary_margin = 2.0
-        self.boundary_strength = 0.01
-        self.use_adaptive_edge_loss = False
+        # Boundary penalty + adaptive edge loss defaults live on
+        # FitterEdgeMixin (boundary_strength=0, adaptive_edge_loss=False).
+        # Set them on the instance to enable, e.g.::
+        #     fitter.boundary_strength = 0.05
+        #     fitter.adaptive_edge_loss = True
 
         self.coordinates_state = 0
         self.init_background = 0.0
@@ -825,352 +869,11 @@ class Fitter:
         diff = to_numpy(diff)
         return diff
 
-    # fitting
-    def optimize(
-        self,
-        model: ImageModel,
-        image_tensor: np.ndarray = None,
-        params: dict = None,
-        maxiter: int = 1000,
-        tol: float = 1e-4,
-        step_size: float = 0.01,
-        verbose: bool = True,
-        batch_size: int = 1024,
-        optimizer: str = "adam",
-        **optimizer_kwargs
-    ) -> dict[str, Any]:  # actually torch.Tensor for grad params; use detach() for numpy snapshot.
-        """
-        Optimize model parameters using specified optimizer.
-        
-        Args:
-            model: The image model to optimize
-            image_tensor: Target image tensor (uses self.image_tensor if None)
-            params: Initial parameters (uses model params if None)
-            maxiter: Maximum iterations/epochs
-            tol: Tolerance for convergence
-            step_size: Learning rate
-            verbose: Whether to print progress
-            batch_size: Batch size for training
-            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
-            **optimizer_kwargs: Additional optimizer-specific parameters
-            
-        Returns:
-            Dictionary containing optimized parameters
-        """
-        if image_tensor is None:
-            image_tensor = self.image_tensor
-        if params is not None:
-            model.set_params(params)
+    # The fitting API — optimize / fit_global / fit_stochastic /
+    # convergence / select_params / update_from_local_params — now lives
+    # in qem.fit.optimization.FitterOptimizationMixin (inherited above).
+    # Keeping this short comment here for jump-to-definition orientation.
 
-        # Build the model if not already built
-        if not model.built:
-            model.build()
-
-        # Move all model parameters to the chosen accelerator (CUDA / MPS / CPU).
-        # initialize_grid() set self.device; the model parameters were created
-        # on CPU by nn.Parameter(...) and must follow.
-        model.to(self.device)
-
-        # Store reference to model being optimized so loss function can access it
-        self._optimization_model = model
-
-        if verbose:
-            print(f"Using {optimizer} optimizer for fitting on {self.device}.")
-        # PyTorch expects a leading batch dimension on inputs.
-        image_tensor = image_tensor.to(self.device).unsqueeze(0)
-        model_inputs = [self.x_grid_batched, self.y_grid_batched]
-        
-        operation_context = (
-            self.memory_monitor.monitor_operation("optimize") 
-            if self.memory_monitor else nullcontext()
-        )
-        
-        with operation_context:
-            from qem.fit.loop import fit_loop, make_optimizer
-
-            opt = make_optimizer(optimizer, model.parameters(), step_size)
-            fit_loop(
-                model=model,
-                inputs=model_inputs,
-                target=image_tensor,
-                loss_fn=self.loss,
-                optimizer=opt,
-                epochs=maxiter,
-                tol=tol,
-                patience=100,
-                lr_patience=10,
-                lr_factor=0.1,
-                min_lr=1e-6,
-                verbose=verbose,
-            )
-        
-        # Clean up model reference
-        self._optimization_model = None
-                
-        optimized_params = model.get_params()
-        return optimized_params
-
-    def fit_global(
-        self,
-        params: dict = None,
-        maxiter: int = 1000,
-        tol: float = 1e-3,
-        step_size: float = 0.01,
-        optimizer: str = "adam",
-        local: bool = True,
-        verbose: bool = True,
-        **optimizer_kwargs
-    ):
-        """
-        Fit model parameters globally using specified optimizer.
-        
-        Args:
-            params: Initial parameters (uses self.params or initializes if None)
-            maxiter: Maximum iterations/epochs
-            tol: Tolerance for convergence
-            step_size: Learning rate
-            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
-            local: Whether to use local prediction for final result
-            verbose: Whether to print optimization progress
-            **optimizer_kwargs: Additional optimizer-specific parameters
-            
-        Returns:
-            Dictionary containing optimized parameters
-        """
-        if params is None:
-            params = self.params if self.params is not None else self.init_params()
-        
-        fitting_model = self._create_fitting_model(params)
-        
-        params = self.optimize(
-            model=fitting_model,
-            image_tensor=self.image_tensor,
-            params=params,
-            maxiter=maxiter,
-            tol=tol,
-            step_size=step_size,
-            optimizer=optimizer,
-            verbose=verbose,
-            **optimizer_kwargs
-        )
-        
-        self.params = params
-        self.prediction = to_numpy(self.predict(params, local=local))
-        return params
-
-    def fit_stochastic(
-        self,
-        params: dict = None,
-        num_epoch: int = 5,
-        batch_size: int = 500,
-        maxiter: int = 50,
-        tol: float = 1e-3,
-        step_size: float = 1e-2,
-        optimizer: str = "adam",
-        verbose: bool = True,
-        local: bool = True,
-        plot: bool = False,
-        **optimizer_kwargs
-    ):
-        """
-        Fit model parameters stochastically by optimizing random batches of coordinates.
-        
-        Args:
-            params: Initial parameters (uses self.params or initializes if None)
-            num_epoch: Number of training epochs
-            batch_size: Size of random batches
-            maxiter: Maximum iterations per batch
-            tol: Tolerance for convergence
-            step_size: Learning rate
-            optimizer_type: Type of optimizer ('adam', 'adamw', 'lbfgs')
-            local: Whether to use local prediction
-            plot: Whether to plot progress
-            **optimizer_kwargs: Additional optimizer-specific parameters
-            
-        Returns:
-            Dictionary containing optimized parameters
-        """
-        if params is None:
-            params = self.params if self.params is not None else self.init_params()
-        params = {k: stop_grad(v) for k, v in params.items()}
-
-        self.converged = False
-        operation_context = (
-            self.memory_monitor.monitor_operation("fit_stochastic")
-            if self.memory_monitor else nullcontext()
-        )
-
-        # Pre-condition heights with a least-squares pass. The stochastic
-        # fitter is robust to a no-op pre-conditioning, so swallow failures
-        # here rather than aborting the whole run.
-        params = self.linear_estimator(params, best_effort=True)
-        # Move everything to the active device once; subsequent batch
-        # operations rely on params already being torch tensors there.
-        params = self._params_to_device(params)
-
-        with operation_context:
-            for epoch in tqdm(range(num_epoch), desc="Training epochs", leave=False):
-                pre_params = clone_params(params)
-                random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
-
-                for batch_indices in tqdm(random_batches, desc="Fitting batch", leave=False):
-                    # Calculate local target (subtract other atoms' contributions)
-                    if batch_size < self.num_coordinates:
-                        params_without_batch = clone_params(params)
-                        height_tensor = params_without_batch['height']
-                        batch_indices_tensor = torch.as_tensor(
-                            batch_indices, dtype=torch.int64, device=height_tensor.device,
-                        )
-                        new_height = height_tensor.clone()
-                        new_height.view(-1)[batch_indices_tensor] = 0.0
-                        params_without_batch['height'] = new_height
-                        params_without_batch['background'] = torch.zeros_like(params_without_batch['background'])
-
-                        model_others = self._create_fitting_model(params_without_batch)
-
-                        prediction_from_others = self.predict(params_without_batch, model=model_others, local=local)
-                        local_target = (self.image_tensor - prediction_from_others).detach()
-
-                        del params_without_batch
-                        del prediction_from_others
-                        del height_tensor
-                        release_memory()
-                    else:
-                        local_target = self.image_tensor
-
-                    # Optimize batch using unified optimize method
-                    atoms_selected_mask = np.zeros(self.num_coordinates, dtype=bool)
-                    atoms_selected_mask[batch_indices] = True
-                    select_params = self.select_params(params, atoms_selected_mask)
-                    
-                    local_model = self._create_fitting_model(select_params)
-                    
-                    # Use unified optimize method for batch
-                    optimized_params = self.optimize(
-                        model=local_model,
-                        image_tensor=local_target,
-                        params=select_params,
-                        maxiter=maxiter,
-                        tol=tol,
-                        step_size=step_size,
-                        optimizer=optimizer,
-                        verbose=verbose,
-                        **optimizer_kwargs
-                    )
-                    del local_target
-                    release_memory()
-                    params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
-                    if plot:
-                        self._plot_progress(params, batch_indices, select_params)
-
-                # Check convergence
-                if self.convergence(params, pre_params, tol):
-                    logging.info("Convergence criteria met.")
-                    self.converged = True
-                    break
-        
-        self.params = params
-        self.prediction = to_numpy(self.predict(params, local=local))
-        logging.info("Stochastic fitting complete.")
-        return self.params
-
-    def convergence(self, params: dict, pre_params: dict, tol: float = 1e-2):
-        """
-        Checks if the parameters have converged within a specified tolerance.
-
-        This function iterates over each parameter in `params` and its corresponding
-        value in `pre_params` to determine if the change (update) is within a specified
-        tolerance level, `tol`. For position parameters ('pos_x', 'pos_y'), it checks if
-        the absolute update exceeds 1. For other parameters ('height', 'width', 'ratio', 'background'), it checks if the relative update exceeds `tol`.
-
-        Parameters:
-            params (dict): Current values of the parameters.
-            pre_params (dict): Previous values of the parameters.
-            tol (float, optional): Tolerance level for convergence. Default is 1e-2.
-
-        Returns:
-            bool: True if all parameters have converged within the tolerance, False otherwise.
-        """
-        # logging.info(f"Checking convergence with tolerance {tol}")
-        # Loop through current parameters and their previous values
-        for key, value in params.items():
-            if key not in pre_params:
-                continue  # Skip keys that are not in pre_params
-            if not torch.is_tensor(value):
-                continue
-            other = pre_params[key]
-            if torch.is_tensor(other) and other.device != value.device:
-                other = other.to(value.device)
-
-            # Calculate the update difference
-            update = torch.abs(value - other)
-
-            # Check convergence based on parameter type
-            if key in ["pos_x", "pos_y"]:
-                max_update = update.max()
-                logging.info(f"Convergence rate for {key} = {max_update}")
-                if max_update > 1:
-                    logging.info("Convergence not reached")
-                    return False
-            else:
-                # Avoid division by zero and calculate relative update
-                value_with_offset = value + 1e-10
-                rate = torch.abs(update / value_with_offset).mean()
-                logging.info(f"Convergence rate for {key} = {rate}")
-                if rate > tol:
-                    logging.info("Convergence not reached")
-                    return False
-
-        logging.info("Convergence reached")
-        return True
-
-    def select_params(self, params: dict, mask: np.ndarray):
-        select_params = {}
-        select_params["background"] = params["background"]
-        if self.same_width:
-            if "width" in params:
-                select_params["width"] = params["width"]
-            if "ratio" in params:
-                select_params["ratio"] = params["ratio"]
-            for key in ["pos_x", "pos_y", "height"]:
-                select_params[key] = params[key][mask]
-        else:
-            for key, value in params.items():
-                if key != "background":
-                    select_params[key] = value[mask]
-        select_params['same_width'] = params['same_width']
-        select_params['atom_types'] = params['atom_types'][mask]
-        return select_params
-
-    def update_from_local_params(self, params: dict, local_params: dict, mask: np.ndarray):
-        """
-        Updates the main parameter set from the locally optimized batch parameters.
-        This version is defensively coded to prevent JAX 'deleted array' errors.
-        """
-        shared_value_list = ["background"]
-        if getattr(self, 'same_width', True):
-            shared_value_list.extend(["width", "ratio"])
-            
-        const_value_list =['same_width', 'atom_types']
-        for key, value in local_params.items():
-            if key in const_value_list:
-                pass
-            elif key in shared_value_list:
-                weight = mask.sum() / self.num_coordinates
-                params[key] = params[key] * (1 - weight) + value * weight                
-            else:
-                # --- Logic for per-atom parameters ---
-                new_param = params[key].clone()
-                update_indices = torch.as_tensor(
-                    np.where(mask)[0], dtype=torch.int64, device=new_param.device,
-                )
-                value_tensor = torch.as_tensor(
-                    value, dtype=new_param.dtype, device=new_param.device,
-                )
-                new_param.view(-1)[update_indices] = value_tensor
-                params[key] = new_param
-                
-        return params
 
     def update_coordinates(self):
         # check the refined coorinates is different from the current coordinates
@@ -1367,32 +1070,8 @@ class Fitter:
         return scalebar
 
 
-# Hook the extracted methods back onto Fitter so call sites like
-# fitter.plot_fitting() / fitter.estimate_complex_domains() keep working —
-# the bodies live in their own sibling modules.
-from qem.fit.plot import _bind as _bind_plot  # noqa: E402
-from qem.fit.loss import _bind as _bind_loss  # noqa: E402
-from qem.fit.peaks import _bind as _bind_peaks  # noqa: E402
-from qem.fit.background import _bind as _bind_background  # noqa: E402
-from qem.analysis.domains import _bind as _bind_domains  # noqa: E402
-from qem.analysis.gmm import _bind as _bind_gmm  # noqa: E402
-
-from qem.fit.voronoi import _bind as _bind_voronoi  # noqa: E402
-from qem.fit.solver import _bind as _bind_solver  # noqa: E402
-
-_bind_plot(Fitter)
-_bind_loss(Fitter)
-_bind_peaks(Fitter)
-_bind_background(Fitter)
-_bind_voronoi(Fitter)
-_bind_solver(Fitter)
-_bind_domains(Fitter)
-_bind_gmm(Fitter)
-
-# Plotly notebook helpers (qem.viz.interactive) — non-blocking, HTML output.
-from qem.viz.interactive import _bind as _bind_interactive  # noqa: E402
-
-_bind_interactive(Fitter)
+# All capability methods now arrive via the mixin bases on the class
+# declaration — no module-load monkey-patching needed.
 
 
 def show_in_napari(self, **kwargs):

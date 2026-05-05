@@ -24,7 +24,7 @@ class PrecisionConfig:
     def __init__(self):
         """Initialize precision configuration from environment variables."""
         self._load_from_env()
-    
+
     def _load_from_env(self):
         """Load configuration from environment variables."""
         # Load precision settings
@@ -33,7 +33,11 @@ class PrecisionConfig:
             "QEM_LINEAR_SOLVER_PRECISION", 
             self.DEFAULT_LINEAR_SOLVER_PRECISION
         )
-        
+
+        # Performance flags (gated by env vars, default OFF to preserve back-compat)
+        self.enable_tf32 = os.getenv("QEM_TF32", "0") != "0"
+        self.enable_compile = os.getenv("QEM_COMPILE", "0") != "0"
+
         # Validate precision settings
         self._validate_precision()
     
@@ -118,7 +122,8 @@ class PrecisionConfig:
     def __repr__(self):
         return (
             f"PrecisionConfig(precision='{self.precision}', "
-            f"linear_solver_precision='{self.linear_solver_precision}')"
+            f"linear_solver_precision='{self.linear_solver_precision}', "
+            f"enable_tf32={self.enable_tf32}, enable_compile={self.enable_compile})"
         )
 
 

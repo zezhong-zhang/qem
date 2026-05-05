@@ -782,16 +782,19 @@ def voronoi_integration(self, max_radius: float = None, plot=False,save=False):
 
 
 
-def _bind(cls) -> None:
-    """Attach extracted methods back onto Fitter at class-load time."""
-    cls.fit_voronoi = fit_voronoi
-    cls._fit_voronoi_batched = _fit_voronoi_batched
-    cls.voronoi_integration = voronoi_integration
+class FitterVoronoiMixin:
+    """Voronoi-cell integration + per-cell Gaussian fit for :class:`Fitter`."""
+
+    fit_voronoi = fit_voronoi
+    _fit_voronoi_batched = _fit_voronoi_batched
+    voronoi_integration = voronoi_integration
 
 
 __all__ = [
+    "FitterVoronoiMixin",
     "fit_voronoi",
     "voronoi_integration",
-    "_bind",
+    "voronoi_integrate",
+    "voronoi_point_record",
 ]
 

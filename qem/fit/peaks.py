@@ -19,7 +19,7 @@ from tqdm import tqdm
 
 from qem.fit.refine import calculate_center_of_mass
 from qem.fit.voronoi import voronoi_point_record
-from qem.utils.tensors import to_numpy
+from qem.utils.tensors import to_numpy, to_tensor
 from qem.viz.geometry import remove_close_coordinates as _geom_remove_close_coordinates
 from qem.viz.select import InteractivePlot
 
@@ -331,28 +331,136 @@ def remove_peaks_outside_image(self):
 
 
 
-def _bind(cls) -> None:
-    """Attach extracted methods back onto Fitter at class-load time."""
-    cls.import_coordinates = import_coordinates
-    cls.find_peaks = find_peaks
-    cls.get_nearest_peak_distance = get_nearest_peak_distance
-    cls.refine_center_of_mass = refine_center_of_mass
-    cls._refine_one_center = _refine_one_center
-    cls.refine_local_max = refine_local_max
-    cls.remove_close_coordinates = remove_close_coordinates
-    cls.add_or_remove_peaks = add_or_remove_peaks
-    cls.remove_peaks_outside_image = remove_peaks_outside_image
+# ---------------------------------------------------------------------------
+# Sub-pixel parabolic peak refinement (used as the upstream warmup before
+# any joint fit; see qem.fit.pipeline.fit_pipeline).
+# ---------------------------------------------------------------------------
+
+def subpixel_parabolic_refine(
+    image: np.ndarray,
+    coords_px: np.ndarray,
+    *,
+    search_window: int = 0,
+) -> np.ndarray:
+    """Refine peak positions to sub-pixel accuracy via parabolic fit.
+
+    For each input coordinate, parabolic-fit the 3×3 around the rounded
+    integer position and solve ∇f = 0 for the sub-pixel offset. ±0.05 px
+    typical accuracy on STEM peaks.
+
+    Args:
+        image: 2D image (H, W). Float-valued.
+        coords_px: ``(N, 2)`` array of ``[x, y]`` in pixels (may be float).
+        search_window: optional integer-pixel local-max search radius
+            *before* the parabolic fit. Default ``0`` (no search — anchor
+            on ``round(coord)``). Use a positive value only when input
+            coordinates are noisier than 0.5 px; with already-good
+            sub-pixel inputs (e.g. from a prior fit), a non-zero search
+            window can snap to a neighbouring integer pixel and bias
+            the result by up to ``search_window`` pixels.
+
+    Returns:
+        ``(N, 2)`` array of refined ``[x, y]`` in pixels.
+    """
+    image = np.asarray(image, dtype=np.float64)
+    H, W = image.shape
+    N = coords_px.shape[0]
+    out = coords_px.astype(np.float64).copy()
+    sw = max(0, int(search_window))
+
+    for k in range(N):
+        x0, y0 = float(coords_px[k, 0]), float(coords_px[k, 1])
+        ix = int(round(x0))
+        iy = int(round(y0))
+        if sw > 0:
+            x_lo = max(ix - sw, 1)
+            x_hi = min(ix + sw + 1, W - 1)
+            y_lo = max(iy - sw, 1)
+            y_hi = min(iy + sw + 1, H - 1)
+            if x_hi <= x_lo or y_hi <= y_lo:
+                continue
+            block = image[y_lo:y_hi, x_lo:x_hi]
+            my, mx = np.unravel_index(int(np.argmax(block)), block.shape)
+            ix_max = mx + x_lo
+            iy_max = my + y_lo
+        else:
+            ix_max, iy_max = ix, iy
+        if ix_max < 1 or ix_max >= W - 1 or iy_max < 1 or iy_max >= H - 1:
+            out[k] = [float(ix_max), float(iy_max)]
+            continue
+
+        f = image[iy_max - 1 : iy_max + 2, ix_max - 1 : ix_max + 2]
+        # f(dx, dy) = f00 + a·dx + b·dy + c·dx² + d·dy² + e·dx·dy
+        a = (f[1, 2] - f[1, 0]) * 0.5
+        b = (f[2, 1] - f[0, 1]) * 0.5
+        c = (f[1, 2] + f[1, 0] - 2.0 * f[1, 1]) * 0.5
+        d = (f[2, 1] + f[0, 1] - 2.0 * f[1, 1]) * 0.5
+        e = (f[2, 2] - f[2, 0] - f[0, 2] + f[0, 0]) * 0.25
+        det = (2.0 * c) * (2.0 * d) - e * e
+        if abs(det) < 1e-12:
+            out[k] = [float(ix_max), float(iy_max)]
+            continue
+        dx = (-a * 2.0 * d + b * e) / det
+        dy = (-b * 2.0 * c + a * e) / det
+        # Parabolic fit only valid inside the 3×3 patch.
+        dx = max(-0.5, min(0.5, dx))
+        dy = max(-0.5, min(0.5, dy))
+        out[k, 0] = float(ix_max) + dx
+        out[k, 1] = float(iy_max) + dy
+    return out
+
+
+def refine_peaks_subpixel(self, *, search_window: int = 2) -> np.ndarray:
+    """Refine ``self.coordinates`` via parabolic sub-pixel fit.
+
+    Convenience wrapper around :func:`subpixel_parabolic_refine` that
+    operates on ``self.image`` and ``self.coordinates``. Updates the
+    fitter in place and returns the new ``(N, 2)`` coords.
+    """
+    refined = subpixel_parabolic_refine(
+        self.image, self.coordinates, search_window=search_window,
+    )
+    self.coordinates = refined
+    if hasattr(self, "params") and self.params:
+        with torch.inference_mode():
+            self.params["pos_x"] = to_tensor(refined[:, 0], dtype="float32")
+            self.params["pos_y"] = to_tensor(refined[:, 1], dtype="float32")
+    return refined
+
+
+class FitterPeaksMixin:
+    """Peak-detection / refinement / curation API for :class:`Fitter`.
+
+    Class-level method *bindings* (not redefinitions) — the bodies live
+    as module-level functions above. This pattern replaces the legacy
+    ``_bind(cls)`` monkey-patch with a statically-declared mixin so
+    type-checkers see the methods and ``super()`` works in subclasses.
+    Same runtime semantics; zero overhead.
+    """
+
+    import_coordinates = import_coordinates
+    find_peaks = find_peaks
+    get_nearest_peak_distance = get_nearest_peak_distance
+    refine_center_of_mass = refine_center_of_mass
+    _refine_one_center = _refine_one_center
+    refine_local_max = refine_local_max
+    remove_close_coordinates = remove_close_coordinates
+    add_or_remove_peaks = add_or_remove_peaks
+    remove_peaks_outside_image = remove_peaks_outside_image
+    refine_peaks_subpixel = refine_peaks_subpixel
 
 
 __all__ = [
+    "FitterPeaksMixin",
+    "subpixel_parabolic_refine",
+    # Free-function-style names also exported for backwards compatibility:
     "import_coordinates",
     "find_peaks",
     "get_nearest_peak_distance",
     "refine_center_of_mass",
-    "_refine_one_center",
     "refine_local_max",
     "remove_close_coordinates",
     "add_or_remove_peaks",
     "remove_peaks_outside_image",
-    "_bind",
+    "refine_peaks_subpixel",
 ]
