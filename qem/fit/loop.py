@@ -92,6 +92,7 @@ def fit_loop(
     min_lr: float = 1e-6,
     post_step: Callable[[nn.Module], None] | None = None,
     verbose: bool = False,
+    use_amp: bool = False,
 ) -> FitResult:
     """Adam-style training loop with early stopping and LR reduction.
 
@@ -125,21 +126,35 @@ def fit_loop(
     last_loss = float("inf")
     epochs_run = 0
 
+    # AMP gating: only meaningful on CUDA; no-op on CPU/MPS.
+    _amp_enabled = use_amp and torch.cuda.is_available()
+    scaler = torch.cuda.amp.GradScaler() if _amp_enabled else None
+
     for epoch in range(epochs):
         if is_lbfgs:
             def closure():
                 optimizer.zero_grad(set_to_none=True)
-                pred = model(inputs)
-                _loss = loss_fn(target, pred)
-                _loss.backward()
+                with torch.amp.autocast("cuda", enabled=_amp_enabled):
+                    pred = model(inputs)
+                    _loss = loss_fn(target, pred)
+                if _amp_enabled:
+                    scaler.scale(_loss).backward()
+                else:
+                    _loss.backward()
                 return _loss
             loss = optimizer.step(closure)
         else:
             optimizer.zero_grad(set_to_none=True)
-            prediction = model(inputs)
-            loss = loss_fn(target, prediction)
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast("cuda", enabled=_amp_enabled):
+                prediction = model(inputs)
+                loss = loss_fn(target, prediction)
+            if _amp_enabled:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                optimizer.step()
 
         if post_step is not None:
             with torch.inference_mode():

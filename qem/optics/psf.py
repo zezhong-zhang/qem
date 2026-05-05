@@ -70,6 +70,20 @@ def _envelope(grid, probe, alpha, phi):
     )
 
 
+@_maybe_compile
+def _chi_envelope(alpha, phi, wavelength, aberrations, focal_spread, angular_spread_mrad):
+    """Fused chi + envelope computation to reduce intermediate allocations."""
+    phase = chi(alpha, phi, wavelength=wavelength, aberrations=aberrations)
+    env = partial_coherence_envelope(
+        alpha, phi,
+        wavelength=wavelength,
+        aberrations=aberrations,
+        focal_spread=focal_spread,
+        angular_spread_mrad=angular_spread_mrad,
+    )
+    return phase, env
+
+
 def _ctf_to_psf(ctf: torch.Tensor) -> torch.Tensor:
     """fft-natural CTF → fftshift-centered real-space PSF."""
     return torch.real(torch.fft.fftshift(torch.fft.ifft2(ctf)))
@@ -125,9 +139,14 @@ def ssb_ctf(
         real_m2 = torch.arccos(x / 2) - (x / 2) * torch.sqrt(1 - (x / 2) ** 2)
         real = real.masked_scatter(m2, real_m2 * (4.0 / math.pi))
 
-    # Aberration phase factor + partial-coherence envelope.
-    phase = chi(alpha, phi, wavelength=lam, aberrations=probe.aberrations)
-    env = _envelope(grid, probe, alpha, phi)
+    # Fused aberration phase + partial-coherence envelope.
+    phase, env = _chi_envelope(
+        alpha, phi,
+        wavelength=lam,
+        aberrations=probe.aberrations,
+        focal_spread=probe.focal_spread,
+        angular_spread_mrad=probe.angular_spread,
+    )
     amplitude = real * env
     return torch.complex(amplitude * torch.cos(-phase), amplitude * torch.sin(-phase))
 
@@ -208,8 +227,13 @@ def icom_ctf(
         cutoff = high_pass_mrad * 1e-3
         order = max(1, int(high_pass_order))
         amp = 1.0 - 1.0 / (1.0 + (alpha / cutoff) ** (2 * order))
-    phase = chi(alpha, phi, wavelength=lam, aberrations=probe.aberrations)
-    env = _envelope(grid, probe, alpha, phi)
+    phase, env = _chi_envelope(
+        alpha, phi,
+        wavelength=lam,
+        aberrations=probe.aberrations,
+        focal_spread=probe.focal_spread,
+        angular_spread_mrad=probe.angular_spread,
+    )
     amplitude = amp * env
     return torch.complex(amplitude * torch.cos(-phase), amplitude * torch.sin(-phase))
 
@@ -258,8 +282,13 @@ def epie_ctf(
         q_invA = alpha[mask] / lam
         df_factor = 1.0 / (1.0 + (defocus_filter_nm * q_invA / 10.0) ** 2)
         real = real.masked_scatter(mask, ctf_val * df_factor)
-    phase = chi(alpha, phi, wavelength=lam, aberrations=probe.aberrations)
-    env = _envelope(grid, probe, alpha, phi)
+    phase, env = _chi_envelope(
+        alpha, phi,
+        wavelength=lam,
+        aberrations=probe.aberrations,
+        focal_spread=probe.focal_spread,
+        angular_spread_mrad=probe.angular_spread,
+    )
     amplitude = real * env
     return torch.complex(amplitude * torch.cos(-phase), amplitude * torch.sin(-phase))
 

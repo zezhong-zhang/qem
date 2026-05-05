@@ -86,7 +86,7 @@ def fit_pipeline(
     fitter: "Fitter",
     *,
     atom_size: float = 0.7,
-    subpixel: bool = True,
+    subpixel: bool = False,
     subpixel_window: int = 0,
     width_first: bool = True,
     num_epoch: int = 10,

@@ -199,9 +199,8 @@ class JointLeastSquaresRoute:
             # Gradient is scaled by 1/n_elements to mirror the historic
             # `grad /= max(1.0, n_elements)` from the numpy loop.
             x_pos = torch.clamp(x_param, min=0.0)
-            adf_pred = torch.tensordot(
-                torch.pow(x_pos, gamma), weights_t, dims=([-1], [0])
-            )
+            # einsum path for tensordot replacement: (H,W,E),(E)->(H,W)
+            adf_pred = torch.einsum("hwe,e->hw", torch.pow(x_pos, gamma), weights_t)
             adf_residual = adf_pred - adf_t
             adf_cost = 0.5 * lambda_adf * torch.mean(adf_residual ** 2)
             cost = adf_cost
@@ -210,11 +209,12 @@ class JointLeastSquaresRoute:
             tv_cost = torch.zeros((), dtype=dtype, device=device)
 
             if edx_t is not None and edx_ref_t is not None:
-                edx_pred = torch.tensordot(x_param, edx_ref_t.T, dims=([-1], [0]))
+                # einsum path for tensordot replacement: (H,W,E),(C,E)->(H,W,C)
+                edx_pred = torch.einsum("hwe,ce->hwc", x_param, edx_ref_t)
                 edx_cost = 0.5 * lambda_edx * torch.mean((edx_pred - edx_t) ** 2)
                 cost = cost + edx_cost
             if eels_t is not None and eels_ref_t is not None:
-                eels_pred = torch.tensordot(x_param, eels_ref_t.T, dims=([-1], [0]))
+                eels_pred = torch.einsum("hwe,ce->hwc", x_param, eels_ref_t)
                 eels_cost = 0.5 * lambda_eels * torch.mean((eels_pred - eels_t) ** 2)
                 cost = cost + eels_cost
             if lambda_tv:

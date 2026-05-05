@@ -204,6 +204,7 @@ def fit_lm(
     loss_scale: float | None = None,
     verbose: bool = False,
     progress: bool = True,
+    use_amp: bool = False,
 ) -> LMResult:
     """Levenberg-Marquardt with matrix-free CG. Updates ``model`` in place.
 
@@ -237,9 +238,13 @@ def fit_lm(
     iters_run = 0
     converged = False
 
+    # AMP gating: only meaningful on CUDA; no-op on CPU/MPS.
+    _amp_enabled = use_amp and torch.cuda.is_available()
+    scaler = torch.cuda.amp.GradScaler() if _amp_enabled else None
+
     if verbose:
-        log.info("LM start: cost=%.6e, n_params=%d, n_resid=%d, loss=%s",
-                 cost, theta.numel(), r.numel(), loss)
+        log.info("LM start: cost=%.6e, n_params=%d, n_resid=%d, loss=%s, amp=%s",
+                 cost, theta.numel(), r.numel(), loss, _amp_enabled)
 
     # Local import to avoid pulling tqdm into module-load if unused.
     from tqdm.auto import tqdm
@@ -253,7 +258,8 @@ def fit_lm(
     for it in range(max_iter):
         # vjp_fn closes over theta's forward graph, so subsequent
         # vjp_fn(c) calls only re-run the backward — no new forward.
-        out, vjp_fn = vjp(f, theta)
+        with torch.amp.autocast("cuda", enabled=_amp_enabled):
+            out, vjp_fn = vjp(f, theta)
         # Gradient g = J^T (w*r). For L2, w = 1 and out = r.
         (g,) = vjp_fn(w * out)
 
@@ -269,8 +275,9 @@ def fit_lm(
         #   (J^T diag(w) J + λI) δ = -J^T (w r)
         # Matrix-free: jv = J·v then vjp(w·jv) = J^T diag(w) J · v.
         def matvec(v: torch.Tensor) -> torch.Tensor:
-            _out2, jv = jvp(f, (theta,), (v,))
-            (jtjv,) = vjp_fn(w * jv)
+            with torch.amp.autocast("cuda", enabled=_amp_enabled):
+                _out2, jv = jvp(f, (theta,), (v,))
+                (jtjv,) = vjp_fn(w * jv)
             return jtjv + lam * v
 
         delta, cg_iters = cg_solve(matvec, -g, max_iter=cg_max_iter, tol=cg_tol)
@@ -279,12 +286,14 @@ def fit_lm(
         # quadratic on the L2 surrogate Σ w r²/2 — sufficient for the
         # ρ accept/reject step.
         with torch.inference_mode():
-            _, jdelta = jvp(f, (theta,), (delta,))
+            with torch.amp.autocast("cuda", enabled=_amp_enabled):
+                _, jdelta = jvp(f, (theta,), (delta,))
             wjd = w * jdelta
             pred_red = (-r.dot(wjd) - 0.5 * jdelta.dot(wjd)).item()
 
         theta_new = theta + delta
-        r_new = f(theta_new).detach()
+        with torch.amp.autocast("cuda", enabled=_amp_enabled):
+            r_new = f(theta_new).detach()
         # Re-weight against the trial residual so that cost/cost_new are
         # measured under the SAME loss function (otherwise we'd compare
         # apples to oranges across robust losses).
