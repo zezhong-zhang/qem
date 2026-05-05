@@ -8,32 +8,48 @@ import numpy as np
 from typing import Union, Type
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Parse a boolean env var. Disabled by '0', 'false', 'False'; enabled otherwise."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw not in ("0", "false", "False", "")
+
+
 class PrecisionConfig:
     """Manages precision settings for QEM calculations."""
-    
+
     # Default precision settings
     DEFAULT_PRECISION = "float32"
     DEFAULT_LINEAR_SOLVER_PRECISION = "float32"
-    
+    DEFAULT_ENABLE_TF32 = True
+    DEFAULT_ENABLE_COMPILE = False
+
     # Supported precision types
     SUPPORTED_PRECISIONS = {
         "float32": np.float32,
         "float64": np.float64,
     }
-    
+
     def __init__(self):
         """Initialize precision configuration from environment variables."""
         self._load_from_env()
-    
+
     def _load_from_env(self):
         """Load configuration from environment variables."""
         # Load precision settings
         self.precision = os.getenv("QEM_PRECISION", self.DEFAULT_PRECISION)
         self.linear_solver_precision = os.getenv(
-            "QEM_LINEAR_SOLVER_PRECISION", 
+            "QEM_LINEAR_SOLVER_PRECISION",
             self.DEFAULT_LINEAR_SOLVER_PRECISION
         )
-        
+
+        # Performance flags. Default: TF32 on (free perf on Ampere+),
+        # torch.compile off (opt-in because it interacts unpredictably with
+        # backend-dispatching keras.ops chains).
+        self.enable_tf32 = _env_bool("QEM_TF32", self.DEFAULT_ENABLE_TF32)
+        self.enable_compile = _env_bool("QEM_COMPILE", self.DEFAULT_ENABLE_COMPILE)
+
         # Validate precision settings
         self._validate_precision()
     
@@ -166,3 +182,32 @@ def create_array(data, precision: str = None) -> np.ndarray:
 def create_linear_solver_array(data) -> np.ndarray:
     """Create numpy array with linear solver precision."""
     return get_config().get_linear_solver_array(data)
+
+
+def maybe_compile(fn, *, mode: str = "default"):
+    """Wrap ``fn`` in :func:`torch.compile` when conditions are met.
+
+    Returns ``torch.compile(fn, mode=mode)`` when all of:
+
+    - ``PrecisionConfig.enable_compile`` is true (env: ``QEM_COMPILE=1``)
+    - The active Keras backend is ``torch``
+    - CUDA is available (we don't compile on MPS — fragile on Apple Silicon —
+      and CPU compile rarely pays off for QEM's small kernels)
+
+    Otherwise returns ``fn`` unchanged. Compilation errors are swallowed and
+    the original function is returned, so this is always safe to wrap around
+    a callable.
+    """
+    cfg = get_config()
+    if not cfg.enable_compile:
+        return fn
+    try:
+        import keras
+        if keras.backend.backend() != "torch":
+            return fn
+        import torch
+        if not torch.cuda.is_available():
+            return fn
+        return torch.compile(fn, mode=mode)
+    except Exception:
+        return fn

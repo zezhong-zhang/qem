@@ -8,6 +8,7 @@ load_dotenv()
 import keras
 
 from qem.utils.params import safe_convert_to_numpy, safe_convert_to_tensor
+from qem.utils.config import maybe_compile
 
 class ImageModel(keras.Model):
     """Base class for all image models."""
@@ -57,6 +58,10 @@ class ImageModel(keras.Model):
         self.width = self.add_weight(shape=(self.input_params['width'].shape[0],), initializer=keras.initializers.Constant(self.input_params['width']), name="width")
         self.background = self.add_weight(shape=(), initializer=keras.initializers.Constant(self.input_params['background']), name="background")
         super().build(input_shape)
+        # Cache an optionally-compiled view of model_fn. Opt-in via QEM_COMPILE=1
+        # and only kicks in on the torch+CUDA backend; otherwise this is the
+        # bound method itself with zero overhead. See qem.utils.config.maybe_compile.
+        self._compiled_model_fn = maybe_compile(self.model_fn)
         
     def get_params(self):
         dict_params = {
@@ -124,9 +129,13 @@ class ImageModel(keras.Model):
         
         width_ratio_args = (width, ratio) if ratio is not None else (width,)
 
+        # Use the cached (possibly torch.compile'd) view of model_fn when build()
+        # has populated it; otherwise fall back to the bound method directly.
+        mfn = getattr(self, "_compiled_model_fn", None) or self.model_fn
+
         if not local:
             # Global calculation: simpler but uses more memory.
-            peaks = self.model_fn(
+            peaks = mfn(
                 x_grid[..., None], y_grid[..., None],  # Broadcasting to match peak dimensions
                 self.pos_x, self.pos_y,
                 self.height, *width_ratio_args
@@ -150,7 +159,7 @@ class ImageModel(keras.Model):
                 keras.ops.mod(self.pos_x, 1), keras.ops.mod(self.pos_y, 1),
                 self.height, *width_ratio_args
             )
-            local_peaks = self.model_fn(local_x_grid[..., None], local_y_grid[..., None], *peak_params)
+            local_peaks = mfn(local_x_grid[..., None], local_y_grid[..., None], *peak_params)
 
             # 4. Calculate the global coordinates where each local peak point should go.
             pos_x_int = keras.ops.floor(self.pos_x)

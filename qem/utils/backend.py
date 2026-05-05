@@ -280,6 +280,8 @@ def backend_specific_config(backend_name):
             # Use CPU if CUDA is not available
             if not torch.cuda.is_available():
                 torch.set_default_device('cpu')
+            # Performance knobs (TF32 on Ampere+, etc.). Reads QEM_TF32 env var.
+            setup_torch_runtime()
         except (ImportError, Exception):
             pass
     
@@ -293,6 +295,87 @@ def backend_specific_config(backend_name):
             tf.config.set_visible_devices([], 'GPU')
         except (ImportError, Exception):
             pass
+
+
+def torch_inference_context():
+    """Return a no-grad context manager when the torch backend is active.
+
+    For non-torch backends (JAX, TF, NumPy), returns a ``nullcontext``. Use
+    this around inference-only forward passes (``predict``, residual eval,
+    visualization) to skip gradient bookkeeping on the torch backend.
+
+    We use ``torch.no_grad()`` rather than ``torch.inference_mode()`` because
+    the result tensors flow into Keras pipelines that occasionally apply
+    ``stop_gradient`` and arithmetic against non-inference tensors;
+    ``inference_mode`` propagates an "inference tensor" flag that breaks
+    those mixed paths in some PyTorch versions. The performance gap between
+    the two is small.
+    """
+    import contextlib
+    try:
+        import keras
+        if keras.backend.backend() != "torch":
+            return contextlib.nullcontext()
+        import torch
+        return torch.no_grad()
+    except Exception:
+        return contextlib.nullcontext()
+
+
+def setup_torch_runtime(*, enable_tf32=None):
+    """Configure PyTorch runtime knobs for performance.
+
+    Detects Ampere+ GPUs (compute capability >= 8.0) and enables TF32 matmul
+    precision so float32 matmuls / convolutions can use tensor cores. This
+    yields ~2x speedups on compatible hardware with ~1e-3 relative error.
+
+    Args:
+        enable_tf32: Force-enable or force-disable TF32. When ``None`` (default),
+            reads ``QEM_TF32`` from the environment — disabled when set to
+            ``"0"``, ``"false"``, or ``"False"``; otherwise enabled.
+
+    Returns:
+        dict with keys ``backend`` (str or None), ``cuda`` (bool),
+        ``capability`` (tuple or None), ``tf32`` (bool indicating whether TF32
+        was actually enabled).
+
+    No-op on non-CUDA devices and on environments without PyTorch installed.
+    Idempotent — safe to call multiple times.
+    """
+    info = {"backend": None, "cuda": False, "capability": None, "tf32": False}
+
+    if enable_tf32 is None:
+        enable_tf32 = os.getenv("QEM_TF32", "1") not in ("0", "false", "False")
+
+    try:
+        import torch
+    except ImportError:
+        return info
+    info["backend"] = "torch"
+
+    if not torch.cuda.is_available():
+        return info
+    info["cuda"] = True
+
+    try:
+        cap = torch.cuda.get_device_capability()
+    except Exception:
+        return info
+    info["capability"] = cap
+
+    if not enable_tf32:
+        return info
+
+    if cap[0] >= 8:
+        try:
+            torch.set_float32_matmul_precision("high")
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+            info["tf32"] = True
+        except Exception:
+            pass
+
+    return info
 
 
 # Auto-configure on import only if explicitly requested

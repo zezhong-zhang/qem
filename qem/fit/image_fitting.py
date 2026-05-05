@@ -42,7 +42,7 @@ from qem.utils.params import (
     safe_deepcopy_params,
     safe_stop_gradient,
 )
-from qem.utils.backend import release_backend_memory
+from qem.utils.backend import release_backend_memory, torch_inference_context
 from qem.utils.arrays import get_random_indices_in_batches
 from qem.visualization.geometry import remove_close_coordinates
 from qem.fit.voronoi import voronoi_integrate, voronoi_point_record
@@ -1116,22 +1116,24 @@ class ImageFitting:
         if not model.built:
             model.build()
         
-        prediction = model.sum(self.x_grid, self.y_grid, local=local)
+        # Inference-only forward pass — skip autograd bookkeeping on torch.
+        with torch_inference_context():
+            prediction = model.sum(self.x_grid, self.y_grid, local=local)
 
-        # Handle periodic boundary conditions by rolling the image
-        if self.pbc:
-            for i, j in [
-                (1, 0),
-                (0, 1),
-                (-1, 0),
-                (0, -1),
-                (1, 1),
-                (-1, -1),
-                (1, -1),
-                (-1, 1),
-            ]:
-                # Temporarily set shifted grids for periodic boundary conditions
-                prediction += model.sum(self.x_grid + i * self.nx, self.y_grid + j * self.ny, local=local)
+            # Handle periodic boundary conditions by rolling the image
+            if self.pbc:
+                for i, j in [
+                    (1, 0),
+                    (0, 1),
+                    (-1, 0),
+                    (0, -1),
+                    (1, 1),
+                    (-1, -1),
+                    (1, -1),
+                    (-1, 1),
+                ]:
+                    # Temporarily set shifted grids for periodic boundary conditions
+                    prediction += model.sum(self.x_grid + i * self.nx, self.y_grid + j * self.ny, local=local)
         # self.prediction = safe_convert_to_numpy(prediction)
         return prediction
 
