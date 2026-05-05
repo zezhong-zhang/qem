@@ -179,15 +179,27 @@ class TestSolutionPostProcess:
     def test_validate_solution_inf(self):
         assert validate_solution(np.array([1.0, float("inf"), 3.0])) is False
 
-    def test_process_height_scaling(self):
+    def test_process_height_scaling_passthrough(self):
+        # With unit-amplitude design matrix in build_local_peaks, the
+        # LS solution IS the height in image units — no scale clamp.
         h = np.array([0.05, 1.5, 5.0, 15.0], dtype=np.float32)
-        out = process_height_scaling(h, min_scale=0.1, max_scale=10.0)
-        np.testing.assert_array_almost_equal(out, [0.1, 1.5, 5.0, 10.0])
-
-    def test_process_height_scaling_no_clipping(self):
-        h = np.array([0.9, 1.0, 1.1], dtype=np.float32)
         out = process_height_scaling(h)
         np.testing.assert_array_almost_equal(out, h)
+
+    def test_process_height_scaling_clamps_negative(self):
+        # NNLS upstream should already enforce non-negativity, but the
+        # validator is defensive: anything <0 → 0.
+        h = np.array([-1.0, 0.0, 2.5], dtype=np.float32)
+        out = process_height_scaling(h)
+        np.testing.assert_array_almost_equal(out, [0.0, 0.0, 2.5])
+
+    def test_process_height_scaling_replaces_nan_with_prior(self):
+        # NaN/Inf get the prior height (so a degenerate atom keeps its
+        # old value rather than zeroing out).
+        h = np.array([float("nan"), 2.0, float("inf")], dtype=np.float32)
+        prev = np.array([5.0, 99.0, 7.0], dtype=np.float32)
+        out = process_height_scaling(h, prev_heights=prev)
+        np.testing.assert_array_almost_equal(out, [5.0, 2.0, 7.0])
 
 
 # ---------------------------------------------------------------------------

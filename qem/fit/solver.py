@@ -35,29 +35,56 @@ log = logging.getLogger(__name__)
 # Design matrix
 # ---------------------------------------------------------------------------
 
-def build_local_peaks(model, params: dict, same_width: bool, atom_types: np.ndarray):
-    """Render each atom's peak on its local window.
+def build_local_peaks(model, params: dict, same_width: bool, atom_types):
+    """Render each atom's peak on its local window with **unit amplitude**.
 
-    Returns ``(peak_local, global_x, global_y, mask)``. ``peak_local``
-    has shape ``(2W+1, 2W+1, N)`` with W = 5σ — wider than the 3σ used
+    Returns ``(peak_local, global_x, global_y)``. ``peak_local`` has
+    shape ``(2W+1, 2W+1, N)`` with W = 5σ — wider than the 3σ used
     by the Adam-loop renderer because the linear estimator runs once
     per fit, so accuracy beats speed.
+
+    Rendering with ``height = 1.0`` (rather than the current per-atom
+    height) is critical for the LS solver: the LS variable then *is*
+    the new height, not a multiplicative scale on the existing height.
+    With the scale-factor formulation, when the current heights are
+    small (e.g., per-atom VarPro produced near-zero η on a few atoms
+    after position update), the design-matrix atom columns are tiny
+    relative to the bg column of ones — LS dumps everything into bg
+    and proposes ``bg ≈ image.mean()``, which then trips the bg
+    validator and the entire LE update is rejected. Observed on
+    fivefold: 60/60 inner LE calls rejected, heights and bg frozen
+    after the first varpro round.
     """
     pos_x, pos_y = params["pos_x"], params["pos_y"]
-    width, height = params["width"], params["height"]
+    width = params["width"]
     ratio = params.get("ratio", None)
 
+    # All tensors share pos_x's device — params can come from any
+    # accelerator (MPS / CUDA / CPU). atom_types is sometimes a numpy
+    # array; promote and migrate if so.
+    device = pos_x.device
     if same_width:
-        width = width[atom_types]
+        atom_types_t = atom_types
+        if not torch.is_tensor(atom_types_t):
+            atom_types_t = torch.as_tensor(atom_types_t, dtype=torch.int64)
+        atom_types_t = atom_types_t.to(device=device, dtype=torch.int64)
+        width = width.to(device)[atom_types_t]
         if ratio is not None:
-            ratio = ratio[atom_types]
+            ratio = ratio.to(device)[atom_types_t]
+    else:
+        width = width.to(device)
+        if ratio is not None:
+            ratio = ratio.to(device)
+    # Unit amplitude: shape factor stays purely geometric (depends on
+    # width, position; not on height).
+    unit_height = torch.ones_like(pos_x)
 
     window_size = (torch.max(width) * 5).to(dtype=torch.int32)
-    x = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
-    y = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32)
+    x = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32, device=device)
+    y = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32, device=device)
     local_x, local_y = torch.meshgrid(x, y, indexing="xy")
 
-    peak_args = (torch.remainder(pos_x, 1), torch.remainder(pos_y, 1), height, width)
+    peak_args = (torch.remainder(pos_x, 1), torch.remainder(pos_y, 1), unit_height, width)
     if ratio is not None:
         peak_args += (ratio,)
     peak_local = model.model_fn(local_x[..., None], local_y[..., None], *peak_args)
@@ -85,7 +112,19 @@ def build_sparse_matrix(
 
     Always returns a CPU scipy matrix because the downstream solver
     (:func:`qem.fit.sparse_torch.pg_nnls`) builds a torch CSR from it.
+    Inputs may live on any device (CPU/MPS/CUDA); we migrate to CPU at
+    entry. This is cheap (one shot per fit) and sidesteps two MPS
+    issues at once: ``torch.take`` is not implemented on MPS, and the
+    eventual ``to_numpy()`` would force the migration anyway.
     """
+    peak_local = peak_local.detach().cpu()
+    global_x = global_x.detach().cpu()
+    global_y = global_y.detach().cpu()
+    if torch.is_tensor(x_grid):
+        x_grid = x_grid.detach().cpu()
+    if torch.is_tensor(y_grid):
+        y_grid = y_grid.detach().cpu()
+
     mask = (
         (global_x >= 0) & (global_x < nx)
         & (global_y >= 0) & (global_y < ny)
@@ -98,9 +137,11 @@ def build_sparse_matrix(
         + valid[2]
     )
 
-    data = torch.take(peak_local.reshape(-1), flat_idx)
-    gx_valid = torch.take(global_x.reshape(-1), flat_idx)
-    gy_valid = torch.take(global_y.reshape(-1), flat_idx)
+    # Plain advanced indexing rather than torch.take — same semantics,
+    # supported on every backend.
+    data = peak_local.reshape(-1)[flat_idx]
+    gx_valid = global_x.reshape(-1)[flat_idx]
+    gy_valid = global_y.reshape(-1)[flat_idx]
 
     cols = valid[2].to(dtype=torch.int32)
     rows = (
@@ -109,24 +150,18 @@ def build_sparse_matrix(
     )
 
     if fit_background:
-        dev = cols.device
-        bg_rows = (y_grid * nx + x_grid).reshape(-1).to(
-            dtype=torch.int32, device=dev,
-        )
+        bg_rows = (y_grid * nx + x_grid).reshape(-1).to(dtype=torch.int32)
         rows = torch.cat([rows, bg_rows])
         cols = torch.cat([
             cols,
-            torch.full((nx * ny,), num_coordinates,
-                       dtype=torch.int32, device=dev),
+            torch.full((nx * ny,), num_coordinates, dtype=torch.int32),
         ])
         if background_2d is not None:
             bg_data = torch.as_tensor(
-                background_2d.ravel(), dtype=torch.float32, device=dev,
+                background_2d.ravel(), dtype=torch.float32,
             )
         else:
-            bg_data = torch.ones(
-                (nx * ny,), dtype=torch.float32, device=dev,
-            )
+            bg_data = torch.ones((nx * ny,), dtype=torch.float32)
         data = torch.cat([data, bg_data])
         shape_out = (nx * ny, num_coordinates + 1)
     else:
@@ -226,51 +261,86 @@ def validate_solution(solution: np.ndarray) -> bool:
 def process_height_scaling(
     height_scale: np.ndarray,
     *,
+    prev_heights: np.ndarray | None = None,
     min_scale: float = 0.05,
     max_scale: float = 20.0,
 ) -> np.ndarray:
-    """Clamp height-scale corrections; replace NaNs with 1.0.
+    """Sanity-check the LS height solution.
 
-    Bounds are deliberately wide. The scale is multiplicative on
-    ``init_params``'s ``image[y, x] - background`` height guess; edge
-    atoms in inhomogeneous samples (nanoparticle on substrate)
-    legitimately need >2× downward correction. A tight ``[0.5, 2.0]``
-    clamp silently truncated those, leaving edge SCS biased high by
-    ~40%. The >30%-clipped warning still fires for genuinely runaway
-    solutions.
+    Now that ``build_local_peaks`` renders peaks with **unit
+    amplitude** (see comment there), ``height_scale`` IS the new
+    per-atom height in image-intensity units, not a multiplicative
+    scale on the prior. The validator:
+
+    * replaces NaN/Inf with the prior height (so a degenerate atom
+      keeps its old value rather than crashing),
+    * clamps negative values to 0 (NNLS upstream should already
+      ensure non-negativity, but be defensive).
+
+    The legacy ``min_scale`` / ``max_scale`` arguments are kept for
+    callsite compatibility but no longer mean the same thing —
+    relative bounds make no sense once the LS variable is the height
+    itself rather than a scale on it.
     """
     h = to_tensor(height_scale) if isinstance(height_scale, np.ndarray) else height_scale
-    h = torch.where(torch.isnan(h), torch.ones_like(h), h)
-    too_small = int((h < min_scale).sum())
-    too_large = int((h > max_scale).sum())
-    h = torch.clamp(h, min_scale, max_scale)
-    n = len(height_scale)
-    if too_small + too_large > n * 0.3:
-        log.warning(
-            "%.0f%% of height scales clipped (%d/%d) — refine peak positions or check init",
-            100.0 * (too_small + too_large) / n, too_small + too_large, n,
-        )
+    if prev_heights is not None:
+        prev = to_tensor(prev_heights).to(h)
+        h = torch.where(torch.isnan(h) | torch.isinf(h), prev, h)
+    else:
+        h = torch.where(torch.isnan(h) | torch.isinf(h), torch.zeros_like(h), h)
+    h = torch.clamp(h, min=0.0)
     return to_numpy(h)
 
 
 def process_background(
-    solution, params, init_background, *, update_threshold: float = 0.2,
+    solution, params, init_background, *, image_std: float | None = None,
+    update_threshold: float = 0.4,
 ):
-    """Validate the scalar background update; clip large jumps.
+    """Validate the scalar background update.
 
-    Returns ``(background, ok)`` — ``ok=False`` means the proposed
-    update was beyond ``2·update_threshold`` and should be rejected.
+    Returns ``(background, ok)``. The LS solves jointly for ``[heights,
+    bg]`` — clamping bg without re-solving heights breaks the invariant
+    and corrupts the fit. So this validator is binary: accept the full
+    LS update or reject it (keeping previous heights and bg).
+
+    The acceptance test handles two regimes that defeat a single rule:
+
+    * **Near-zero background** (e.g., Au_rod_0_2016: image ∈ [0, 0.3],
+      prev_bg ≈ 0.003): fall back to an *absolute* threshold scaled
+      by ``image_std``. A relative threshold rejects every LE call
+      because rel = ``Δbg / 0.003`` is huge for any non-trivial change.
+    * **Otherwise**: relative threshold ``|Δbg / bg_prev| ≤
+      2·update_threshold``. Catches model-misspecification overshoots
+      (fivefold: prev=3514, LS=6992, rel=99% — reject).
+
+    Negative or non-finite bg → reject. Lower-clamped to
+    ``init_background``.
     """
-    background = max(float(np.asarray(solution[-1])), init_background)
+    proposed = float(np.asarray(solution[-1]))
     prev = params["background"]
     prev_val = float(to_numpy(prev)) if hasattr(prev, "shape") else float(prev)
-    rel = (background - prev_val) / (prev_val + 1e-10)
-    if abs(rel) > update_threshold * 2:
+    if not np.isfinite(proposed) or proposed < 0.0:
         return prev_val, False
-    if abs(rel) > update_threshold:
-        rel = max(-update_threshold, min(update_threshold, rel))
-        background = prev_val * (1 + rel)
-    return background, True
+
+    # Pick the regime by comparing prev to image scale. ``image_std``
+    # is the natural unit; without it we can't differentiate "0.003 is
+    # near-zero" from "3514 is significant", so fall through to the
+    # relative test (legacy behaviour).
+    near_zero_threshold = 0.05 * image_std if image_std is not None else 0.0
+    if prev_val < near_zero_threshold:
+        # Absolute test: |Δbg| as a fraction of image std.
+        abs_change = abs(proposed - prev_val)
+        if abs_change > 0.5 * image_std:
+            return prev_val, False
+    else:
+        # Relative test (the original criterion).
+        rel = (proposed - prev_val) / (prev_val + 1e-30)
+        if abs(rel) > 2 * update_threshold:
+            return prev_val, False
+
+    if proposed < init_background:
+        proposed = float(init_background)
+    return proposed, True
 
 
 # ---------------------------------------------------------------------------
@@ -362,12 +432,21 @@ def _process_solution(
         log.warning("Invalid solution obtained, returning original parameters")
         return params
 
+    # Anchor every new tensor we install to the device the existing
+    # height parameter lives on. ``to_tensor`` returns CPU tensors by
+    # default; without this dance the output dict is a CPU/accelerator
+    # mongrel and downstream ops (``height * scale``, ``image_tensor -
+    # params['background']``) crash on MPS / CUDA.
+    height = params["height"]
+    device = height.device if torch.is_tensor(height) else torch.device("cpu")
+    dtype = height.dtype if torch.is_tensor(height) else torch.float32
+
     if self.fit_background:
         if self.background_estimator.use_2d_background:
             bg_scale = float(solution[-1])
             if 0.01 < bg_scale < 100.0:
                 self.update_2d_background_scale(bg_scale)
-                params["background_scale"] = to_tensor(bg_scale)
+                params["background_scale"] = to_tensor(bg_scale).to(device=device, dtype=dtype)
                 params.pop("background", None)
             else:
                 log.warning(
@@ -376,22 +455,32 @@ def _process_solution(
                 )
             height_scale = solution[:-1]
         else:
+            # Pass image std so process_background can switch from
+            # relative to absolute test when prev_bg is near-zero
+            # (e.g. Au_rod_0 with image ∈ [0, 0.3] and bg ≈ 0.003).
+            image_std = float(np.asarray(self.image).std())
             background, ok = process_background(
                 solution, params, self.init_background,
-                update_threshold=update_threshold,
+                image_std=image_std,
             )
             if not ok:
                 log.warning(
                     "Background update too large, skipping parameter update with linear estimator",
                 )
                 return params
-            params["background"] = to_tensor(background)
+            params["background"] = to_tensor(background).to(device=device, dtype=dtype)
             height_scale = solution[:-1]
     else:
         height_scale = solution
 
-    scale = to_tensor(process_height_scaling(height_scale))
-    params["height"] = params["height"] * scale
+    # Peaks were rendered with unit amplitude in build_local_peaks, so
+    # the LS solution `height_scale` IS the new heights — not a
+    # multiplicative scale on the prior heights. Sanity-clamp via
+    # ``process_height_scaling`` (NaN→prior, negative→0).
+    new_heights = to_tensor(
+        process_height_scaling(height_scale, prev_heights=to_numpy(height))
+    ).to(device=device, dtype=dtype)
+    params["height"] = new_heights
     self.params = params
     return params
 

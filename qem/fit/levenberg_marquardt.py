@@ -150,6 +150,30 @@ def _robust_weight(
     )
 
 
+def _estimate_diag_jtj(
+    f: Callable[[torch.Tensor], torch.Tensor],
+    theta: torch.Tensor,
+    *,
+    n_probes: int = 4,
+) -> torch.Tensor:
+    """Hutchinson estimate of ``diag(J^T J)`` (column norms² of the Jacobian).
+
+    Uses Rademacher probes ``v ∈ {±1}^p``: ``E[v ⊙ J^T J v] = diag(J^T J)``.
+    Each probe needs one JVP+VJP. With ``n_probes=4`` the estimate is
+    typically within ~30% relative error per component — plenty for
+    Marquardt-style per-parameter damping (which only needs the
+    *relative* scale across parameters).
+    """
+    diag = torch.zeros_like(theta)
+    for _ in range(n_probes):
+        v = torch.empty_like(theta).bernoulli_(0.5).mul_(2).sub_(1)
+        _out, jv = jvp(f, (theta,), (v,))
+        _, vjp_fn = vjp(f, theta)
+        (jtjv,) = vjp_fn(jv)
+        diag = diag + v * jtjv
+    return (diag / n_probes).clamp_min(0.0)
+
+
 def cg_solve(
     matvec: Callable[[torch.Tensor], torch.Tensor],
     b: torch.Tensor,
@@ -202,6 +226,8 @@ def fit_lm(
     lam_max: float = 1e12,
     loss: str = "l2",
     loss_scale: float | None = None,
+    scale: bool = True,
+    scale_n_probes: int = 4,
     verbose: bool = False,
     progress: bool = True,
     use_amp: bool = False,
@@ -226,6 +252,18 @@ def fit_lm(
         loss_scale: scale ``c`` in the robust loss. ``None`` ⇒
             estimated each LM iteration as ``1.4826·median(|r|)``
             (MAD-based, scale-equivariant).
+        scale: use Marquardt's per-parameter diagonal damping
+            ``(J^T J + λ·diag(J^T J))δ = -J^T r`` instead of the plain
+            isotropic form ``(J^T J + λI)δ = -J^T r``. The diagonal
+            entries are estimated once at start via Hutchinson probes.
+            This is what scipy ``least_squares`` and StatSTEM's
+            lsqnonlin (TRF) do internally; it auto-balances damping
+            across parameters with very different physical scales
+            (positions in pixels vs heights in image units vs
+            background near zero). Default True.
+        scale_n_probes: number of Hutchinson probes for the
+            ``diag(J^T J)`` estimate (default 4). Each probe costs one
+            JVP+VJP, so this is amortised over the whole fit.
         verbose: log per-iteration progress.
     """
     f, _names, _shapes = _make_residual_fn(model, inputs, target)
@@ -237,6 +275,24 @@ def fit_lm(
     lam = float(lam_init)
     iters_run = 0
     converged = False
+
+    # Marquardt's per-parameter scaling: diagonal of J^T J. Estimated
+    # once at the well-initialised starting point — by the time LM is
+    # invoked the parameters are close enough to the optimum that
+    # column norms don't shift much, and re-estimating each iteration
+    # would double the LM cost. Falls back to the isotropic form when
+    # ``scale=False`` is requested.
+    if scale:
+        with torch.inference_mode():
+            damp_diag = _estimate_diag_jtj(f, theta, n_probes=scale_n_probes)
+        # Floor by mean(diag) * 1e-6 so unobservable parameters (which
+        # would otherwise get zero damping and ill-conditioned CG) still
+        # get *some* regularisation.
+        diag_mean = float(damp_diag.mean().item()) if damp_diag.numel() else 0.0
+        floor = max(diag_mean * 1e-6, 1e-12)
+        damp_diag = damp_diag.clamp_min(floor)
+    else:
+        damp_diag = torch.ones_like(theta)
 
     # AMP gating: only meaningful on CUDA; no-op on CPU/MPS.
     _amp_enabled = use_amp and torch.cuda.is_available()
@@ -271,14 +327,17 @@ def fit_lm(
                 log.info("LM stop: |g|_inf=%.3e < gtol", g_inf)
             break
 
-        # Weighted Gauss-Newton normal equations:
-        #   (J^T diag(w) J + λI) δ = -J^T (w r)
+        # Weighted Marquardt normal equations:
+        #   (J^T diag(w) J + λ·D) δ = -J^T (w r)
+        # where D = diag(J^T J) gives per-parameter damping (auto-
+        # balances positions in pixels vs heights in image units vs
+        # background near zero — the classical Marquardt 1963 form).
         # Matrix-free: jv = J·v then vjp(w·jv) = J^T diag(w) J · v.
         def matvec(v: torch.Tensor) -> torch.Tensor:
             with torch.amp.autocast("cuda", enabled=_amp_enabled):
                 _out2, jv = jvp(f, (theta,), (v,))
                 (jtjv,) = vjp_fn(w * jv)
-            return jtjv + lam * v
+            return jtjv + lam * damp_diag * v
 
         delta, cg_iters = cg_solve(matvec, -g, max_iter=cg_max_iter, tol=cg_tol)
 

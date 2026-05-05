@@ -158,6 +158,7 @@ def fit_per_atom_varpro(
     inner_iter: int = 1,
     refit_eta_each_outer: bool = True,
     verbose: bool = False,
+    progress: bool = True,
 ) -> VarProResult:
     """StatSTEM-style alternating fit, vectorised per-atom.
 
@@ -179,7 +180,14 @@ def fit_per_atom_varpro(
             globally given the new positions. Highly recommended
             (this is the StatSTEM ``getLinFitParam`` step).
         verbose: log per-iteration progress.
+        progress: show a tqdm bar with per-iter max|Δpos| / η median /
+            bg. Auto-uses the Jupyter widget bar in notebooks (via
+            ``tqdm.auto``) and ASCII in TTYs. Disable for non-interactive
+            scripted runs.
     """
+    # Local import to keep the module-load cost minimal when tqdm
+    # isn't on the import path (e.g., minimal CI containers).
+    from tqdm.auto import tqdm
     device = fitter.device
     image_t = fitter.image_tensor.to(device)
     H, W = int(fitter.ny), int(fitter.nx)
@@ -204,6 +212,10 @@ def fit_per_atom_varpro(
     iters_run = 0
     last_max_dpos = float("inf")
 
+    bar = tqdm(
+        total=max_iter, desc="per-atom VarPro", leave=False,
+        disable=not progress,
+    )
     for outer in range(max_iter):
         # Render the FULL current model (using current η, σ, bg) once.
         # We use the existing local-window renderer — same prediction as the loss.
@@ -262,7 +274,10 @@ def fit_per_atom_varpro(
                 "pos_y": pos_y.detach(),
                 "height": height.detach(),
                 "width": width.detach(),
-                "background": to_tensor(bg_val),
+                # Keep every entry on the active device — `to_tensor`
+                # returns CPU tensors by default, which would mix with
+                # the MPS/CUDA pos/height inside `linear_estimator`.
+                "background": to_tensor(bg_val).to(device),
                 "same_width": fitter.params["same_width"],
                 "atom_types": fitter.params["atom_types"],
             }
@@ -278,6 +293,10 @@ def fit_per_atom_varpro(
             # At least update η using the per-atom VarPro estimate.
             height = eta_new.detach().to(device)
 
+        bar.set_postfix_str(
+            f"max|Δpos|={max_dpos:.4f}px  η_med={float(height.median().item()):.2f}  bg={bg_val:.2f}"
+        )
+        bar.update(1)
         if verbose:
             log.info("VarPro outer %3d: max|Δpos|=%.4f px, η median=%.1f, bg=%.1f",
                      outer + 1, max_dpos, float(height.median().item()), bg_val)
@@ -287,13 +306,16 @@ def fit_per_atom_varpro(
             converged = True
             break
 
-    # Push final state back into the Fitter.
+    bar.close()
+
+    # Push final state back into the Fitter (background on the same
+    # device as the rest — see comment above).
     final_params = {
         "pos_x": pos_x.detach(),
         "pos_y": pos_y.detach(),
         "height": height.detach(),
         "width": width.detach(),
-        "background": to_tensor(bg_val),
+        "background": to_tensor(bg_val).to(device),
         "same_width": fitter.params["same_width"],
         "atom_types": fitter.params["atom_types"],
     }

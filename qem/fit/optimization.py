@@ -248,7 +248,8 @@ class FitterOptimizationMixin:
                     lam_init=optimizer_kwargs.get("lam_init", 1e-3),
                     loss=optimizer_kwargs.get("loss", "l2"),
                     loss_scale=optimizer_kwargs.get("loss_scale", None),
-                    verbose=verbose,
+                    scale=optimizer_kwargs.get("scale", True),
+                    verbose=optimizer_kwargs.get("verbose", False),
                     progress=optimizer_kwargs.get("progress", True),
                 )
             else:
@@ -324,6 +325,7 @@ class FitterOptimizationMixin:
         verbose: bool = True,
         local: bool = True,
         plot: bool = False,
+        progress: bool = True,
         **optimizer_kwargs: Any,
     ) -> dict[str, Any]:
         """Mini-batch fit: random batches of atoms, neighbour subtraction."""
@@ -342,12 +344,22 @@ class FitterOptimizationMixin:
         params = self.linear_estimator(params, best_effort=True)  # type: ignore[attr-defined]
         params = self._params_to_device(params)  # type: ignore[attr-defined]
 
+        # Estimate total batches up front so a single flat bar shows
+        # both epoch and batch progress without nested-bar flicker.
+        # ``get_random_indices_in_batches`` ceiling-divides; mirror it.
+        n_batches = (self.num_coordinates + batch_size - 1) // batch_size
+        total_steps = num_epoch * n_batches
+
         with op_ctx:
-            for _ in tqdm(range(num_epoch), desc="Training epochs", leave=False):
+            bar = tqdm(
+                total=total_steps, desc=f"stochastic {optimizer}",
+                leave=False, disable=not progress,
+            )
+            for epoch in range(num_epoch):
                 pre_params = clone_params(params)
                 random_batches = get_random_indices_in_batches(self.num_coordinates, batch_size)
 
-                for batch_indices in tqdm(random_batches, desc="Fitting batch", leave=False):
+                for b_idx, batch_indices in enumerate(random_batches):
                     if batch_size < self.num_coordinates:
                         # Subtract other atoms' contributions to get this
                         # batch's local target.
@@ -393,11 +405,19 @@ class FitterOptimizationMixin:
                     params = self.update_from_local_params(params, optimized_params, atoms_selected_mask)
                     if plot:
                         self._plot_progress(params, batch_indices, sel_params)  # type: ignore[attr-defined]
+                    bar.set_postfix_str(
+                        f"epoch {epoch + 1}/{num_epoch}  batch {b_idx + 1}/{n_batches}"
+                    )
+                    bar.update(1)
 
                 if self.convergence(params, pre_params, tol):
                     log.info("Convergence criteria met.")
                     self.converged = True
+                    # Skip the bar to completion so the user sees an
+                    # explicit early-exit rather than a half-filled bar.
+                    bar.update(total_steps - bar.n)
                     break
+            bar.close()
 
         self.params = params
         self.prediction = to_numpy(self.predict(params, local=local))  # type: ignore[attr-defined]

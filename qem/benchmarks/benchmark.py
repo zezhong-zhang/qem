@@ -379,23 +379,33 @@ class Benchmark:
         num_epoch=10,
         batch_size=1000,
         plot=True,
-        fit_stochastic=True,
-        # Pipeline upgrades — all default ON. Disable for legacy
-        # behaviour (matches the pre-2026-05 fit pipeline).
+        # Pipeline stage flags. Defaults match the recommended pipeline
+        # in :func:`qem.fit.pipeline.fit_pipeline` — per-atom VarPro
+        # (StatSTEM-equivalent) plus Marquardt LM polish. Subpixel
+        # refinement is OFF by default; on low-contrast images the
+        # parabolic fit on a 3×3 patch is dominated by noise and can
+        # displace ~25% of atoms in arbitrary directions even with the
+        # Hessian sign check. Enable explicitly with ``subpixel=True``
+        # when peaks are well above noise.
         width_first: bool = True,
-        subpixel: bool = True,
+        subpixel: bool = False,
+        subpixel_window: int = 0,
+        per_atom_varpro: bool = True,
+        varpro_max_iter: int = 30,
+        varpro_alpha: float = 0.5,
+        fit_stochastic: bool = False,
         lm_polish: bool = True,
         stochastic_optimizer: str = "adam",
         stochastic_optimizer_kwargs: dict | None = None,
         lm_loss: str = "l2",
     ) -> None:
-        """Run the full fit pipeline against the StatSTEM input image.
+        """Run the recommended fit pipeline against the StatSTEM input image.
 
-        With defaults (``subpixel + width_first + stochastic + lm_polish``)
-        the pipeline matches or beats StatSTEM on every benchmark sample
-        we tested. Each stage is gated by a flag so the legacy stochastic-
-        only path is still reachable (`width_first=False, subpixel=False,
-        lm_polish=False`).
+        Delegates to :func:`qem.fit.pipeline.fit_pipeline`, which is
+        StatSTEM-equivalent (per-atom Variable Projection + LM polish
+        with Marquardt diagonal scaling). The legacy stochastic-Adam
+        path remains reachable via ``fit_stochastic=True,
+        per_atom_varpro=False``.
 
         ``stochastic_optimizer`` accepts any name that
         :func:`qem.fit.loop.make_optimizer` resolves — Adam / AdamW /
@@ -405,33 +415,29 @@ class Benchmark:
         """
         model = Fitter(self.image, dx=self.dx)
         model.coordinates = self.input_coordinates / self.dx
-        if subpixel:
-            model.refine_peaks_subpixel(search_window=2)
-        params = model.init_params(atom_size=atom_size, guess_radius=guess_radius)
-        if width_first:
-            model.fit_width_first()
-        if fit_stochastic:
-            params = model.fit_stochastic(
-                params,
-                tol=tol,
-                maxiter=maxiter,
-                step_size=step_size,
-                num_epoch=num_epoch,
-                batch_size=batch_size,
-                plot=plot,
-                optimizer=stochastic_optimizer,
-                **(stochastic_optimizer_kwargs or {}),
-            )
-        else:
-            params = model.fit_global(params=params,maxiter=maxiter, tol=tol, step_size=step_size)
-        if lm_polish:
-            params = model.fit_global(
-                params=params, maxiter=30, tol=1e-10, optimizer="lm", loss=lm_loss,
-            )
+        model.fit_pipeline(
+            atom_size=atom_size,
+            subpixel=subpixel,
+            subpixel_window=subpixel_window,
+            width_first=width_first,
+            per_atom_varpro=per_atom_varpro,
+            varpro_max_iter=varpro_max_iter,
+            varpro_alpha=varpro_alpha,
+            stochastic=fit_stochastic,
+            num_epoch=num_epoch,
+            batch_size=batch_size,
+            stochastic_maxiter=maxiter,
+            stochastic_step_size=step_size,
+            stochastic_tol=tol,
+            stochastic_optimizer=stochastic_optimizer,
+            stochastic_optimizer_kwargs=stochastic_optimizer_kwargs,
+            lm_polish=lm_polish,
+            lm_loss=lm_loss,
+        )
         self.qem = model
         self.model_qem = model.prediction
         self.scs_qem = model.volume
-        self.params_qem = params
+        self.params_qem = model.params
         self.qem.voronoi_integration(plot=plot)
         self.scs_voronoi = self.qem.voronoi_volume
 
@@ -686,3 +692,107 @@ class Benchmark:
         else:
             error = volume_statstem - volume_qem
         return error[mask].mean(), error[mask].std()
+
+    def position_error(self, units: str = "A") -> dict:
+        """Per-atom position error vs StatSTEM (nearest-neighbour matched).
+
+        Returns a dict with displacement statistics — mean, RMSE, p50,
+        p95, and max — in the requested ``units`` (``"A"`` for Ångström
+        i.e. ``self.dx``-scaled, ``"px"`` for pixel units). Plus the
+        per-axis bias (mean Δx, mean Δy) which surfaces systematic
+        offsets (e.g. half-pixel grid alignment differences).
+
+        Matching: each QEM atom is paired with the nearest StatSTEM
+        atom in Euclidean distance — same convention as
+        :meth:`scs_error`. Atoms with no neighbour within ``2·dx``
+        are dropped from the statistics (likely false detections on
+        either side).
+        """
+        scale = float(self.dx) if units.lower().startswith("a") else 1.0
+        pos_x = to_numpy(self.params_qem["pos_x"]) * scale
+        pos_y = to_numpy(self.params_qem["pos_y"]) * scale
+        pos_x_ref = self.output_coordinates[:, 0]
+        pos_y_ref = self.output_coordinates[:, 1]
+        if not units.lower().startswith("a"):
+            pos_x_ref = pos_x_ref / float(self.dx)
+            pos_y_ref = pos_y_ref / float(self.dx)
+
+        # Nearest-neighbour match (QEM → StatSTEM). Vectorised: build
+        # a pairwise distance matrix, take argmin per row.
+        dx = pos_x[:, None] - pos_x_ref[None, :]
+        dy = pos_y[:, None] - pos_y_ref[None, :]
+        d2 = dx * dx + dy * dy
+        idx = np.argmin(d2, axis=1)
+        d_min = np.sqrt(d2[np.arange(d2.shape[0]), idx])
+        delta_x = pos_x - pos_x_ref[idx]
+        delta_y = pos_y - pos_y_ref[idx]
+
+        # Drop unmatched atoms (>2·dx in user units, or 2 px in px units).
+        cutoff = 2.0 * (float(self.dx) if units.lower().startswith("a") else 1.0)
+        keep = d_min < cutoff
+        if not keep.any():
+            return {"n_matched": 0, "units": units}
+
+        d = d_min[keep]
+        return {
+            "n_matched": int(keep.sum()),
+            "n_total": int(d_min.size),
+            "units": "A" if units.lower().startswith("a") else "px",
+            "mean": float(d.mean()),
+            "rmse": float(np.sqrt(np.mean(d * d))),
+            "p50": float(np.median(d)),
+            "p95": float(np.percentile(d, 95)),
+            "max": float(d.max()),
+            "bias_x": float(delta_x[keep].mean()),
+            "bias_y": float(delta_y[keep].mean()),
+        }
+
+    def report(self) -> dict:
+        """One-shot summary: residual + position + SCS error vs StatSTEM.
+
+        Prints a compact report and returns the underlying dict so it
+        can be tabulated across benchmark samples.
+        """
+        # Image-residual stats
+        res_qem = self.image - self.model_qem
+        res_st = self.image - self.model_statstem if hasattr(self, "model_statstem") else None
+        out: dict = {
+            "residual_std_qem": float(np.std(res_qem)),
+            "residual_l1_qem": float(np.mean(np.abs(res_qem))),
+        }
+        if res_st is not None:
+            out["residual_std_statstem"] = float(np.std(res_st))
+            out["residual_l1_statstem"] = float(np.mean(np.abs(res_st)))
+
+        # Position metrics in Å
+        try:
+            pos = self.position_error(units="A")
+            out["position"] = pos
+        except Exception as exc:  # pragma: no cover
+            out["position_error"] = str(exc)
+
+        # SCS comparison
+        try:
+            mean, std = self.scs_error(relative=True)
+            out["scs_rel_error_mean"] = float(mean)
+            out["scs_rel_error_std"] = float(std)
+        except Exception as exc:  # pragma: no cover
+            out["scs_error"] = str(exc)
+
+        # Pretty-print
+        print(f"  residual std (image)  QEM: {out['residual_std_qem']:.4f}",
+              end="")
+        if "residual_std_statstem" in out:
+            print(f"   StatSTEM: {out['residual_std_statstem']:.4f}", end="")
+        print()
+        if "position" in out and out["position"].get("n_matched", 0) > 0:
+            p = out["position"]
+            print(f"  position vs StatSTEM  mean={p['mean']:.4f} {p['units']}"
+                  f"   rmse={p['rmse']:.4f}   p95={p['p95']:.4f}"
+                  f"   max={p['max']:.4f}   (n={p['n_matched']}/{p['n_total']})")
+            print(f"  position bias         Δx={p['bias_x']:+.4f}"
+                  f"   Δy={p['bias_y']:+.4f} {p['units']}")
+        if "scs_rel_error_mean" in out:
+            print(f"  SCS rel error         mean={out['scs_rel_error_mean']:+.4f}"
+                  f"   std={out['scs_rel_error_std']:.4f}")
+        return out
