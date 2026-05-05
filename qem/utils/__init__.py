@@ -21,4 +21,5 @@ __all__ = [
     "find_row_indices",
     "find_element_indices",
     "get_random_indices_in_batches",
+    "get_random_indices_in_batches_async",
 ]

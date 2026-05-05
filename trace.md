@@ -1566,3 +1566,20 @@ Implemented:
 
 Next: wire _Stage into fit_pipeline body, then verify on the user's
 Au notebook flow (target: <20s, residual ≈ StatSTEM ref 432).
+
+### EARS — Progress (2026-05-05 11:12)
+<!-- concepts: 1d-optimization, brent-method, image-fitting -->
+Replaced golden-section search in `fit_width_first` with Brent's parabolic
+interpolation method (`_brent_minimize` in qem/fit/optimization.py). Same
+pure-Python / no-scipy approach, but exploits the near-quadratic shape of
+the residual surface around the σ optimum: parabolic step snaps to the
+minimum in 2-3 iterations vs ~15 evals for golden section. Combined with
+tighter default bracket `[0.5σ0, 2σ0]` (down from `[0.3σ0, 3σ0]`) and
+relative-improvement early exit (`ftol=1e-4`, two-in-a-row), expected
+~5-7 evals total → ~3× speedup at ~1 s/eval.
+
+Why not torch autograd LBFGS on σ? `ImageModel.set_params` uses
+`copy_(...)` which detaches gradients on the width Parameter — making σ
+differentiable would require either monkey-patching the Parameter
+registration or duplicating the local-window render. Either is invasive.
+Brent gets most of the speedup with no architectural change.

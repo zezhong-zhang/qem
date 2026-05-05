@@ -41,51 +41,112 @@ from qem.utils.arrays import get_random_indices_in_batches
 from qem.utils.tensors import clone_params, release_memory, stop_grad, to_numpy
 
 
-# Golden ratio used by the 1-D bounded minimiser below.
-_PHI: float = (1.0 + math.sqrt(5.0)) / 2.0   # ≈ 1.618
-_INV_PHI: float = 1.0 / _PHI                 # ≈ 0.618
-_INV_PHI2: float = 1.0 / (_PHI * _PHI)       # ≈ 0.382
+# Inverse golden-ratio squared, used as Brent's golden-section fallback step.
+_INV_PHI2: float = 0.5 * (3.0 - math.sqrt(5.0))   # ≈ 0.381966
 
 
-def _golden_section_search(
+def _brent_minimize(
     f: Callable[[float], float],
     lo: float,
     hi: float,
     *,
-    xtol: float = 1e-3,
-    max_evals: int = 20,
+    xtol: float = 5e-3,
+    ftol: float = 1e-4,
+    max_evals: int = 12,
 ) -> tuple[float, float, int]:
-    """Bounded 1-D minimiser for smooth unimodal ``f`` on ``[lo, hi]``.
+    """Bounded 1-D minimiser using Brent's method (parabolic interp + GS fallback).
 
-    Pure-Python (no scipy). Returns ``(x*, f(x*), n_evals)``. Each
-    iteration discards a fraction ``1 − 1/φ ≈ 0.382`` of the current
-    interval; converges in ``⌈log_φ(range/xtol)⌉`` evaluations
-    (~17 evals for ``range=10``, ``xtol=1e-3``).
+    Pure-Python (no scipy). Adapted from Numerical Recipes §10.2: at each
+    step try inverse parabolic interpolation through the three best
+    points; accept if the step is bounded and at least halves the
+    previous step, otherwise fall back to a golden-section bisection.
 
-    ``f`` is called at most ``max_evals`` times — enough headroom for
-    the two initial probes plus the contraction loop. Set ``max_evals``
-    lower to trade accuracy for wall time.
+    On a smooth, near-quadratic residual surface this converges in
+    5-7 evals for ``xtol=5e-3`` — vs ~15 evals for plain golden section.
+
+    Returns ``(x*, f(x*), n_evals)``. Stops early when (a) the bracket is
+    smaller than ``xtol``, or (b) the last two parabolic steps each
+    improved the loss by less than ``ftol`` relative to the best.
     """
     a, b = float(lo), float(hi)
-    # Two interior probes at the golden-ratio cuts.
-    c = b - (b - a) * _INV_PHI
-    d = a + (b - a) * _INV_PHI
-    fc = f(c)
-    fd = f(d)
-    n_evals = 2
-    while abs(b - a) > xtol and n_evals < max_evals:
-        if fc < fd:
-            b, d, fd = d, c, fc
-            c = b - (b - a) * _INV_PHI
-            fc = f(c)
-        else:
-            a, c, fc = c, d, fd
-            d = a + (b - a) * _INV_PHI
-            fd = f(d)
+    # Initial best-guess probe at the golden-ratio interior point.
+    x = a + _INV_PHI2 * (b - a)
+    w = v = x
+    fx = f(x)
+    fw = fv = fx
+    n_evals = 1
+    e = 0.0   # step from the previous-but-one iteration
+    d = 0.0   # step from the previous iteration
+    last_improve = float("inf")
+
+    while n_evals < max_evals:
+        m = 0.5 * (a + b)
+        tol1 = xtol * abs(x) + 1e-10
+        tol2 = 2.0 * tol1
+        if abs(x - m) <= tol2 - 0.5 * (b - a):
+            break
+
+        use_parabolic = False
+        if abs(e) > tol1:
+            # Try inverse parabolic interpolation through (v, fv), (w, fw), (x, fx).
+            r = (x - w) * (fx - fv)
+            q = (x - v) * (fx - fw)
+            p = (x - v) * q - (x - w) * r
+            q2 = 2.0 * (q - r)
+            if q2 > 0.0:
+                p = -p
+            q2 = abs(q2)
+            e_prev = e
+            e = d
+            # Accept if step is bounded and < half the previous-but-one step.
+            if (
+                abs(p) < abs(0.5 * q2 * e_prev)
+                and p > q2 * (a - x)
+                and p < q2 * (b - x)
+            ):
+                d = p / q2
+                u = x + d
+                if (u - a) < tol2 or (b - u) < tol2:
+                    d = tol1 if (m - x) >= 0 else -tol1
+                use_parabolic = True
+
+        if not use_parabolic:
+            # Golden-section step into the larger sub-interval.
+            e = (b - x) if x < m else (a - x)
+            d = _INV_PHI2 * e
+
+        u = x + (d if abs(d) >= tol1 else (tol1 if d >= 0 else -tol1))
+        fu = f(u)
         n_evals += 1
-    if fc < fd:
-        return c, fc, n_evals
-    return d, fd, n_evals
+
+        if fu <= fx:
+            improve = fx - fu
+            if u >= x:
+                a = x
+            else:
+                b = x
+            v, fv = w, fw
+            w, fw = x, fx
+            x, fx = u, fu
+            # Early exit on stalled improvement: two consecutive steps
+            # each contributing < ftol·|fx| improvement.
+            rel = improve / (abs(fx) + 1e-30)
+            if rel < ftol and last_improve < ftol:
+                break
+            last_improve = rel
+        else:
+            if u < x:
+                a = u
+            else:
+                b = u
+            if fu <= fw or w == x:
+                v, fv = w, fw
+                w, fw = u, fu
+            elif fu <= fv or v == x or v == w:
+                v, fv = u, fu
+            last_improve = 0.0
+
+    return x, fx, n_evals
 
 if TYPE_CHECKING:
     from qem.fit.model import ImageModel
@@ -140,8 +201,6 @@ class FitterOptimizationMixin:
         maxiter: int = 1000,
         tol: float = 1e-4,
         step_size: float = 0.01,
-        verbose: bool = True,
-        batch_size: int = 1024,
         optimizer: str = "adam",
         **optimizer_kwargs: Any,
     ) -> dict[str, Any]:
@@ -164,8 +223,6 @@ class FitterOptimizationMixin:
         model.to(self.device)
         # Loss closure reads the model from this attribute.
         self._optimization_model = model
-        if verbose:
-            print(f"Using {optimizer} optimizer for fitting on {self.device}.")
 
         image_tensor = image_tensor.to(self.device).unsqueeze(0)
         model_inputs = [self.x_grid_batched, self.y_grid_batched]
@@ -213,7 +270,7 @@ class FitterOptimizationMixin:
                     lr_patience=10,
                     lr_factor=0.1,
                     min_lr=1e-6,
-                    verbose=verbose,
+                    verbose=optimizer_kwargs.get("verbose", False),
                 )
 
         self._optimization_model = None
@@ -465,8 +522,9 @@ class FitterOptimizationMixin:
         *,
         sigma_lo: float | None = None,
         sigma_hi: float | None = None,
-        xtol: float = 1e-2,
-        max_evals: int = 15,
+        xtol: float = 5e-3,
+        ftol: float = 1e-4,
+        max_evals: int = 10,
         verbose: bool = False,
         progress: bool = True,
     ) -> float:
@@ -480,8 +538,11 @@ class FitterOptimizationMixin:
 
         Args:
             sigma_lo, sigma_hi: search bracket in pixels. ``None`` ⇒
-                ``[0.3, 3.0]·current_width``.
-            xtol: tolerance on σ in pixels.
+                ``[0.5, 2.0]·current_width`` (atom_size init usually
+                lands within ±50% of optimum, so a tight bracket cuts
+                evals without sacrificing robustness).
+            xtol: tolerance on σ (relative).
+            ftol: relative-improvement floor for early exit.
             max_evals: maximum residual evaluations (each calls
                 ``linear_estimator``).
             verbose: log convergence trace.
@@ -489,9 +550,9 @@ class FitterOptimizationMixin:
         width_param = self.params["width"]
         sigma0 = float(to_numpy(width_param).reshape(-1)[0])
         if sigma_lo is None:
-            sigma_lo = max(0.5, sigma0 * 0.3)
+            sigma_lo = max(0.5, sigma0 * 0.5)
         if sigma_hi is None:
-            sigma_hi = max(sigma_lo + 0.5, sigma0 * 3.0)
+            sigma_hi = max(sigma_lo + 0.5, sigma0 * 2.0)
 
         history: list[tuple[float, float]] = []
         bar = tqdm(
@@ -514,15 +575,14 @@ class FitterOptimizationMixin:
             bar.update(1)
             return r
 
-        # Hand-rolled golden-section search — pure Python, no scipy in
-        # the inner loop. The cost per evaluation (linear_estimator +
-        # predict ≈ 1 s on H2_1_1) dominates wall time; the algorithm
-        # itself contributes microseconds. Switching off scipy here is
-        # a Linus call — don't shell out of the torch pipeline for a
-        # 30-line algorithm we can write inline.
-        sigma_opt, fun_opt, _ = _golden_section_search(
+        # Brent's parabolic interpolation — pure Python, no scipy.
+        # On a smooth near-quadratic residual the parabolic step snaps
+        # to the optimum in 2-3 iterations; total ~5-7 evals vs ~15 for
+        # plain golden section. Each eval is ~1 s (linear_estimator +
+        # predict), so this is the practical speedup lever.
+        sigma_opt, fun_opt, _ = _brent_minimize(
             loss_at_sigma, sigma_lo, sigma_hi,
-            xtol=xtol, max_evals=max_evals,
+            xtol=xtol, ftol=ftol, max_evals=max_evals,
         )
         bar.close()
         # Final commit: ensure params reflect the optimal σ + corresponding η, bg.

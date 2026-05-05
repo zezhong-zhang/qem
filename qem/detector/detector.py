@@ -2,12 +2,24 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
-from cv2 import GaussianBlur, moments
 from scipy import ndimage as ndi
 from skimage import segmentation
 from skimage.feature import canny
 
+import torch
+
 from qem.io.dm import dm_load
+from qem.utils.tensors import best_device
+
+from ._torch_ops import (
+    _cv2_moments,
+    _gaussian_blur,
+    torch_edge_mask,
+    torch_find_center,
+    torch_moments,
+    torch_otsu_mask,
+    torch_watershed_mask,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -15,11 +27,14 @@ logging.basicConfig(level=logging.INFO)
 
 
 class Detector:
-    def __init__(self, array) -> None:
+    def __init__(self, array, device=None) -> None:
         array = array.astype(float)
         self.detector = array
-        self.detector_smooth = GaussianBlur(array, (5, 5), sigmaX=2, sigmaY=2)
+        self.device = device if device is not None else best_device()
+        self.detector_smooth = _gaussian_blur(array, kernel_size=5, sigma=2.0, device=self.device)
         self.detector_normalised = np.zeros_like(array)
+        if self.detector_smooth.ndim == 3 and self.detector_smooth.shape[0] == 1:
+            self.detector_smooth = self.detector_smooth[0]
 
     def plot_orginal(self):
         plt.imshow(self.detector, cmap="gray")
@@ -86,13 +101,15 @@ class Detector:
             # if update is True, update the detector and detector_smooth
             # only do that once, otherwise it will introduce artifacts
             self.detector = data
-            self.detector_smooth = GaussianBlur(data, (5, 5), sigmaX=2, sigmaY=2)
+            self.detector_smooth = _gaussian_blur(data, kernel_size=5, sigma=2.0, device=self.device)
+            if self.detector_smooth.ndim == 3 and self.detector_smooth.shape[0] == 1:
+                self.detector_smooth = self.detector_smooth[0]
         return data
 
     def remove_hot_pixels(self, data=None, sigma=30, update=False):
         if data is None:
             data = self.remove_line_defect()
-        smoothed_data = GaussianBlur(data, (5, 5), sigmaX=5, sigmaY=5)
+        smoothed_data = _gaussian_blur(data, kernel_size=5, sigma=5.0, device=self.device)
         difference_image = np.abs(data - smoothed_data)
         threshold = np.mean(difference_image) + sigma * np.std(difference_image)
         hot_pixels = np.where(difference_image > threshold)
@@ -127,9 +144,11 @@ class Detector:
 
         if update:
             self.detector = cleaned_data
-            self.detector_smooth = GaussianBlur(
-                cleaned_data, (5, 5), sigmaX=2, sigmaY=2
+            self.detector_smooth = _gaussian_blur(
+                cleaned_data, kernel_size=5, sigma=2.0, device=self.device
             )
+            if self.detector_smooth.ndim == 3 and self.detector_smooth.shape[0] == 1:
+                self.detector_smooth = self.detector_smooth[0]
 
         return cleaned_data
 
@@ -152,24 +171,33 @@ class Detector:
             img = self.detector_normalised
         else:
             img = self.detector_smooth
-        thresholds = filters.threshold_multiotsu(img, classes=2)
-        regions = np.digitize(img, bins=thresholds)
-        self.binary_mask = regions == 1
+        try:
+            self.binary_mask = torch_otsu_mask(img, normalized=normalized, device=self.device)
+        except Exception:
+            thresholds = filters.threshold_multiotsu(img, classes=2)
+            regions = np.digitize(img, bins=thresholds)
+            self.binary_mask = regions == 1
         return self.binary_mask
 
     def watershed_mask(self):
-        markers = np.zeros_like(self.detector_smooth)
-        threshold_value = np.percentile(self.detector_smooth, 80)
-        markers[self.detector_smooth < threshold_value] = 1
-        markers[self.detector_smooth > threshold_value] = 2
-        self.binary_mask = segmentation.watershed(self.detector_smooth, markers)
+        try:
+            self.binary_mask = torch_watershed_mask(self.detector_smooth, device=self.device)
+        except Exception:
+            markers = np.zeros_like(self.detector_smooth, dtype=np.int32)
+            threshold_value = np.percentile(self.detector_smooth, 80)
+            markers[self.detector_smooth < threshold_value] = 1
+            markers[self.detector_smooth > threshold_value] = 2
+            self.binary_mask = segmentation.watershed(self.detector_smooth.astype(np.float64), markers)
         return self.binary_mask
 
     def edge_mask(self):
-        edges = canny(self.detector_smooth, sigma=3)
-        plt.imshow(edges, cmap="gray")
-        fill_detector = ndi.binary_fill_holes(edges)
-        self.binary_mask = ndi.binary_erosion(fill_detector, iterations=1)
+        try:
+            self.binary_mask = torch_edge_mask(self.detector_smooth, sigma=3.0, device=self.device)
+        except Exception:
+            edges = canny(self.detector_smooth, sigma=3)
+            plt.imshow(edges, cmap="gray")
+            fill_detector = ndi.binary_fill_holes(edges)
+            self.binary_mask = ndi.binary_erosion(fill_detector, iterations=1)
         return self.binary_mask
 
     def plot_mask(self):
@@ -206,9 +234,14 @@ class Detector:
     def find_center(self):
         binary_mask = self.otsu_mask()
         # Find the center of the donut-shaped mask using image moments
-        M = moments((binary_mask * 255).astype(np.uint8))
-        center_x = int(M["m10"] / M["m00"])
-        center_y = int(M["m01"] / M["m00"])
+        try:
+            center_x, center_y = torch_find_center(
+                torch.as_tensor(binary_mask, dtype=torch.float32, device=self.device)
+            )
+        except Exception:
+            M = _cv2_moments((binary_mask * 255).astype(np.uint8))
+            center_x = int(M["m10"] / M["m00"])
+            center_y = int(M["m01"] / M["m00"])
         return center_x, center_y
 
     def radial_average(self, normalize=False):

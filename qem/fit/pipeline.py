@@ -93,7 +93,7 @@ def fit_pipeline(
     batch_size: int = 2000,
     stochastic_maxiter: int = 50,
     stochastic_step_size: float = 1e-2,
-    stochastic_tol: float = 1e-3,
+    stochastic_tol: float = 1e-5,
     stochastic_optimizer: str = "adam",
     stochastic_optimizer_kwargs: dict | None = None,
     lm_polish: bool = True,

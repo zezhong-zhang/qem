@@ -49,7 +49,12 @@ def make_optimizer(
     }
     cls = builtin.get(name.lower())
     if cls is not None:
-        return cls(parameters, lr=learning_rate, **kwargs)
+        # Strip kwargs that are not accepted by built-in optimisers
+        # (e.g. 'verbose' passed from higher-level callers).
+        import inspect
+        sig = inspect.signature(cls.__init__)
+        safe_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
+        return cls(parameters, lr=learning_rate, **safe_kwargs)
 
     # Try the two common third-party optimiser packages in order.
     # pytorch_optimizer (kozistr) is the larger of the two; torch_optimizer

@@ -78,3 +78,14 @@ def get_random_indices_in_batches(total_examples, batch_size):
         all_indices[i: i + batch_size] for i in range(0, total_examples, batch_size)
     ]
     return batches
+
+
+def get_random_indices_in_batches_async(total_examples, batch_size, num_workers=2, seed=42):
+    """Asynchronous batch generation via torch DataLoader.
+
+    Yields torch.LongTensor batches on CPU; callers should move to device.
+    """
+    from .async_batches import get_async_batches
+    loader = get_async_batches(total_examples, batch_size, num_workers=num_workers, seed=seed)
+    for batch in loader:
+        yield batch.numpy()
