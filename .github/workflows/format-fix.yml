@@ -13,10 +13,10 @@ jobs:
       pull-requests: write
 
     steps:
-    - uses: actions/checkout@v3
-    
+    - uses: actions/checkout@v4
+
     - name: Set up Python
-      uses: actions/setup-python@v3
+      uses: actions/setup-python@v5
       with:
         python-version: '3.11'
     
@@ -30,7 +30,7 @@ jobs:
         ruff check --fix .
         
     - name: Create Pull Request
-      uses: peter-evans/create-pull-request@v5
+      uses: peter-evans/create-pull-request@v7
       with:
         commit-message: 'style: auto-fix code formatting with ruff'
         title: 'style: auto-fix code formatting'
