@@ -10,17 +10,17 @@ Long-running operations (fit / voronoi) run in
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
     from napari import Viewer  # noqa: F401
+
     from qem.fit.fitter import Fitter  # noqa: F401
 
 
-def build_widgets(viewer: "Viewer", fitter: "Fitter") -> dict:
+def build_widgets(viewer: Viewer, fitter: Fitter) -> dict:
     """Build the QEM workflow dock widgets, return ``{name: widget}``.
 
     Order matters — napari stacks docks top-to-bottom in the order
@@ -42,7 +42,11 @@ def build_widgets(viewer: "Viewer", fitter: "Fitter") -> dict:
 
 def _data_widget(viewer, fitter):
     from magicgui.widgets import (
-        Container, FileEdit, FloatSpinBox, LineEdit, PushButton,
+        Container,
+        FileEdit,
+        FloatSpinBox,
+        LineEdit,
+        PushButton,
     )
 
     dx = FloatSpinBox(label="dx (Å/px)", value=float(fitter.dx), min=1e-6, max=100.0, step=0.001)
@@ -125,7 +129,13 @@ def _peaks_widget(viewer, fitter):
 
 def _fit_widget(viewer, fitter):
     from magicgui.widgets import (
-        CheckBox, ComboBox, Container, FloatSpinBox, ProgressBar, PushButton, SpinBox,
+        CheckBox,
+        ComboBox,
+        Container,
+        FloatSpinBox,
+        ProgressBar,
+        PushButton,
+        SpinBox,
     )
 
     method = ComboBox(label="Method", choices=["fit_global", "fit_stochastic"])
@@ -199,7 +209,11 @@ def _on_fit_done(viewer, fitter, show_overlay: bool, progress) -> None:
 
 def _voronoi_widget(viewer, fitter):
     from magicgui.widgets import (
-        CheckBox, ComboBox, Container, FloatSpinBox, PushButton,
+        CheckBox,
+        ComboBox,
+        Container,
+        FloatSpinBox,
+        PushButton,
     )
 
     max_radius = FloatSpinBox(

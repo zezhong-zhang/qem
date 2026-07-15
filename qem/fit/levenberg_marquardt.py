@@ -30,8 +30,9 @@ Or via :class:`Fitter` by passing ``optimizer="lm"`` (and
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 import torch
 from torch import nn
@@ -89,7 +90,7 @@ def _make_residual_fn(
     def unflatten(theta: torch.Tensor) -> dict[str, torch.Tensor]:
         out: dict[str, torch.Tensor] = {**frozen, **buffers}
         offset = 0
-        for n, s, k in zip(names, shapes, sizes):
+        for n, s, k in zip(names, shapes, sizes, strict=False):
             out[n] = theta[offset : offset + k].reshape(s)
             offset += k
         return out
@@ -296,7 +297,6 @@ def fit_lm(
 
     # AMP gating: only meaningful on CUDA; no-op on CPU/MPS.
     _amp_enabled = use_amp and torch.cuda.is_available()
-    scaler = torch.cuda.amp.GradScaler() if _amp_enabled else None
 
     if verbose:
         log.info("LM start: cost=%.6e, n_params=%d, n_resid=%d, loss=%s, amp=%s",

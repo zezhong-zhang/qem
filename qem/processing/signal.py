@@ -3,6 +3,7 @@ Signal processing utilities for QEM.
 """
 
 import sys
+
 import numpy as np
 
 
@@ -141,7 +142,7 @@ def broadcast_from_unmeshed(coords):
     R = np.ones((N, N), dtype=np.int16) + np.diag(pixels) - np.eye(N, dtype=np.int16)
 
     # Broadcast unmeshed grids
-    return [np.broadcast_to(a.reshape(rr), pixels) for a, rr in zip(coords, R)]
+    return [np.broadcast_to(a.reshape(rr), pixels) for a, rr in zip(coords, R, strict=False)]
 
 def butterworth_window(shape, cutoff_radius_ftr, order):
     """

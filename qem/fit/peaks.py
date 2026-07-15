@@ -6,7 +6,6 @@ keep working.
 
 from __future__ import annotations
 
-import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
@@ -19,7 +18,7 @@ from tqdm import tqdm
 
 from qem.fit.refine import calculate_center_of_mass
 from qem.fit.voronoi import voronoi_point_record
-from qem.utils.tensors import to_numpy, to_tensor
+from qem.utils.tensors import to_tensor
 from qem.viz.geometry import remove_close_coordinates as _geom_remove_close_coordinates
 from qem.viz.select import InteractivePlot
 
@@ -41,20 +40,31 @@ def find_peaks(
     sigma: float = 5,
 ):
     """
-    Find the peaks in the image.
+    Find peaks (atomic columns) in a region of the image by local maxima.
 
     Args:
-        atom_size (float, optional): The size of the atomic columns. Defaults to 1.
-        threshold_rel (float, optional): The relative threshold. Defaults to 0.2.
-        exclude_border (bool, optional): Whether to exclude the border. Defaults to False.
-        image (np.array, optional): The input image. Defaults to None.
+        min_distance (int, optional): Minimum distance between peaks, in pixels.
+            Defaults to 10.
+        threshold_rel (float, optional): Relative intensity threshold in [0, 1].
+            Defaults to 0.2.
+        threshold_abs (float, optional): Absolute intensity threshold; overrides
+            ``threshold_rel`` when set. Defaults to None.
+        exclude_border (bool, optional): Whether to exclude the image border.
+            Defaults to False.
+        plot (bool, optional): Whether to open the interactive peak editor.
+            Defaults to True.
+        region_index (int, optional): Region to search; must be in ``self.regions``.
+            Defaults to 0.
+        sigma (float, optional): Gaussian pre-smoothing sigma, in pixels.
+            Defaults to 5.
 
     Returns:
-        np.array: The coordinates of the peaks.
+        np.array: The (N, 2) array of [x, y] peak coordinates in pixels.
     """
-    assert (
-        region_index in self.regions.keys
-    ), "The region index is not in the regions."
+    if region_index not in self.regions.keys:
+        raise ValueError(
+            f"region_index {region_index} not in regions {list(self.regions.keys)}"
+        )
     region_map = self.regions.region_map == region_index
     image_filtered = gaussian_filter(self.image, sigma)
     peaks_locations = peak_local_max(
@@ -66,12 +76,12 @@ def find_peaks(
     )
     if self.coordinates.size > 0:
         column_mask = self.region_column_labels == region_index
-        coordinates = np.delete(self.coordinates, np.where(column_mask), dim=0)
+        coordinates = np.delete(self.coordinates, np.where(column_mask), axis=0)
         coordinates = np.vstack(
             [coordinates, peaks_locations[:, [1, 0]].astype(float)]
         )
         self.coordinates = coordinates
-        atom_types = np.delete(self.atom_types, np.where(column_mask), dim=0)
+        atom_types = np.delete(self.atom_types, np.where(column_mask), axis=0)
         atom_types = np.append(
             atom_types, np.zeros(peaks_locations.shape[0], dtype=int)
         )
@@ -79,6 +89,7 @@ def find_peaks(
     else:
         self.coordinates = peaks_locations[:, [1, 0]].astype(float)
         self.atom_types = np.zeros(peaks_locations.shape[0], dtype=int)
+    self._assert_columns_aligned()
     if plot:
         self.add_or_remove_peaks(min_distance=min_distance, image=self.image)
     return self.coordinates
@@ -95,7 +106,7 @@ def get_nearest_peak_distance(self, peak_position: np.ndarray):
         np.array: The distances of the nearest peaks.
     """
     other_peaks = np.delete(
-        self.coordinates, np.where(self.coordinates == peak_position), dim=0
+        self.coordinates, np.where(self.coordinates == peak_position), axis=0
     )
     distances = np.linalg.norm(other_peaks - peak_position, axis=1).min()
     return distances
@@ -167,8 +178,11 @@ def _refine_one_center(self, i: int, point_record: np.ndarray, plot: bool = Fals
 
     # Compute center of mass in the cropped region
     local_y, local_x = calculate_center_of_mass(norm_img)
-    assert isinstance(local_x, float), "local_x is not a float"
-    assert isinstance(local_y, float), "local_y is not a float"
+    if not (isinstance(local_x, float) and isinstance(local_y, float)):
+        raise TypeError(
+            "calculate_center_of_mass must return float coordinates, got "
+            f"{type(local_x).__name__}, {type(local_y).__name__}"
+        )
     result = np.array(
         [
             x0 + local_x,
@@ -261,7 +275,7 @@ def remove_close_coordinates(self, threshold: int = 10):
     if self.pbc:
         # Remove close coordinates in the original box
         coords, atom_types, _ = _geom_remove_close_coordinates(self.coordinates.copy(), self.atom_types.copy(), threshold)
-        
+
         # Identify coordinates near the boundary
         mask_boundary = (
             (coords[:, 0] < threshold)
@@ -271,13 +285,13 @@ def remove_close_coordinates(self, threshold: int = 10):
         )
         coords_boundary = coords[mask_boundary]
         atom_types_boundary = atom_types[mask_boundary]
-        
+
         # Generate periodic images of boundary coordinates
         shifts = np.array([
             [i * self.nx, j * self.ny]
             for i, j in [(1, 0), (0, 1), (1, 1), (-1, 0), (0, -1), (-1, -1), (1, -1), (-1, 1)]
         ])
-        
+
         # Check if any periodic image is too close to the original boundary coordinates
         to_remove = set()
         for shift in shifts:
@@ -286,17 +300,17 @@ def remove_close_coordinates(self, threshold: int = 10):
                 distances = np.linalg.norm(shifted_coords - coord, axis=1)
                 if (distances < threshold).any():
                     to_remove.add(i)
-        
+
         # Remove overlapping boundary coordinates and corresponding atom types
         coords_boundary_filtered = np.delete(coords_boundary, list(to_remove), axis=0)
         atom_types_boundary_filtered = np.delete(atom_types_boundary, list(to_remove), axis=0)
-        
+
         # Combine non-boundary and filtered boundary coordinates and atom types
         self.coordinates = np.vstack([coords[~mask_boundary], coords_boundary_filtered])
         self.atom_types = np.concatenate([atom_types[~mask_boundary], atom_types_boundary_filtered])
     else:
         self.coordinates, self.atom_types,_ = _geom_remove_close_coordinates(self.coordinates, self.atom_types, threshold)
-    
+
     return self.coordinates, self.atom_types
 
 def add_or_remove_peaks(self, min_distance: int = 2, image=None):

@@ -13,9 +13,8 @@ or ``Aberrations(C10=-50)`` interchangeably; both store the same C10.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, fields
-from typing import Mapping
-
 
 # Symbol → (n, m) order pairs.  Magnitudes (`Cnm`) carry units of Å,
 # angles (`phinm`) of radians.  Order-1 ⇒ α² term, order-2 ⇒ α³, …
@@ -167,7 +166,7 @@ class Aberrations:
         return all(getattr(self, f.name) == 0.0 for f in fields(self))
 
     @classmethod
-    def from_mapping(cls, params: Mapping[str, float]) -> "Aberrations":
+    def from_mapping(cls, params: Mapping[str, float]) -> Aberrations:
         return cls(**dict(params))
 
     def __repr__(self) -> str:

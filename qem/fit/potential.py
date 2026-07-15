@@ -7,11 +7,8 @@ is then convolved with the PSF to simulate the image.
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
-
 import numpy as np
 import torch
-from scipy.fft import fft2, ifft2, fftshift, ifftshift
 from scipy.signal import fftconvolve
 
 from qem.fit.model import ImageModel
@@ -48,7 +45,7 @@ class PointPotentialModel:
         pos_x: np.ndarray,
         pos_y: np.ndarray,
         phases: np.ndarray,
-        gridshape: Tuple[int, int],
+        gridshape: tuple[int, int],
         subpixel: bool = True,
     ) -> np.ndarray:
         """
@@ -84,7 +81,7 @@ class PointPotentialModel:
 
         if subpixel:
             # Sub-pixel precision using bilinear interpolation
-            for x, y, phi in zip(pos_x, pos_y, phases):
+            for x, y, phi in zip(pos_x, pos_y, phases, strict=False):
                 x_int = int(np.floor(x))
                 y_int = int(np.floor(y))
                 x_frac = x - x_int
@@ -107,7 +104,7 @@ class PointPotentialModel:
                     potential_map[y_int + 1, x_int + 1] += w11 * phi
         else:
             # Simple rounding to nearest pixel
-            for x, y, phi in zip(pos_x, pos_y, phases):
+            for x, y, phi in zip(pos_x, pos_y, phases, strict=False):
                 x_int = int(np.round(x))
                 y_int = int(np.round(y))
                 if 0 <= x_int < nx and 0 <= y_int < ny:
@@ -151,7 +148,7 @@ class PointPotentialModel:
         pos_y: np.ndarray,
         phases: np.ndarray,
         psf_kernel: np.ndarray,
-        gridshape: Tuple[int, int],
+        gridshape: tuple[int, int],
         subpixel: bool = True,
     ) -> np.ndarray:
         """
@@ -297,7 +294,6 @@ class ConvolutionImageModel(ImageModel):
         Tensor
             Simulated image (convolution of point-potential with PSF)
         """
-        ny, nx = tuple(x.shape)[0], tuple(x.shape)[1]
         n_atoms = tuple(pos_x.shape)[0]
 
         # Create point-potential map using a differentiable approach
@@ -354,9 +350,6 @@ class ConvolutionImageModel(ImageModel):
             x_grid = torch.squeeze(x_grid, dim=0)
             y_grid = torch.squeeze(y_grid, dim=0)
 
-        ny, nx = tuple(x_grid.shape)[0], tuple(x_grid.shape)[1]
-        n_atoms = self.pos_x.shape[0]
-
         # Build point-potential map using the model_fn approach
         # This creates differentiable atomic contributions
         result = self.model_fn(x_grid, y_grid, self.pos_x, self.pos_y, self.height, self.width)
@@ -409,7 +402,7 @@ class ConvolutionImageModel(ImageModel):
         potential_map = np.zeros((ny, nx), dtype=np.float32)
 
         # Build point-potential map with sub-pixel precision
-        for x, y, phi in zip(pos_x_np, pos_y_np, height_np):
+        for x, y, phi in zip(pos_x_np, pos_y_np, height_np, strict=False):
             x_int = int(np.floor(x))
             y_int = int(np.floor(y))
             x_frac = x - x_int

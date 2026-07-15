@@ -52,7 +52,7 @@ def get_atom_selection_from_verts(atom_positions, verts, invert_selection=False)
     """
     if len(verts) < 3:
         raise ValueError(
-            "verts needs to have at least 3 positions, not {0}".format(len(verts))
+            f"verts needs to have at least 3 positions, not {len(verts)}"
         )
     atom_positions = np.array(atom_positions)
     path = Path(verts)

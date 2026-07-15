@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def _residual_std(fitter: "Fitter") -> float:
+def _residual_std(fitter: Fitter) -> float:
     """L2 std of (image − prediction); ``nan`` if no prediction yet."""
     pred = getattr(fitter, "prediction", None)
     if pred is None or np.asarray(pred).size == 0:
@@ -51,14 +51,14 @@ class _Stage:
         ▸ width-first        σ:5.78→6.42 px   res 473.14 → 437.21   12.4 s
     """
 
-    def __init__(self, fitter: "Fitter", name: str, *, verbose: bool):
+    def __init__(self, fitter: Fitter, name: str, *, verbose: bool):
         self.fitter = fitter
         self.name = name
         self.verbose = verbose
         self.t0 = 0.0
         self.res0 = float("nan")
 
-    def __enter__(self) -> "_Stage":
+    def __enter__(self) -> _Stage:
         self.t0 = time.perf_counter()
         self.res0 = _residual_std(self.fitter)
         return self
@@ -83,7 +83,7 @@ class _Stage:
 
 
 def fit_pipeline(
-    fitter: "Fitter",
+    fitter: Fitter,
     *,
     atom_size: float = 0.7,
     subpixel: bool = False,
@@ -106,7 +106,7 @@ def fit_pipeline(
     lm_tol: float = 1e-8,
     lm_loss: str = "l2",
     verbose: bool = False,
-) -> "Fitter":
+) -> Fitter:
     """End-to-end recommended fit recipe.
 
     Mirrors StatSTEM's ``fitGauss.m`` flow plus our LM polish. The
@@ -217,7 +217,7 @@ class FitterPipelineMixin:
     methods visible to type-checkers and to ``super()`` in subclasses.
     """
 
-    def fit_pipeline(self, **kwargs: Any) -> "Fitter":
+    def fit_pipeline(self, **kwargs: Any) -> Fitter:
         """Run the recommended end-to-end fit recipe in place.
 
         See :func:`qem.fit.pipeline.fit_pipeline` for the full kwarg
@@ -238,7 +238,7 @@ class FitterPipelineMixin:
         fit_background: bool = True,
         # Pipeline kwargs forwarded to fit_pipeline:
         **pipeline_kwargs: Any,
-    ) -> "Fitter":
+    ) -> Fitter:
         """One-liner: build a Fitter and run the recommended fit pipeline.
 
         Equivalent to::

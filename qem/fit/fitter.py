@@ -1,6 +1,5 @@
 import copy
 import logging
-from contextlib import nullcontext
 from typing import Any
 
 import h5py
@@ -9,12 +8,10 @@ import numpy as np
 import torch
 from matplotlib_scalebar.scalebar import ScaleBar
 from scipy.ndimage import gaussian_filter
-from tqdm import tqdm
 
 from qem.analysis.crystal_analyzer import CrystalAnalyzer
 from qem.analysis.region import Region, Regions
 from qem.fit.background import Background
-from qem.viz.select import GetAtomSelection, GetRegionSelection
 from qem.fit.model import (
     GaussianKernel,
     GaussianModel,
@@ -23,22 +20,21 @@ from qem.fit.model import (
     VoigtModel,
 )
 from qem.processing import butterworth_window
-from qem.utils.arrays import get_random_indices_in_batches
 from qem.utils.memory import MemoryMonitor
 from qem.utils.tensors import (
     best_device,
-    clone_params,
-    release_memory,
-    stop_grad,
     to_numpy,
     to_tensor,
 )
+from qem.viz.select import GetAtomSelection, GetRegionSelection
 
 # Only configure logging if not already configured
 if not logging.getLogger().handlers:
     logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 
 
+from qem.analysis.domains import FitterDomainsMixin
+from qem.analysis.gmm import FitterGMMMixin
 from qem.fit.background import FitterBackgroundMixin
 from qem.fit.edge import FitterEdgeMixin
 from qem.fit.optimization import FitterOptimizationMixin
@@ -47,8 +43,6 @@ from qem.fit.pipeline import FitterPipelineMixin
 from qem.fit.plot import FitterPlotMixin
 from qem.fit.solver import FitterSolverMixin
 from qem.fit.voronoi import FitterVoronoiMixin
-from qem.analysis.domains import FitterDomainsMixin
-from qem.analysis.gmm import FitterGMMMixin
 from qem.viz.interactive import FitterInteractiveMixin
 
 
@@ -82,6 +76,28 @@ class Fitter(
       ``update_from_local_params``.
     * :class:`qem.fit.pipeline.FitterPipelineMixin` — provides
       ``fit_pipeline`` and the :meth:`fit` classmethod.
+
+    Shared instance state (the implicit contract between mixins). All of
+    these are initialised in :meth:`__init__`; mixins read and write them
+    rather than passing them around explicitly:
+
+    ================== ============================ ==========================
+    Attribute          Meaning                      Written by
+    ================== ============================ ==========================
+    ``image``          input STEM image (H, W)      ``__init__``
+    ``dx`` / ``units`` pixel size and length units  ``__init__``, calibration
+    ``coordinates``    (N, 2) column positions px   Peaks, GMM, map_lattice
+    ``atom_types``     (N,) element index per col.  Peaks, map_lattice
+    ``params``         fit-parameter dict           Optimization, Solver
+    ``prediction``     rendered model image         Optimization
+    ``converged``      last-fit convergence flag    Optimization
+    ``regions``        :class:`Regions` container    __init__, region tools
+    ``background_*``   background model + estimate   Background mixin
+    ================== ============================ ==========================
+
+    ``coordinates`` and ``atom_types`` are kept aligned 1:1 and in the same
+    order as ``params['pos_x']`` / ``params['pos_y']``; helpers that filter
+    one must filter the others identically.
     """
 
     def __init__(
@@ -169,7 +185,7 @@ class Fitter(
             f.attrs['same_width'] = self.same_width
             f.attrs['pbc'] = self.pbc
             f.attrs['fit_background'] = self.fit_background
-            
+
             # Save fitted parameters
             if self.params is not None:
                 params_group = f.create_group('params')
@@ -188,19 +204,19 @@ class Fitter(
                         except (TypeError, RuntimeError):
                             value = np.asarray(value)
                     params_group.create_dataset(key, data=value)
-            
+
             # Save fitted image
             if hasattr(self, 'prediction') and self.prediction is not None:
                 f.create_dataset('prediction', data=self.prediction)
-            
+
             # Save coordinates and atom types
             f.create_dataset('coordinates', data=self.coordinates)
             f.create_dataset('atom_types', data=self.atom_types)
-            
+
             # Save elements list
             if self.elements is not None:
                 f.create_dataset('elements', data=[e.encode('utf-8') for e in self.elements])
-            
+
             # Save voronoi data if available
             if hasattr(self, '_voronoi_volume') and self._voronoi_volume is not None:
                 f.create_dataset('voronoi_volume', data=self._voronoi_volume)
@@ -229,13 +245,13 @@ class Fitter(
                 for dataset in required_datasets:
                     if dataset not in f:
                         raise KeyError(f"Missing required dataset: {dataset}")
-                
+
                 # Validate required attributes exist
                 required_attrs = ['dx', 'units', 'model_type', 'same_width', 'pbc', 'fit_background']
                 for attr in required_attrs:
                     if attr not in f.attrs:
                         raise KeyError(f"Missing required attribute: {attr}")
-                
+
                 # Load input image and parameters
                 self.image = f['image'][:]
                 self.image_tensor = to_tensor(self.image)
@@ -245,11 +261,11 @@ class Fitter(
                 self.same_width = bool(f.attrs['same_width'])
                 self.pbc = bool(f.attrs['pbc'])
                 self.fit_background = bool(f.attrs['fit_background'])
-                
+
                 # Validate image data
                 if not isinstance(self.image, np.ndarray) or self.image.ndim != 2:
                     raise ValueError("Image must be a 2D numpy array")
-                
+
                 # Load fitted parameters
                 if 'params' in f:
                     params = {}
@@ -260,7 +276,7 @@ class Fitter(
                             params[key] = data[()]
                         else:
                             params[key] = data[:]
-                    
+
                     # Validate parameter shapes
                     num_coords = len(self.coordinates)
                     if 'pos_x' in params and 'pos_y' in params:
@@ -268,7 +284,7 @@ class Fitter(
                             raise ValueError("pos_x and pos_y must have the same length")
                         num_coords = len(params['pos_x'])
                         self.coordinates = np.stack([params['pos_x'], params['pos_y']], axis=1)
-                    
+
                     # Validate other parameters
                     for key, value in params.items():
                         if key in ['pos_x', 'pos_y', 'height']:
@@ -301,7 +317,7 @@ class Fitter(
                 if 'elements' in f:
                     try:
                         elements_bytes = f['elements'][:]
-                        self.elements = [e.decode('utf-8') if isinstance(e, bytes) else str(e) 
+                        self.elements = [e.decode('utf-8') if isinstance(e, bytes) else str(e)
                                            for e in elements_bytes]
                     except (UnicodeDecodeError, AttributeError):
                         logging.warning("Could not decode elements list, using default")
@@ -313,20 +329,22 @@ class Fitter(
                     if len(voronoi_volume) != len(self.coordinates):
                         raise ValueError("Voronoi volume length must match coordinates length")
                     self._voronoi_volume = voronoi_volume
-                
+
                 if 'voronoi_map' in f:
                     voronoi_map = f['voronoi_map'][:]
                     if voronoi_map.shape != self.image.shape:
                         raise ValueError("Voronoi map shape must match image shape")
                     self._voronoi_map = voronoi_map
-                
+
                 logging.info(f"Successfully loaded Fitter state from {filepath}")
                 return self
-                
-        except FileNotFoundError:
-            raise FileNotFoundError(f"HDF5 file not found: {filepath}")
-        except Exception as e:
-            raise ValueError(f"Error loading HDF5 file: {str(e)}") from e
+
+        except FileNotFoundError as e:
+            raise FileNotFoundError(f"HDF5 file not found: {filepath}") from e
+        except (OSError, KeyError) as e:
+            # h5py raises OSError for corrupt/invalid files and KeyError for
+            # missing datasets; let genuine ValueErrors (e.g. shape checks) through.
+            raise ValueError(f"Error loading HDF5 file: {filepath}: {e}") from e
 
     def get_memory_usage(self) -> dict:
         """
@@ -442,14 +460,14 @@ class Fitter(
         model.set_params(params)
         if not model.built:
             model.build()
-        
+
         # Handle background trainability based on fit_background setting
         if not self.fit_background:
             if hasattr(model, 'background') and hasattr(model.background, 'requires_grad_'):
                 model.background.requires_grad_(False)
             if hasattr(model, 'background_scale') and hasattr(model.background_scale, 'requires_grad_'):
                 model.background_scale.requires_grad_(False)
-            
+
         return model
 
     # init parameters
@@ -538,69 +556,69 @@ class Fitter(
         """
         if verbose:
             logging.info("Starting two-stage edge-corrected fitting")
-        
+
         # Stage 1: Constrained fit (positions stay inside)
         if verbose:
             logging.info("Stage 1: Fitting with positions constrained inside")
-        
+
         # Temporarily disable boundary penalty
         original_boundary_state = getattr(self, 'use_boundary_penalty', False)
         self.use_boundary_penalty = False
-        
+
         params_stage1 = self.fit_global(
             maxiter=maxiter//2,
             step_size=step_size,
             verbose=False
         )
-        
+
         # Stage 2: Correct parameters and refit unconstrained
         if verbose:
             logging.info("Stage 2: Correcting parameters and refitting unconstrained")
-        
+
         # Detect edge peaks (within 5 pixels of boundary)
         h, w = self.image.shape
         pos_x = to_numpy(params_stage1['pos_x'])
         pos_y = to_numpy(params_stage1['pos_y'])
-        
+
         edge_mask = (pos_x < 5) | (pos_x > w-5) | (pos_y < 5) | (pos_y > h-5)
-        
+
         if np.any(edge_mask):
             # Boost height and width for edge peaks
             height = to_numpy(params_stage1['height'])
             width = to_numpy(params_stage1['width'])
-            
+
             height[edge_mask] *= 2.0  # Double height
             width[edge_mask] *= 1.8   # Increase width by 80%
-            
+
             params_stage1['height'] = to_tensor(height)
             params_stage1['width'] = to_tensor(width)
-            
+
             if verbose:
                 n_edge = np.sum(edge_mask)
                 logging.info(f"Corrected {n_edge} edge peak(s): height×2.0, width×1.8")
-        
+
         # Enable boundary penalty for Stage 2
         self.use_boundary_penalty = True
         self.boundary_strength = 0.001
-        
+
         params_final = self.fit_global(
             params=params_stage1,
             maxiter=maxiter,
             step_size=step_size,
             verbose=False
         )
-        
+
         # Restore original boundary penalty state
         self.use_boundary_penalty = original_boundary_state
-        
+
         if verbose:
             logging.info("Two-stage fitting complete")
-        
+
         self.params = params_final
         self.prediction = to_numpy(self.predict(params_final, local=True))
-        
+
         return params_final
-    
+
     def init_params(
         self,
         atom_size: float = 0.7,
@@ -634,7 +652,7 @@ class Fitter(
         # Initialize position and height parameters
         pos_x = copy.deepcopy(self.coordinates[:, 0]).astype(float)
         pos_y = copy.deepcopy(self.coordinates[:, 1]).astype(float)
-        
+
         # Note: We intentionally do NOT clip positions here to allow edge peaks
         # to be initialized at their detected positions (which may be at x=0 or y=0).
         # The fitting process will handle positions outside bounds if needed.
@@ -658,7 +676,7 @@ class Fitter(
             # For 2D background, subtract the scaled background at peak positions
             current_bg = self.get_current_background()
             height = (
-                self.image[pos_y.astype(int), pos_x.astype(int)].ravel() - 
+                self.image[pos_y.astype(int), pos_x.astype(int)].ravel() -
                 current_bg[pos_y.astype(int), pos_x.astype(int)].ravel()
             )
         else:
@@ -683,7 +701,7 @@ class Fitter(
             "same_width": self.same_width,
             "atom_types": self.atom_types
         }
-        
+
         # Add background parameter (scalar background or 2D background scale)
         if self.background_estimator.use_2d_background:
             params["background_scale"] = init_background  # This is the scaling factor
@@ -697,14 +715,14 @@ class Fitter(
                 ratio = np.tile(0.9, self.num_coordinates).astype(float)
             params.update({"ratio": ratio})
 
-        for key in params.keys():
+        for key in params:
             params[key] = torch.as_tensor(params[key], dtype=torch.float32)
-        
+
         self.params = params
         self.model = self._create_fitting_model(self.params)
         return params
 
-    # find atomic columns  
+    # find atomic columns
     def total_lattice(self, region_index: int = None):
         return self.regions.lattice(region_index)
 
@@ -713,25 +731,33 @@ class Fitter(
 
     def map_lattice(
         self,
-        cif_file: str,
+        cif_file: str = None,
         elements: list[str] = None,
+        unit_cell=None,
         reciprocal: bool = False,
         region_index: int = 0,
         sigma: float = 0.8,
     ):
         """
-        Map the atomic columns in the CIF file to the peaks found in the image.
+        Map a crystal unit cell to the peaks found in the image.
+
+        The crystal is supplied either as a CIF file (``cif_file``) or as an ASE
+        ``Atoms`` unit cell (``unit_cell``) — the latter is handy when no CIF is
+        available, e.g. an elemental nanoparticle built with
+        ``ase.build.bulk('Au', 'fcc', a=4.08, cubic=True)``. Either way the lattice
+        vectors ``a`` and ``b`` are defined interactively on the image.
 
         Args:
-            cif_file (str): The path to the CIF file.
-            elements (list[str]): The elements in the CIF file.
-            unit_cell (Atoms, optional): The unit cell of the crystal. Defaults to None.
+            cif_file (str, optional): Path to the CIF file.
+            elements (list[str]): The elements to keep from the crystal.
+            unit_cell (ase.Atoms, optional): Unit cell to map, used when no CIF is
+                given. Only the sites matching ``elements`` are kept.
             reciprocal (bool, optional): Whether to use reciprocal space. Defaults to False.
             region_index (int, optional): The index of the region. Defaults to 0.
             sigma (float, optional): The sigma of the Gaussian filter. Defaults to 0.8.
 
         Returns:
-            AtomicColumns: The atomic columns mapped from the CIF file.
+            AtomicColumns: The atomic columns mapped from the crystal.
         """
         # find the column within the region_index
         column_mask = self.region_column_labels == region_index
@@ -749,10 +775,13 @@ class Fitter(
             units="A",
             region_mask=region_mask,
         )
-        # if unit_cell is not None:
-        #     crystal_analyzer.unit_cell = unit_cell
         if cif_file is not None:
             crystal_analyzer.read_cif(cif_file)
+        elif unit_cell is not None:
+            mask = [atom.symbol in elements for atom in unit_cell]
+            crystal_analyzer.unit_cell = unit_cell[mask]
+        else:
+            raise ValueError("Provide either a cif_file or a unit_cell to map_lattice().")
         atomic_column_list = crystal_analyzer.get_atomic_columns(
             reciprocal=reciprocal, sigma=sigma
         )
@@ -766,6 +795,7 @@ class Fitter(
         crystal_analyzer.plot_unitcell()
         self.regions[region_index].analyzer = crystal_analyzer
         self.regions[region_index].columns = atomic_column_list
+        self._assert_columns_aligned()
         return atomic_column_list
 
     def assign_region_label(
@@ -785,7 +815,6 @@ class Fitter(
             plt.pause(0.1)
 
         region_mask = atom_select.get_region_mask()
-        # self.regions.region_map[region_mask] = region_index
         region = Region(
             name=f"region_{region_index}",
             index=region_index,
@@ -829,7 +858,7 @@ class Fitter(
         Returns:
             array: Predicted image
         """
-        
+
         if params is None:
             params = self.params
         if model is None:
@@ -878,7 +907,7 @@ class Fitter(
     def update_coordinates(self):
         # check the refined coorinates is different from the current coordinates
         refined_coordinates = np.stack(
-            [self.params["pos_x"], self.params["pos_y"]], dim=1
+            [to_numpy(self.params["pos_x"]), to_numpy(self.params["pos_y"])], axis=1
         )
         if np.allclose(refined_coordinates, self.coordinates):
             logging.info("The coordinates have converged.")
@@ -989,31 +1018,69 @@ class Fitter(
     def coordinates(self, coordinates: np.ndarray):
         self._coordinates = coordinates
 
+    def _assert_columns_aligned(self) -> None:
+        """Raise if ``coordinates`` and ``atom_types`` have diverged in length.
+
+        The two arrays index the same atomic columns and must stay 1:1. Call this
+        after any operation that rebuilds both (e.g. find_peaks, map_lattice).
+        """
+        n_coords = len(self._coordinates)
+        n_types = len(self._atom_types)
+        if n_types and n_coords != n_types:
+            raise RuntimeError(
+                f"coordinates ({n_coords}) and atom_types ({n_types}) are "
+                "misaligned; they must be updated together."
+            )
+
     @property
     def num_coordinates(self):
         return len(self._coordinates) if len(self._coordinates.shape) > 0 else 0
 
     @property
     def num_atom_types(self):
-        assert self.atom_types is not None, "Atom types are not set."
-        assert len(self.atom_types) > 0, "Atom types are empty."
+        if self.atom_types is None or len(self.atom_types) == 0:
+            raise RuntimeError(
+                "atom_types is not set; run find_peaks()/import_coordinates() first."
+            )
         return len(np.unique(self.atom_types))
 
-    @property
-    def region_column_labels(self):
-        coordinates = self.coordinates
-        atom_types = self.atom_types
-        mask = (
-            (coordinates[:, 0] >= 0)
-            & (coordinates[:, 0] < self.nx)
-            & (coordinates[:, 1] >= 0)
-            & (coordinates[:, 1] < self.ny)
+    def prune_out_of_bounds_columns(self) -> np.ndarray:
+        """Drop columns whose ``(x, y)`` fall outside the image, in place.
+
+        Returns:
+            The boolean in-bounds mask that was applied to ``coordinates`` and
+            ``atom_types``.
+        """
+        coords = self.coordinates
+        in_bounds = (
+            (coords[:, 0] >= 0)
+            & (coords[:, 0] < self.nx)
+            & (coords[:, 1] >= 0)
+            & (coords[:, 1] < self.ny)
         )
-        self.coordinates = coordinates[mask]
-        self.atom_types = atom_types[mask]
-        return self.regions.region_map[
-            self.coordinates[:, 1].astype(int), self.coordinates[:, 0].astype(int)
+        if not in_bounds.all():
+            self.coordinates = coords[in_bounds]
+            self.atom_types = self.atom_types[in_bounds]
+        return in_bounds
+
+    @property
+    def region_column_labels(self) -> np.ndarray:
+        """Region index for each column; ``-1`` for columns outside the image.
+
+        Pure property: it does not modify ``coordinates`` or ``atom_types``. Call
+        :meth:`prune_out_of_bounds_columns` explicitly to drop out-of-image atoms.
+        The returned array is aligned 1:1 with ``coordinates``.
+        """
+        coords = self.coordinates
+        if coords.size == 0:
+            return np.empty(0, dtype=int)
+        x, y = coords[:, 0], coords[:, 1]
+        in_bounds = (x >= 0) & (x < self.nx) & (y >= 0) & (y < self.ny)
+        labels = np.full(len(coords), -1, dtype=int)
+        labels[in_bounds] = self.regions.region_map[
+            y[in_bounds].astype(int), x[in_bounds].astype(int)
         ]
+        return labels
 
     @property
     def voronoi_volume(self):
@@ -1032,7 +1099,7 @@ class Fitter(
             window = butterworth_window(self.image.shape, 0.5, 10)
             self._window = window
         return self._window
-    
+
     @property
     def volume(self):
         """Calculate the volume of each peak in the model.

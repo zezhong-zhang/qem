@@ -37,6 +37,20 @@ numpy multislice helpers (:func:`focused_probe`,
 
 from __future__ import annotations
 
+# Aberrations
+from .aberrations import (
+    ALL_SYMBOLS,
+    MAGNITUDE_SYMBOLS,
+    PHASE_SYMBOLS,
+    Aberrations,
+)
+
+# Aperture functions
+from .aperture import hard_aperture, soft_aperture
+
+# Phase function and its gradient
+from .chi import chi, grad_chi
+
 # Constants and unit conversions
 from .constants import (
     invA_to_mrad,
@@ -48,17 +62,6 @@ from .constants import (
     wavev,
 )
 
-# Aberrations
-from .aberrations import (
-    ALL_SYMBOLS,
-    MAGNITUDE_SYMBOLS,
-    PHASE_SYMBOLS,
-    Aberrations,
-)
-
-# Phase function and its gradient
-from .chi import chi, grad_chi
-
 # Coherence envelopes
 from .envelopes import (
     focal_spread_from_chromatic,
@@ -66,9 +69,6 @@ from .envelopes import (
     spatial_envelope,
     temporal_envelope,
 )
-
-# Aperture functions
-from .aperture import hard_aperture, soft_aperture
 
 # Grid + Probe data classes
 from .grid import Grid

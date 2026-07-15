@@ -2,11 +2,10 @@ import logging
 
 import matplotlib.pyplot as plt
 import numpy as np
+import torch
 from scipy import ndimage as ndi
 from skimage import segmentation
 from skimage.feature import canny
-
-import torch
 
 from qem.io.dm import dm_load
 from qem.utils.tensors import best_device
@@ -16,7 +15,6 @@ from ._torch_ops import (
     _gaussian_blur,
     torch_edge_mask,
     torch_find_center,
-    torch_moments,
     torch_otsu_mask,
     torch_watershed_mask,
 )
@@ -251,7 +249,7 @@ class Detector:
             img = self.detector_normalised
         else:
             img = self.detector_smooth
-        y, x = np.indices((img.shape))
+        y, x = np.indices(img.shape)
         center_x, center_y = self.find_center()
         r = np.sqrt((x - center_x) ** 2 + (y - center_y) ** 2).astype(np.int64)
         tbin = np.bincount(r.ravel(), img.ravel())
@@ -289,7 +287,7 @@ class Detector:
         plt.show()
 
 
-class Calibrate_Dose(object):
+class Calibrate_Dose:
     def __init__(
         self,
         aperture_experiment_beam_file=None,
@@ -348,7 +346,7 @@ class Calibrate_Dose(object):
         self.aperature_experiment_beam.plot()
 
 
-class Calibrate_Detector(object):
+class Calibrate_Detector:
     def __init__(self):
         self.detector = None
         self.dose_scale = None

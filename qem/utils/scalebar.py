@@ -8,14 +8,11 @@ converts an ``(scale, units)`` pair stored in QEM convention into one that
 
 from __future__ import annotations
 
-from typing import Tuple
-
-
 _ANGSTROM_ALIASES = ("A", "Å")
 _ANGSTROM_TO_METRES = 1e-10
 
 
-def to_scalebar_units(scale: float, units: str) -> Tuple[float, str]:
+def to_scalebar_units(scale: float, units: str) -> tuple[float, str]:
     """Translate a ``(scale, units)`` pair into one ``ScaleBar`` accepts.
 
     Ångström values are converted to metres so ``matplotlib_scalebar`` can

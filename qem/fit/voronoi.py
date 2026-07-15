@@ -1,21 +1,18 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numba as nb
 import numpy as np
 import torch
-from matplotlib_scalebar.scalebar import ScaleBar
-from skimage.segmentation import watershed
-from tqdm import tqdm as progressbar
 from scipy.spatial import cKDTree
-
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
+from skimage.segmentation import watershed
 from tqdm import tqdm
+from tqdm import tqdm as progressbar
 
-from qem.utils.tensors import clone_params, to_numpy, to_tensor
+from qem.utils.tensors import clone_params, to_numpy
 
 if TYPE_CHECKING:
     from qem.fit.fitter import Fitter  # noqa: F401
@@ -566,10 +563,6 @@ def _fit_voronoi_batched(
     pos_y_np = to_numpy(pos_y_t)
     cx = np.clip(np.round(pos_x_np).astype(np.int64), 0, W - 1)
     cy = np.clip(np.round(pos_y_np).astype(np.int64), 0, H - 1)
-    x0 = np.clip(cx - max_radius, 0, W - 1)
-    x1 = np.clip(cx + max_radius + 1, 1, W)
-    y0 = np.clip(cy - max_radius, 0, H - 1)
-    y1 = np.clip(cy + max_radius + 1, 1, H)
     # Where each window starts after clipping (relative to atom centre).
     x_off = cx - max_radius   # may be negative; we clip below
     y_off = cy - max_radius
@@ -626,7 +619,6 @@ def _fit_voronoi_batched(
     device = self.device
     crops_t = torch.as_tensor(crops, device=device)
     masks_t = torch.as_tensor(masks, device=device, dtype=torch.float32)
-    valid_t = torch.as_tensor(valid, device=device, dtype=torch.float32)
     x_off_t = torch.as_tensor(x_off, device=device, dtype=torch.float32)
     y_off_t = torch.as_tensor(y_off, device=device, dtype=torch.float32)
 

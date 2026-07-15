@@ -12,14 +12,7 @@ __version__ = "0.1.0"
 # Subpackages are lightweight enough to import eagerly. The heavy
 # Fitter class (h5py + matscipy + GMM + ASE + crystal_analyzer) is
 # loaded lazily via __getattr__ below.
-from . import io
-from . import fit
-from . import analysis
-from . import viz
-from . import processing
-from . import detector
-from . import optics
-from . import utils
+from . import analysis, detector, fit, io, optics, processing, utils, viz
 
 __all__ = [
     "Fitter",

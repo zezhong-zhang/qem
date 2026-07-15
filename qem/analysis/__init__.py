@@ -1,25 +1,18 @@
-"""
-Analysis and characterization tools for QEM.
-"""
+"""Analysis and characterization tools for QEM."""
 
-from .crystal_analyzer import *
-from .atomic_column import *
-from .region import *
-# from .stats import *
-from .gaussian_mixture_model import *
+from .atomic_column import AtomicColumns
+from .crystal_analyzer import CrystalAnalyzer
+from .gaussian_mixture_model import GaussianMixtureModel
+from .region import Region, Regions
+from .stats import add_poisson_noise, compute_crb, compute_fim
 
 __all__ = [
-    # Crystal analysis
-    'CrystalAnalyzer',
-    
-    # Atomic columns
-    'AtomicColumns',
-    
-    # Region analysis
-    'Region',
-    
-    # Statistics
-    'add_poisson_noise',
-    'compute_fim',
-
+    "AtomicColumns",
+    "CrystalAnalyzer",
+    "GaussianMixtureModel",
+    "Region",
+    "Regions",
+    "add_poisson_noise",
+    "compute_crb",
+    "compute_fim",
 ]

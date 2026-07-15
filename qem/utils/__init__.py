@@ -1,12 +1,11 @@
 """Utility functions for QEM."""
 
+# Importing backend.py for its side-effect (sets default torch dtype).
+from . import backend  # noqa: F401
 from .arrays import *  # noqa: F401, F403
 from .log import *  # noqa: F401, F403
 from .memory import *  # noqa: F401, F403
 from .tensors import *  # noqa: F401, F403
-
-# Importing backend.py for its side-effect (sets default torch dtype).
-from . import backend  # noqa: F401
 
 __all__ = [
     # Tensor / numpy interop.

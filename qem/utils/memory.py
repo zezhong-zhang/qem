@@ -6,7 +6,6 @@ here had zero call sites and were deleted (Linus review #1).
 """
 
 from contextlib import contextmanager
-from typing import Dict
 
 from qem.utils.log import get_logger
 
@@ -19,7 +18,7 @@ class MemoryMonitor:
         self.initial_memory = None
         self.logger = get_logger("qem.memory")
 
-    def get_memory_info(self) -> Dict[str, float]:
+    def get_memory_info(self) -> dict[str, float]:
         """Return current process RSS / VMS in MB. Zero values if psutil missing."""
         try:
             import psutil

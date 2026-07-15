@@ -57,12 +57,13 @@ in memory with its updated state. Re-open with ``fitter.show_in_napari()``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 if TYPE_CHECKING:
     import napari  # noqa: F401
+
     from qem.fit.fitter import Fitter  # noqa: F401
 
 
@@ -92,7 +93,7 @@ def _color_palette(n: int) -> np.ndarray:
     return np.array([cmap(i % 10) for i in range(n)])
 
 
-def _atoms_to_points(fitter: "Fitter") -> tuple[np.ndarray, dict, np.ndarray]:
+def _atoms_to_points(fitter: Fitter) -> tuple[np.ndarray, dict, np.ndarray]:
     """Build ``(coords_yx, properties, face_color)`` for the Points layer.
 
     napari Points uses (row, col) = (y, x). ``properties`` carries
@@ -128,7 +129,7 @@ def _atoms_to_points(fitter: "Fitter") -> tuple[np.ndarray, dict, np.ndarray]:
     return yx, props, face_color
 
 
-def _model_image(fitter: "Fitter") -> np.ndarray:
+def _model_image(fitter: Fitter) -> np.ndarray:
     """Render the current model on the full grid."""
     pred = fitter.prediction
     if pred is None or (hasattr(pred, "size") and pred.size == 0):
@@ -141,7 +142,7 @@ def _model_image(fitter: "Fitter") -> np.ndarray:
 # --------------------------------------------------------------------------
 
 def open_in_napari(
-    fitter: "Fitter",
+    fitter: Fitter,
     *,
     show_model: bool = True,
     show_atoms: bool = True,
@@ -178,7 +179,7 @@ def open_in_napari(
     return viewer
 
 
-def _add_image_layers(viewer, fitter: "Fitter", *, show_model: bool) -> None:
+def _add_image_layers(viewer, fitter: Fitter, *, show_model: bool) -> None:
     image = np.asarray(fitter.image)
     viewer.add_image(image, name=LAYER_IMAGE, colormap="gray")
     if show_model:
@@ -195,7 +196,7 @@ def _add_image_layers(viewer, fitter: "Fitter", *, show_model: bool) -> None:
         )
 
 
-def _add_atoms_layer(viewer, fitter: "Fitter"):
+def _add_atoms_layer(viewer, fitter: Fitter):
     yx, props, face_color = _atoms_to_points(fitter)
     if len(yx) == 0:
         return None
@@ -213,7 +214,7 @@ def _add_atoms_layer(viewer, fitter: "Fitter"):
 # Layer / status refresh — called by widgets after each fit / voronoi step
 # --------------------------------------------------------------------------
 
-def refresh_layers(viewer, fitter: "Fitter") -> None:
+def refresh_layers(viewer, fitter: Fitter) -> None:
     """Re-pull state from ``fitter`` into the viewer's layers."""
     image = np.asarray(fitter.image)
     if LAYER_MODEL in viewer.layers:
@@ -232,7 +233,7 @@ def refresh_layers(viewer, fitter: "Fitter") -> None:
     _set_status_summary(viewer, fitter)
 
 
-def _set_status_summary(viewer, fitter: "Fitter") -> None:
+def _set_status_summary(viewer, fitter: Fitter) -> None:
     """One-line status string in napari's status bar."""
     n = len(fitter.coordinates) if fitter.coordinates is not None else 0
     device = getattr(fitter, "device", "?")
@@ -251,7 +252,7 @@ def _set_status_summary(viewer, fitter: "Fitter") -> None:
 # CLI entry: `qem-app [path]`
 # --------------------------------------------------------------------------
 
-def run_app(image_path: Optional[str] = None) -> None:
+def run_app(image_path: str | None = None) -> None:
     """CLI entry — opens a Fitter on the given image and runs napari.
 
     Wired in ``pyproject.toml`` as the ``qem-app`` console script.

@@ -3,29 +3,27 @@ import copy
 # from shapely.affinity import scale
 import logging
 import re
-from typing import Optional
 
 import matplotlib.pyplot as plt
 import numpy as np
 from ase import Atoms
 from ase.io import read
 from ase.neighborlist import neighbor_list
-from matplotlib.collections import LineCollection
 from matplotlib_scalebar.scalebar import ScaleBar
+from scipy.ndimage import gaussian_filter
 from scipy.spatial import ConvexHull
 from shapely.geometry import Point, Polygon
 from skimage.feature import peak_local_max
 from skimage.transform import rescale
 
 from qem.analysis.atomic_column import AtomicColumns
-from qem.viz.color import get_unique_colors
+from qem.analysis.crystal_analyzer_plot import CrystalAnalyzerPlotMixin
 from qem.viz.select import GetAtomSelection, InteractivePlot
-from scipy.ndimage import gaussian_filter
 
 logging.basicConfig(level=logging.INFO)
 
 
-class CrystalAnalyzer:
+class CrystalAnalyzer(CrystalAnalyzerPlotMixin):
     def __init__(
         self,
         image: np.ndarray,
@@ -34,7 +32,7 @@ class CrystalAnalyzer:
         atom_types: np.ndarray,
         elements: list[str],
         units: str = "A",
-        region_mask: Optional[np.ndarray] = None,
+        region_mask: np.ndarray | None = None,
     ):
         self.image = image
         self.dx = dx
@@ -95,12 +93,13 @@ class CrystalAnalyzer:
         atom_types_selected = atom_types[is_peak_selected]
         region_mask = atom_select.region_mask
         return peak_positions_selected, atom_types_selected, region_mask
-    
-    
+
+
     # I/O ################
     def read_cif(self, cif_file_path: str):
         atoms = read(cif_file_path)
-        assert isinstance(atoms, Atoms), "atoms should be a ase Atoms object"
+        if not isinstance(atoms, Atoms):
+            raise TypeError(f"CIF read did not yield an ASE Atoms object: {cif_file_path}")
         mask = [atom.symbol in self.elements for atom in atoms]  # type: ignore
         logging.info(f"Reading CIF file: {cif_file_path}. The elements selected are {self.elements} and the elements in the CIF file are {atoms.symbols}")
         self.unit_cell = atoms[mask]
@@ -113,11 +112,11 @@ class CrystalAnalyzer:
         Returns:
         - element_symbols: The symbols of the elements present in the unit cell.
         """
-        assert isinstance(
-            self.unit_cell, Atoms
-        ), "unitcell should be a ase Atoms object"
-        formula = self.unit_cell.symbols.__str__()
-        assert isinstance(formula, str), "composition should be a string"
+        if not isinstance(self.unit_cell, Atoms):
+            raise RuntimeError(
+                "unit_cell is not set; call read_cif() or map_lattice() first."
+            )
+        formula = str(self.unit_cell.symbols)
         # seperate the element symbols from the composition, split by numbers
         elements = re.findall(r"[A-Z][a-z]*", formula)
         return elements
@@ -151,10 +150,8 @@ class CrystalAnalyzer:
 
         # get the supercell lattice in 3d and project to 2d
         lattice_3d, lattice_3d_ref = self.get_lattice_3d(sigma)
-        assert isinstance(lattice_3d, Atoms), "lattice_3d should be an Atoms object"
-        assert isinstance(
-            lattice_3d_ref, Atoms
-        ), "lattice_3d_ref should be an Atoms object"
+        if not isinstance(lattice_3d, Atoms) or not isinstance(lattice_3d_ref, Atoms):
+            raise TypeError("get_lattice_3d must return ASE Atoms objects")
         ref = {
             "origin": self.origin,
             "vector_a": self.a_vector["perfect"],
@@ -191,13 +188,12 @@ class CrystalAnalyzer:
             a = self.a_vector["affine"]
             b = self.b_vector["affine"]
 
-        assert isinstance(
-            self.unit_cell, Atoms
-        ), "self.unit_cell should be a ase Atoms object"
-        assert mode in [
-            "affine",
-            "perfect",
-        ], "mode should be either 'affine' or 'perfect'"
+        if not isinstance(self.unit_cell, Atoms):
+            raise RuntimeError(
+                "unit_cell is not set; call read_cif() or map_lattice() first."
+            )
+        if mode not in ("affine", "perfect"):
+            raise ValueError(f"mode must be 'affine' or 'perfect', got {mode!r}")
 
         if self.unit_cell_transformed[mode] is None:
             unit_cell = copy.deepcopy(self.unit_cell)
@@ -341,24 +337,33 @@ class CrystalAnalyzer:
     def get_origin_offset(
         self, mode: str = "adaptive"
     ):
-        assert mode in [
-            "perfect",
-            "affine",
-            "adaptive",
-        ], "mode should be either 'perfect', 'affine' or 'adaptive'"
+        if mode not in ("perfect", "affine", "adaptive"):
+            raise ValueError(
+                f"mode must be 'perfect', 'affine' or 'adaptive', got {mode!r}"
+            )
         if not self._origin_offsets[mode]:
             self._calc_origin_offsets()
         return self._origin_offsets[mode]
 
     def _calc_origin_offsets(self):
-        # get the perfect mapping of the unit cell to the image
-        self.align_unit_cell_to_image(plot=False, mode="perfect")
-        # estimate the a_limit and b_limit if not provided
+        """Compute per-cell origin offsets that snap the tiled unit cell to peaks.
 
-        # distance_up_left = np.linalg.norm(self.origin)
-        # distance_up_right = np.linalg.norm(self.origin - np.array([self.nx, 0]))
-        # distance_down_left = np.linalg.norm(self.origin - np.array([0,self.ny]))
-        # distance_down_right = np.linalg.norm(self.origin - np.array([self.nx, self.ny]))
+        Populates ``self._origin_offsets`` for the ``perfect``, ``affine`` and
+        ``adaptive`` modes. The algorithm:
+
+        1. Align the unit cell to the image in ``perfect`` mode to get a starting
+           origin and lattice vectors.
+        2. Bound the number of unit-cell repeats (``a_limit``, ``b_limit``) needed
+           to tile the whole image from that origin.
+        3. For every integer ``(i, j)`` translation of the unit cell, record the
+           expected origin (``perfect``/``affine``) and, for ``adaptive``, snap it
+           to the nearest detected peak within half the peak spacing — falling
+           back to the expected origin when no peak is close enough.
+
+        The offsets are cached; :meth:`get_origin_offset` triggers this lazily.
+        """
+        # Perfect mapping of the unit cell to the image gives the base origin.
+        self.align_unit_cell_to_image(plot=False, mode="perfect")
 
         a_limit = 5 * np.ceil(
             max(self.nx - self.origin[0], self.origin[0])
@@ -465,17 +470,6 @@ class CrystalAnalyzer:
         self._origin_offsets = origin_offsets
         return origin_offsets
 
-    # def get_neighbor_sites(self, site_idx, cutoff=5):
-    #     if site_idx in self.neighbor_site_dict:
-    #         return self.neighbor_site_dict[site_idx]
-    #     else:
-    #         i, j, d = neighbor_list("ijd", self.unit_cell, cutoff)
-    #         neighbors_indices = j[i == site_idx]
-    #         neighbors_indices = np.unique(neighbors_indices)
-    #         neighbor_sites = [self.unit_cell[n_index] for n_index in neighbors_indices]  # type: ignore
-    #         self.neighbor_site_dict[site_idx] = neighbor_sites
-    #     return neighbor_sites
-
     # strain mapping #######
     def get_strain(self, cut_off: float = 5.0):
         """
@@ -551,7 +545,7 @@ class CrystalAnalyzer:
             _, fft_a_pixel, fft_b_pixel = fft_plot.select_vectors(tolerance=min(fft_tolerance_x, fft_tolerance_y) * zoom)  # type: ignore
             # normalize the fft vectors
             fft_pixel_size = np.min([fft_dx, fft_dy])
-            fft_a = fft_a_pixel * fft_pixel_size 
+            fft_a = fft_a_pixel * fft_pixel_size
             fft_b = fft_b_pixel * fft_pixel_size
             # get the matrix in real space
             vec_a = fft_a / np.linalg.norm(fft_a) ** 2
@@ -573,186 +567,6 @@ class CrystalAnalyzer:
             self.b_vector["affine"] = real_b
             self.origin = real_origin
             return real_origin, real_a, real_b
-
-    # plot #######
-    def plot(self):
-        vmin = np.percentile(self.image, 5)
-        vmax = np.percentile(self.image, 95)
-        plt.imshow(self.image, cmap="gray", vmin=vmin, vmax=vmax)
-        color_iterator = get_unique_colors()
-        for atom_type in np.unique(self.atom_types):
-            mask = self.atom_types == atom_type
-            element = self.elements[atom_type]
-            plt.scatter(
-                self.peak_positions[mask, 0],
-                self.peak_positions[mask, 1],
-                label=element,
-                color=next(color_iterator),
-            )
-        plt.xlim(0, self.image.shape[1])
-        plt.ylim(0, self.image.shape[0])
-        plt.gca().invert_yaxis()
-        plt.legend()
-        plt.show()
-
-    def plot_unitcell(self, mode: str = "affine"):
-        if mode == "perfect":
-            unitcell_transformed = self.unit_cell_transformed["perfect"].copy()
-            origin, a, b = self.origin, self.a_vector["perfect"], self.b_vector["perfect"]
-            unitcell_transformed.positions[:, :2] += origin * self.dx
-        else:
-            unitcell_transformed = self.unit_cell_transformed["affine"].copy()
-            origin, a, b = self.origin, self.a_vector["affine"], self.b_vector["affine"]
-            unitcell_transformed.positions[:, :2] += origin * self.dx
-
-        plt.subplots()
-        plt.imshow(self.image, cmap="gray")
-        color_iterator = get_unique_colors()
-        for atom_type in np.unique(self.atom_types):
-            mask_element = self.atom_types == atom_type
-            element = self.elements[atom_type]
-            current_color = np.array(next(color_iterator)).reshape(1, -1)
-            plt.scatter(
-                self.peak_positions[:, 0][mask_element],
-                self.peak_positions[:, 1][mask_element],
-                label=element,
-                c=current_color,
-            )
-        for element in self.get_unitcell_elements():
-            current_color = np.array(next(color_iterator)).reshape(1, -1)
-            mask_unitcell_element = self.is_element_in_unit_cell(
-                self.unit_cell, element
-            )
-            plt.scatter(
-                unitcell_transformed.positions[:, 0][mask_unitcell_element] / self.dx,
-                unitcell_transformed.positions[:, 1][mask_unitcell_element] / self.dx,
-                edgecolors="k",
-                c=current_color,
-                alpha=0.8,
-                label=element + " unitcell",
-            )
-        plt.tight_layout()
-        plt.legend()
-        plt.setp(plt.gca(), aspect="equal", adjustable="box")
-        plt.gca().add_artist(self.scalebar)
-        # plt.gca().invert_yaxis()
-
-        # plot the a and b vectors
-        plt.arrow(
-            origin[0],
-            origin[1],
-            a[0],
-            a[1],
-            color="k",
-            head_width=5,
-            head_length=5,
-        )
-        plt.arrow(
-            origin[0],
-            origin[1],
-            b[0],
-            b[1],
-            color="k",
-            head_width=5,
-            head_length=5,
-        )
-        # label the a and b vectors
-        plt.text(
-            origin[0] + a[0],
-            origin[1] + a[1],
-            "a",
-            fontsize=20,
-        )
-        plt.text(
-            origin[0] + b[0],
-            origin[1] + b[1],
-            "b",
-            fontsize=20,
-        )
-
-    def plot_displacement(
-        self, mode: str = "local", cut_off: float = 5.0, units: str = "A"
-    ):
-        if mode == "local":
-            displacement = self.atomic_columns.get_local_displacement(cut_off, units)
-        else:
-            displacement = self.atomic_columns.get_column_displacement(units)
-        plt.imshow(self.image, cmap="gray")
-        plt.scatter(
-            self.atomic_columns.x,
-            self.atomic_columns.y,
-            c=np.linalg.norm(displacement, axis=1),
-            cmap="plasma",
-        )
-        cbar = plt.colorbar()
-        cbar.set_label(f"Displacement ({units})")
-        plt.quiver(
-            self.atomic_columns.x,
-            self.atomic_columns.y,
-            displacement[:, 0],
-            displacement[:, 1],
-            scale=1,
-            scale_units="xy",
-        )
-        plt.gca().add_artist(self.scalebar)
-        plt.axis("off")
-
-    def plot_strain(self, cut_off: float = 5.0, save: bool = False):
-        epsilon_xx, epsilon_yy, epsilon_xy, omega_xy = self.get_strain(cut_off)
-        plt.subplots(2, 2, constrained_layout=True)
-        plt.subplot(2, 2, 1)
-        plt.imshow(self.image, cmap="gray")
-        plt.scatter(
-            self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xx, cmap="coolwarm"
-        )
-        plt.axis("off")
-        plt.gca().add_artist(self.scalebar)
-        plt.colorbar()
-        # bounds = np.abs(epsilon_xx).max()
-        # get the 95 percentile of the strain
-        bounds = np.percentile(np.abs(epsilon_xx), 95)
-        plt.clim(-bounds, bounds)
-        plt.title(r"$\epsilon_{xx}$")
-        # plt.tight_layout()
-        plt.subplot(2, 2, 2)
-        plt.imshow(self.image, cmap="gray")
-        plt.scatter(
-            self.atomic_columns.x, self.atomic_columns.y, c=epsilon_yy, cmap="coolwarm"
-        )
-        plt.colorbar()
-        # bounds = np.abs(epsilon_yy).max()
-        bounds = np.percentile(np.abs(epsilon_yy), 95)
-        plt.clim(-bounds, bounds)
-        plt.axis("off")
-        plt.title(r"$\epsilon_{yy}$")
-        # plt.tight_layout()
-        plt.subplot(2, 2, 3)
-        plt.imshow(self.image, cmap="gray")
-        plt.scatter(
-            self.atomic_columns.x, self.atomic_columns.y, c=epsilon_xy, cmap="coolwarm"
-        )
-        plt.colorbar()
-        # bounds = np.abs(epsilon_xy).max()
-        bounds = np.percentile(np.abs(epsilon_xy), 95)
-        plt.clim(-bounds, bounds)
-        plt.axis("off")
-        plt.title(r"$\epsilon_{xy}$")
-        # plt.tight_layout()
-        plt.subplot(2, 2, 4)
-        plt.imshow(self.image, cmap="gray")
-        plt.scatter(
-            self.atomic_columns.x, self.atomic_columns.y, c=omega_xy, cmap="coolwarm"
-        )
-        plt.colorbar()
-        # bounds = np.abs(omega_xy).max()
-        bounds = np.percentile(np.abs(omega_xy), 95)
-        plt.clim(-bounds, bounds)
-        plt.axis("off")
-        plt.title(r"$\omega_{xy}$")
-        # plt.tight_layout()
-        if save:
-            plt.savefig("strain_map.png", dpi=300)
-            plt.savefig("strain_map.svg")
 
     def measure_polarization(self, a_element: str, b_element: str, cutoff_radius: float = 5.0, num_neighbors: int = 2) -> dict:
         """Measure the polarization of B atoms relative to the center of surrounding A atoms.
@@ -806,67 +620,6 @@ class CrystalAnalyzer:
             'magnitude': magnitude
         }
 
-    def plot_polarization(self, a_element: str, b_element: str, cutoff_radius: float = 5.0, save: bool = False, exclude_border: bool = False, border_pixel: int = 10, vector_scale: float = 10.0):
-        """Plot the polarization vectors and magnitudes.
-
-        Args:
-            a_element (str): Element for A atoms (e.g., 'Sr')
-            b_element (str): Element for B atoms (e.g., 'Ti')
-            cutoff_radius (float, optional): Radius to search for surrounding A atoms. Defaults to 5.0, unit: Å.
-            save (bool, optional): Whether to save the plot. Defaults to False.
-        """
-        # Calculate polarization
-        pol_data = self.measure_polarization(a_element, b_element, cutoff_radius)
-
-        if exclude_border:
-            border_mask = (pol_data['positions'][:, 0] < border_pixel) | (pol_data['positions'][:, 0] > self.image.shape[1] - border_pixel) | (pol_data['positions'][:, 1] < border_pixel) | (pol_data['positions'][:, 1] > self.image.shape[0] - border_pixel) # mask the border within border_pixel
-            pol_data['positions'] = pol_data['positions'][~border_mask]
-            pol_data['polarization'] = pol_data['polarization'][~border_mask]
-            pol_data['magnitude'] = pol_data['magnitude'][~border_mask]
-
-        
-        # Create figure with two subplots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-
-        # Plot 1: Vector field
-        ax1.imshow(self.image, cmap='gray')
-        # Plot A atoms
-        # a_mask = self.atom_types == self.elements.index(a_element)
-        # ax1.scatter(self.peak_positions[a_mask, 0],
-        #            self.peak_positions[a_mask, 1],
-        #            c='blue', alpha=0.5, label='A sites')
-
-        # Plot polarization vectors
-        valid_mask = ~np.isnan(pol_data['magnitude'])
-        ax1.quiver(pol_data['positions'][valid_mask, 0],
-                  pol_data['positions'][valid_mask, 1],
-                  pol_data['polarization'][valid_mask, 0] *vector_scale,
-                  pol_data['polarization'][valid_mask, 1] *vector_scale,
-                  scale=2, scale_units='xy',
-                  color='red', label='B sites polarization')
-
-        ax1.set_title('Polarization Vectors')
-        ax1.legend()
-        ax1.add_artist(self.scalebar)
-
-        # Plot 2: Magnitude map
-        ax2.imshow(self.image, cmap='gray')
-        scatter = ax2.scatter(pol_data['positions'][:, 0],
-                            pol_data['positions'][:, 1],
-                            c=pol_data['magnitude'] * self.dx,
-                            cmap='plasma',
-                            label='B sites')
-        plt.colorbar(scatter, ax=ax2, label='Polarization magnitude (Å)')
-        ax2.set_title('Polarization Magnitude')
-        ax2.legend()
-        ax2.add_artist(self.scalebar)
-
-        plt.tight_layout()
-
-        if save:
-            plt.savefig('polarization_map.png', dpi=300, bbox_inches='tight')
-            plt.savefig('polarization_map.svg', bbox_inches='tight')
-
     def measure_oxygen_tilt(self, a_type: int, o_type: int, cutoff_radius: float = 5.0) -> dict:
         """Measure the tilt of oxygen atoms based on their coordinates and nearby A site atoms.
         
@@ -888,449 +641,69 @@ class CrystalAnalyzer:
         o_mask = self.atom_types == o_type
         a_positions = self.peak_positions[a_mask]
         o_positions = self.peak_positions[o_mask]
-        
+
         # Initialize arrays for results
         tilt_angles = np.zeros(len(o_positions))
         tilt_vectors = np.zeros((len(o_positions), 2))
         oo_pairs = []
-        
+
         # Calculate tilt for each oxygen atom
         for i, o_pos in enumerate(o_positions):
             # Find A atoms within cutoff radius
             a_distances = np.linalg.norm(a_positions - o_pos, axis=1)
             nearby_a_mask = a_distances < cutoff_radius/self.dx
             nearby_a = a_positions[nearby_a_mask]
-            
+
             # Find other oxygen atoms within cutoff radius
             o_distances = np.linalg.norm(o_positions - o_pos, axis=1)
             # Exclude the current oxygen atom (which would have distance 0)
             nearby_o_mask = (o_distances < cutoff_radius/self.dx) & (o_distances > 1e-6)
             nearby_o = o_positions[nearby_o_mask]
-            
+
             # If not enough nearby atoms, assign NaN
             if len(nearby_a) < 2 or len(nearby_o) < 1:
                 tilt_angles[i] = np.nan
                 tilt_vectors[i] = np.array([np.nan, np.nan])
                 oo_pairs.append([[np.nan, np.nan], [np.nan, np.nan]])
                 continue
-            
+
             # Find the two closest A atoms
             sorted_indices = np.argsort(a_distances[nearby_a_mask])
             closest_a1 = nearby_a[sorted_indices[0]]
             closest_a2 = nearby_a[sorted_indices[1]]
-            
+
             # Find the closest oxygen atom
             closest_o = nearby_o[np.argmin(o_distances[nearby_o_mask])]
-            
+
             # Calculate the A-A line vector
             a_a_vector = closest_a2 - closest_a1
             a_a_unit = a_a_vector / np.linalg.norm(a_a_vector)
-            
+
             # Calculate the O-O line vector
             o_o_vector = closest_o - o_pos
             o_o_unit = o_o_vector / np.linalg.norm(o_o_vector)
-            
+
             # Calculate the angle between the two lines
             dot_product = np.clip(np.dot(a_a_unit, o_o_unit), -1.0, 1.0)
             angle_rad = np.arccos(dot_product)
             angle_deg = np.degrees(angle_rad)
-            
+
             # Determine if the angle should be > 90 or < 90 degrees
             # We want the smaller angle between the lines
             if angle_deg > 90:
                 angle_deg = 180 - angle_deg
                 o_o_unit = -o_o_unit
-            
+
             tilt_angles[i] = angle_deg
             tilt_vectors[i] = o_o_unit
             oo_pairs.append([o_pos, closest_o])
-        
+
         return {
             'positions': o_positions,
             'tilt_angles': tilt_angles,
             'tilt_vectors': tilt_vectors,
             'oo_pairs': np.array(oo_pairs)
         }
-
-    def plot_oxygen_tilt(self, a_type: int, o_type: int, cutoff_radius: float = 5.0, save: bool = False):
-        """Plot the oxygen tilt angles and directions.
-
-        Args:
-            a_type (int): Atom type label for A site atoms
-            o_type (int): Atom type label for oxygen atoms
-            cutoff_radius (float, optional): Radius to search for nearby atoms. Defaults to 5.0.
-            save (bool, optional): Whether to save the plot. Defaults to False.
-        """
-        # Calculate tilt
-        tilt_data = self.measure_oxygen_tilt(a_type, o_type, cutoff_radius)
-
-        # Create figure with three subplots
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(21, 6))
-
-        # Plot 1: O-O tilt lines colored by angle
-        ax1.imshow(self.image, cmap='gray')
-        a_mask = self.atom_types == a_type
-        ax1.scatter(self.peak_positions[a_mask, 0],
-                self.peak_positions[a_mask, 1],
-                c='blue', alpha=0.5, label=f'{a_type} atoms')
-        valid_mask = ~np.isnan(tilt_data['tilt_angles'])
-        oo_pairs = tilt_data['oo_pairs'][valid_mask]
-        angles = tilt_data['tilt_angles'][valid_mask]
-        from matplotlib.collections import LineCollection
-        if len(oo_pairs) > 0:
-            lines = oo_pairs
-            line_colors = angles
-            lc = LineCollection(lines, cmap='viridis', array=line_colors, linewidths=2)
-            ax1.add_collection(lc)
-            plt.colorbar(lc, ax=ax1, label='Tilt angle (degrees)')
-        ax1.set_title('Oxygen Tilt Lines')
-        ax1.legend()
-        ax1.add_artist(self.scalebar)
-
-        # Plot 2: Tilt angle map (as before)
-        ax2.imshow(self.image, cmap='gray')
-        scatter = ax2.scatter(tilt_data['positions'][:, 0],
-                            tilt_data['positions'][:, 1],
-                            c=tilt_data['tilt_angles'],
-                            cmap='viridis',
-                            label=f'{o_type} atoms')
-        plt.colorbar(scatter, ax=ax2, label='Tilt angle (degrees)')
-        ax2.set_title('Oxygen Tilt Angles')
-        ax2.legend()
-        ax2.add_artist(self.scalebar)
-
-        # Plot 3: Histogram of tilt angles
-        ax3.hist(angles, bins=30, color='gray', edgecolor='black')
-        ax3.set_xlabel('Tilt angle (degrees)')
-        ax3.set_ylabel('Count')
-        ax3.set_title('Tilt Angle Distribution')
-
-        plt.tight_layout()
-        if save:
-            plt.savefig('oxygen_tilt_map.png', dpi=300, bbox_inches='tight')
-            plt.savefig('oxygen_tilt_map.svg', bbox_inches='tight')
-
-    def plot_lattice_parameter_unitcell(
-        self, units='A', min_dist:float=0.1, show_lattice:bool=False,
-        boundary_thresh:int=20, line_plot_direction:str=None,
-        line_plot_averaging_window:float=None, line_plot_style:str='confidence_interval',
-        save: bool = False,
-    ):
-        """
-        Plot local lattice parameters using adaptive cell origins.
-        The lattice parameter is defined as the distance between neighboring origins in a and b directions.
-        """
-        adaptive_cells = self.get_origin_offset("adaptive")
-        origins = np.array(list(adaptive_cells.values()))  # shape (N, 2)
-
-        # Get direction unit vectors
-        a_vec = self.a_vector['perfect']
-        b_vec = self.b_vector['perfect']
-        a_hat = a_vec / np.linalg.norm(a_vec)
-        b_hat = b_vec / np.linalg.norm(b_vec)
-
-        lines_a = []
-        values_a = []
-        lines_b = []
-        values_b = []
-
-        mask = np.ones(len(origins), dtype=bool)
-        mask[origins[:,0] < boundary_thresh] = False
-        mask[origins[:,0] > self.image.shape[1] - boundary_thresh] = False
-        mask[origins[:,1] < boundary_thresh] = False
-        mask[origins[:,1] > self.image.shape[0] - boundary_thresh] = False
-        origins = origins[mask]
-
-        for origin in origins:
-            # skip the boundary
-            x, y = origin
-            rel = origins - origin
-            # Project onto a and b directions
-            proj_a = rel @ a_hat
-            proj_b = rel @ b_hat
-            # Find the closest neighbor in +a direction (exclude self
-            mask_a = (proj_a > min_dist) & (np.abs(proj_b) < np.linalg.norm(b_vec)/2) & (np.abs(proj_a) < np.linalg.norm(a_vec)*1.5)
-            if np.any(mask_a):
-                j = np.argmin(np.where(mask_a, proj_a, np.inf))
-                lines_a.append([origin, origins[j]])
-                values_a.append(np.linalg.norm(origins[j] - origin) * self.dx)
-            # Find the closest neighbor in +b direction (exclude self)
-            mask_b = (proj_b > min_dist) & (np.abs(proj_a) < np.linalg.norm(a_vec)/2) & (np.abs(proj_b) < np.linalg.norm(b_vec)*1.5)
-            if np.any(mask_b):
-                j = np.argmin(np.where(mask_b, proj_b, np.inf))
-                lines_b.append([origin, origins[j]])
-                values_b.append(np.linalg.norm(origins[j] - origin) * self.dx)
-
-        if line_plot_direction:
-            # Determine projection vector and axis name
-            if line_plot_direction == 'a':
-                proj_hat, axis_name = a_hat, 'a'
-            elif line_plot_direction == 'b':
-                proj_hat, axis_name = b_hat, 'b'
-            else:
-                raise ValueError("line_plot_direction must be 'a' or 'b'")
-
-            # Setup plot
-            fig, (ax_a, ax_b) = plt.subplots(2, 1, sharex=True)
-            
-            # Data to process: [ (data_lines, data_values, axis_to_plot_on, color, param_name), ... ]
-            datasets = [
-                (lines_a, values_a, ax_a, 'blue', 'a'),
-                (lines_b, values_b, ax_b, 'green', 'b')
-            ]
-
-            for lines, values, ax, color, param_name in datasets:
-                if not lines:
-                    ax.text(0.5, 0.5, f'No data for parameter {param_name}', ha='center', va='center', transform=ax.transAxes)
-                    continue
-
-                # --- Moving Average Calculation ---
-                line_midpoints = np.array([np.mean(line, axis=0) for line in lines])
-                values_arr = np.array(values)
-                projected_dist = (line_midpoints @ proj_hat) * self.dx
-
-                # Default window size
-                window = line_plot_averaging_window
-                if window is None:
-                    # Default to one unit cell dimension of the projection axis
-                    if line_plot_direction == 'a':
-                        window_pixels = np.linalg.norm(self.a_vector['perfect'])
-                    else: # 'b'
-                        window_pixels = np.linalg.norm(self.b_vector['perfect'])
-                    window = window_pixels * self.dx
-
-                sort_indices = np.argsort(projected_dist)
-                sorted_dist = projected_dist[sort_indices]
-                sorted_values = values_arr[sort_indices]
-
-                # --- Clustering and Stats Calculation ---
-                plot_cluster_dist_means = np.array([])
-                plot_cluster_value_means = np.array([])
-                plot_cluster_value_stds = np.array([])
-                plot_cluster_value_cis = np.array([])
-
-                if sorted_dist.size > 0:
-                    clusters_data = []
-                    current_cluster_dists = [sorted_dist[0]]
-                    current_cluster_values = [sorted_values[0]]
-                    cluster_start_dist = sorted_dist[0]
-
-                    for i in range(1, len(sorted_dist)):
-                        current_dist = sorted_dist[i]
-                        current_val = sorted_values[i]
-
-                        if current_dist - cluster_start_dist <= window:
-                            current_cluster_dists.append(current_dist)
-                            current_cluster_values.append(current_val)
-                        else:
-                            if current_cluster_values:
-                                mean_d = np.mean(current_cluster_dists)
-                                mean_v = np.mean(current_cluster_values)
-                                std_v = np.std(current_cluster_values) if len(current_cluster_values) > 0 else 0
-                                ci_v = 0
-                                if len(current_cluster_values) > 1:
-                                    sem = np.std(current_cluster_values, ddof=1) / np.sqrt(len(current_cluster_values))
-                                    ci_v = 1.96 * sem
-                                clusters_data.append((mean_d, mean_v, std_v, ci_v))
-
-                            cluster_start_dist = current_dist
-                            current_cluster_dists = [current_dist]
-                            current_cluster_values = [current_val]
-
-                    if current_cluster_values: # Finalize the last cluster
-                        mean_d = np.mean(current_cluster_dists)
-                        mean_v = np.mean(current_cluster_values)
-                        std_v = np.std(current_cluster_values) if len(current_cluster_values) > 0 else 0
-                        ci_v = 0
-                        if len(current_cluster_values) > 1:
-                            sem = np.std(current_cluster_values, ddof=1) / np.sqrt(len(current_cluster_values))
-                            ci_v = 1.96 * sem
-                        clusters_data.append((mean_d, mean_v, std_v, ci_v))
-
-                    if clusters_data:
-                        plot_cluster_dist_means = np.array([c[0] for c in clusters_data])
-                        plot_cluster_value_means = np.array([c[1] for c in clusters_data])
-                        plot_cluster_value_stds = np.array([c[2] for c in clusters_data])
-                        plot_cluster_value_cis = np.array([c[3] for c in clusters_data])
-
-                # --- Plotting ---
-                ax.scatter(sorted_dist, sorted_values, alpha=0.2, color='gray', label='Raw Data', s=10)
-
-                if plot_cluster_dist_means.size > 0:
-                    if line_plot_style == 'confidence_interval':
-                        ax.errorbar(plot_cluster_dist_means, plot_cluster_value_means,
-                                    yerr=plot_cluster_value_cis, fmt='o', color=color,
-                                    capsize=3, markersize=5, elinewidth=1.5,
-                                    label=f'Parameter {param_name} (cluster mean & 95% CI)')
-                    elif line_plot_style == 'error_bars':
-                        ax.errorbar(plot_cluster_dist_means, plot_cluster_value_means,
-                                    yerr=plot_cluster_value_stds, fmt='o', color=color,
-                                    capsize=3, markersize=5, elinewidth=1.5,
-                                    label=f'Parameter {param_name} (cluster mean ± std)')
-                    else:
-                        raise ValueError("line_plot_style must be 'confidence_interval' or 'error_bars'")
-                else:
-                    if sorted_dist.size > 0: # Raw data might exist even if no clusters formed (e.g. single point)
-                         ax.text(0.5, 0.4, f'Not enough data to form clusters for {param_name}', ha='center', va='center', transform=ax.transAxes, fontsize=9)
-                    # else: (handled by the initial check for `if not lines:`) -> ax.text(0.5, 0.5, f'No data for parameter {param_name}'...)
-
-                ax.set_ylabel(f'Lattice parameter {param_name} ({units})')
-                ax.legend()
-                ax.grid(True)
-
-            fig.suptitle(f'Lattice Parameter Profile along {axis_name}-direction', fontsize=16)
-            ax_b.set_xlabel(f'Distance along {axis_name}-axis ({units})')
-            plt.tight_layout(rect=[0, 0.03, 1, 0.96]) # Adjust layout to make room for suptitle
-            plt.show()
-
-        # Atom coloring by type
-        x = self.atomic_columns.x
-        y = self.atomic_columns.y
-        atom_types = self.atomic_columns.atom_types
-        unique_types = np.unique(atom_types)
-        color_map = {atype: color for atype, color in zip(unique_types, get_unique_colors())}
-        atom_colors = [color_map[atype] for atype in atom_types]
-
-        plt.figure()
-        plt.subplot(1, 2, 1)
-        plt.imshow(self.image, cmap="gray")
-        lc_a = LineCollection(lines_a, array=np.array(values_a), cmap='Blues', linewidths=2)
-        plt.gca().add_collection(lc_a)
-        if show_lattice:
-            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
-        cbar_a = plt.colorbar(lc_a)
-        cbar_a.set_label(f'Lattice parameter a ({units})')
-        plt.axis('off')
-        if hasattr(self, 'scalebar'):
-            plt.gca().add_artist(self.scalebar)
-        plt.title('Lattice parameter a map')
-        # set the plot to the view of the image
-        #plt.xlim(0, self.image.shape[1])
-        #plt.ylim(0, self.image.shape[0])
-
-        plt.subplot(1, 2, 2)
-        plt.imshow(self.image, cmap="gray")
-        lc_b = LineCollection(lines_b, array=np.array(values_b), cmap='Greens', linewidths=2)
-        plt.gca().add_collection(lc_b)
-        if show_lattice:
-            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
-        cbar_b = plt.colorbar(lc_b)
-        cbar_b.set_label(f'Lattice parameter b ({units})')
-        plt.axis('off')
-        if hasattr(self, 'scalebar'):
-            plt.gca().add_artist(self.scalebar)
-        plt.title('Lattice parameter b map')
-        # set the plot to the view of the image
-        #plt.xlim(0, self.image.shape[1])
-        #plt.ylim(0, self.image.shape[0])
-        plt.show()
-        if save:
-            plt.savefig("lattice_parameter_map.svg")
-            plt.savefig("lattice_parameter_map.png", dpi=300)
-
-
-    def plot_lattice_parameter_nearest(self, units='A', show_lattice:bool=False, angle_thresh:float=0.95, dist_min_a:float=1, dist_min_b:float=1, dist_max_a:float=None, dist_max_b:float=None, boundary_thresh:int=5):
-        """
-        Plot local lattice parameters using all nearest neighbors in the a and b directions
-        within an angular and distance cutoff.
-
-        Args:
-            units (str, optional): Unit of the lattice parameter. Defaults to 'A'.
-            show_lattice (bool, optional): Whether to show the lattice. Defaults to False.
-            angle_thresh (float, optional): Angular cutoff. Defaults to 0.95.
-            dist_min_a (float, optional): Minimum distance in a direction in A. Defaults to 1.
-            dist_min_b (float, optional): Minimum distance in b direction in A. Defaults to 1.
-            dist_max_a (float, optional): Maximum distance in a direction in A. Defaults to 3.
-            dist_max_b (float, optional): Maximum distance in b direction in A. Defaults to 3.
-            boundary_thresh (int, optional): Boundary threshold in pixels. Defaults to 20.
-        """
-        a_vec = self.a_vector['perfect']
-        b_vec = self.b_vector['perfect']
-        a_hat = a_vec / np.linalg.norm(a_vec)
-        b_hat = b_vec / np.linalg.norm(b_vec)
-
-        if dist_max_a is None:
-            # Guess a reasonable maximum distance (e.g., 1.5 × norm of a_vec)
-            dist_max_a  = 1.3 * np.linalg.norm(a_vec) * self.dx
-        if dist_max_b is None:
-            # Guess a reasonable maximum distance (e.g., 1.5 × norm of b_vec)
-            dist_max_b  = 1.3 * np.linalg.norm(b_vec) * self.dx
-
-        lines_a, values_a = [], []
-        lines_b, values_b = [], []
-
-        # skip boundary
-        mask = np.ones(len(self.peak_positions), dtype=bool)
-        mask[self.peak_positions[:,0] < boundary_thresh] = False
-        mask[self.peak_positions[:,0] > self.image.shape[1] - boundary_thresh] = False
-        mask[self.peak_positions[:,1] < boundary_thresh] = False
-        mask[self.peak_positions[:,1] > self.image.shape[0] - boundary_thresh] = False
-
-        peak_masked = self.peak_positions[mask]
-
-
-        for i in range(len(peak_masked)):
-            x,y = peak_masked[i]
-            rel = peak_masked - np.array([x,y])
-            dists = np.linalg.norm(rel, axis=1) * self.dx
-            # Exclude self
-            valid_a  = (dists > dist_min_a) & (dists < dist_max_a)
-            valid_b = (dists > dist_min_b) & (dists < dist_max_b)
-
-            # For a direction
-            cos_a = np.abs((rel @ a_hat) / (np.linalg.norm(rel, axis=1) + 1e-12))
-            mask_a = valid_a & (cos_a > angle_thresh)
-            for j in np.where(mask_a)[0]:
-                lines_a.append([peak_masked[i], peak_masked[j]])
-                values_a.append(dists[j])
-
-            # For b direction
-            cos_b = np.abs((rel @ b_hat) / (np.linalg.norm(rel, axis=1) + 1e-12))
-            mask_b = valid_b & (cos_b > angle_thresh)
-            for j in np.where(mask_b)[0]:
-                lines_b.append([peak_masked[i], peak_masked[j]])
-                values_b.append(dists[j])
-
-        # Atom coloring by type
-        x = self.atomic_columns.x
-        y = self.atomic_columns.y
-        atom_types = self.atomic_columns.atom_types
-        unique_types = np.unique(atom_types)
-        color_map = {atype: color for atype, color in zip(unique_types, get_unique_colors())}
-        atom_colors = [color_map[atype] for atype in atom_types]
-
-        plt.subplot(1, 2, 1)
-        plt.imshow(self.image, cmap="gray")
-        lc_a = LineCollection(lines_a, array=np.array(values_a), cmap='Blues', linewidths=2)
-        plt.gca().add_collection(lc_a)
-        if show_lattice:
-            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
-        cbar_a = plt.colorbar(lc_a)
-        cbar_a.set_label(f'Lattice parameter a (nearest, {units})')
-        plt.axis('off')
-        if hasattr(self, 'scalebar'):
-            plt.gca().add_artist(self.scalebar)
-        plt.title('Lattice parameter a (nearest) map')
-        #plt.xlim(0, self.image.shape[1])
-        #plt.ylim(0, self.image.shape[0])
-
-        plt.subplot(1, 2, 2)
-        plt.imshow(self.image, cmap="gray")
-        lc_b = LineCollection(lines_b, array=np.array(values_b), cmap='Greens', linewidths=2)
-        plt.gca().add_collection(lc_b)
-        if show_lattice:
-            plt.scatter(x, y, c=atom_colors, s=15, edgecolor='k', linewidth=0.5)
-        cbar_b = plt.colorbar(lc_b)
-        cbar_b.set_label(f'Lattice parameter b (nearest, {units})')
-        plt.axis('off')
-        if hasattr(self, 'scalebar'):
-            plt.gca().add_artist(self.scalebar)
-        plt.title('Lattice parameter b (nearest) map')
-        #plt.xlim(0, self.image.shape[1])
-        #plt.ylim(0, self.image.shape[0])
-        plt.show()
-
-
 
     # properties #######
     @property
@@ -1393,31 +766,31 @@ class CrystalAnalyzer:
         """
         if self.atomic_columns is None:
             raise ValueError("Please run get_atomic_columns() first to create atomic columns")
-            
+
         # Update the atomic columns with GMM estimates (Z-spacing auto-determined)
         updated_lattice, updated_lattice_ref = self.atomic_columns.update_atoms_from_gmm(
             atom_count_estimates
         )
-        
+
         # Create new atomic columns object with updated lattices
         ref = {
             "origin": self.origin,
             "vector_a": self.a_vector["perfect"],
             "vector_b": self.b_vector["perfect"],
         }
-        
+
         from qem.analysis.atomic_column import AtomicColumns
         self.atomic_columns = AtomicColumns(
-            updated_lattice, updated_lattice_ref, self.elements, 
+            updated_lattice, updated_lattice_ref, self.elements,
             self.atomic_columns.tol, self.dx, ref
         )
-        
+
         # Update peak positions and atom types based on new lattice
         self.atom_types = self.atomic_columns.atom_types
         self.peak_positions = self.atomic_columns.positions_pixel
-        
+
         return self.atomic_columns
-        
+
     def integrate_gmm_results(self, gmm_results: dict):
         """Integrate GMM estimation results into the crystal analysis.
         
@@ -1432,7 +805,7 @@ class CrystalAnalyzer:
         """
         if 'atom_count_estimates' not in gmm_results:
             raise ValueError("GMM results must contain 'atom_count_estimates' key")
-            
+
         atom_count_estimates = gmm_results['atom_count_estimates']
-        
+
         return self.update_atoms_from_gmm(atom_count_estimates)

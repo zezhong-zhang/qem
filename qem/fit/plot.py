@@ -13,8 +13,6 @@ from typing import TYPE_CHECKING
 
 import matplotlib.pyplot as plt
 import numpy as np
-from matplotlib.path import Path
-from matplotlib_scalebar.scalebar import ScaleBar
 
 from qem.utils.tensors import to_numpy
 
@@ -25,9 +23,9 @@ if TYPE_CHECKING:
 def _plot_progress(self, params, index, select_params):
     """Helper function to keep plotting logic separate."""
     global_prediction = to_numpy(self.predict(params))
-    
+
     fig, axes = plt.subplots(1, 3, figsize=(15, 5))
-    
+
     # Original Image with selected atoms
     axes[0].imshow(self.image, cmap="gray")
     axes[0].set_title("Original + Selected Atoms")
@@ -46,7 +44,7 @@ def _plot_progress(self, params, index, select_params):
 
     plt.tight_layout()
     plt.show()
-    
+
 
 def plot_coordinates(self, s=1):
     """
@@ -105,10 +103,10 @@ def plot_scs(
     half: str = None,
     figsize=(10, 5),
 ):
-    assert layout in {
-        "horizontal",
-        "vertical",
-    }, "Layout should be horizontal or vertical"
+    if layout not in {"horizontal", "vertical"}:
+        raise ValueError(
+            f"layout must be one of {{'horizontal', 'vertical'}}, got {layout!r}"
+        )
     if layout == "horizontal":
         row, col = 1, 2
         if per_element:
@@ -211,7 +209,8 @@ def plot_scs_voronoi(
     half: str = None,
     figsize=(10, 5),
 ):
-    assert self.voronoi_volume is not None, "Please run the voronoi analysis first"
+    if self.voronoi_volume is None:
+        raise RuntimeError("Please run the voronoi analysis first")
     if per_element:
         row, col = 1, 2
         col += len(np.unique(self.atom_types)) - 1
@@ -246,7 +245,7 @@ def plot_scs_voronoi(
             pos_x = self.params["pos_x"][mask] * self.dx
             pos_y = self.params["pos_y"][mask] * self.dx
             pos_x = to_numpy(pos_x)
-            pos_y = to_numpy(pos_y) 
+            pos_y = to_numpy(pos_y)
             im = plt.scatter(
                 pos_x, pos_y, c=self.voronoi_volume[mask], s=s, label=element
             )
@@ -343,43 +342,43 @@ def plot_atom_count_map(self, element_name=None, save=False, figsize=(12, 8)):
     """
     if not hasattr(self, 'atom_count_estimates'):
         raise ValueError("Please run estimate_atom_counts_with_gmm first")
-    
+
     fig, ax = plt.subplots(figsize=figsize)
-    
+
     if element_name is None:
         # Plot all elements with different symbols/colors
         all_counts = []
         all_pos_x = []
         all_pos_y = []
         scatter = None  # Initialize scatter variable
-        
+
         for atom_type in np.unique(self.atom_types):
             element = self.elements[atom_type]
             if element in self.atom_count_estimates:
                 mask = self.atom_types == atom_type
                 counts = self.atom_count_estimates[element]
-                
+
                 pos_x = self.params["pos_x"][mask] * self.dx
                 pos_y = self.params["pos_y"][mask] * self.dx
-                
+
                 pos_x_np = to_numpy(pos_x)
                 pos_y_np = to_numpy(pos_y)
-                
+
                 all_counts.extend(counts)
                 all_pos_x.extend(pos_x_np)
                 all_pos_y.extend(pos_y_np)
-                
+
                 # Plot each element with different marker
                 markers = ['o', 's', '^', 'D', 'v', '<', '>', 'p', 'h', 'H']
                 marker = markers[atom_type % len(markers)]
-                
+
                 scatter = ax.scatter(
                     pos_x_np, pos_y_np,
-                    c=counts, s=80, alpha=0.8, 
+                    c=counts, s=80, alpha=0.8,
                     marker=marker, label=f'{element}',
                     cmap='viridis', vmin=1, vmax=max(all_counts) if all_counts else 5
                 )
-        
+
         # Create colorbar for all elements
         if all_counts and scatter is not None:
             cbar = plt.colorbar(scatter, ax=ax, shrink=0.8)
@@ -387,48 +386,48 @@ def plot_atom_count_map(self, element_name=None, save=False, figsize=(12, 8)):
             # Set integer ticks on colorbar
             max_count = max(all_counts)
             cbar.set_ticks(range(1, max_count + 1))
-            
+
         ax.legend(loc='upper right', bbox_to_anchor=(1.15, 1))
-        
+
     else:
         # Plot specific element
         if element_name not in self.atom_count_estimates:
             raise ValueError(f"No atom count estimates found for {element_name}")
-        
+
         atom_type = list(self.elements).index(element_name)
         mask = self.atom_types == atom_type
         counts = self.atom_count_estimates[element_name]
-        
+
         pos_x = self.params["pos_x"][mask] * self.dx
         pos_y = self.params["pos_y"][mask] * self.dx
-        
+
         pos_x_np = to_numpy(pos_x)
         pos_y_np = to_numpy(pos_y)
-        
+
         scatter = ax.scatter(
             pos_x_np, pos_y_np,
             c=counts, s=100, alpha=0.8, cmap='viridis',
             edgecolors='black', linewidth=0.5
         )
-        
+
         # Create colorbar with proper title
         cbar = plt.colorbar(scatter, ax=ax, shrink=0.8)
         cbar.set_label('Number of Atoms', fontsize=14, fontweight='bold')
         # Set integer ticks on colorbar
         unique_counts = np.unique(counts)
         cbar.set_ticks(unique_counts)
-        
+
         ax.set_title(f'Atom Count Map - {element_name}', fontsize=16, fontweight='bold')
-    
+
     ax.set_xlabel('X (Å)', fontsize=12)
     ax.set_ylabel('Y (Å)', fontsize=12)
     if element_name is None:
         ax.set_title('Spatial Map of Estimated Atom Counts', fontsize=16, fontweight='bold')
-    
+
     ax.set_aspect('equal', adjustable='box')
     ax.invert_yaxis()
     ax.grid(True, alpha=0.3)
-    
+
     # Add summary text
     if hasattr(self, 'gmm_results'):
         summary_info = []
@@ -437,20 +436,20 @@ def plot_atom_count_map(self, element_name=None, save=False, figsize=(12, 8)):
                 selected = results['selected_components']
                 recommended = results.get('recommended_components', 'N/A')
                 summary_info.append(f"{elem}: {selected} components (rec: {recommended})")
-        
+
         if summary_info:
             summary_text = "GMM Selection: " + ", ".join(summary_info)
             ax.text(0.02, 0.02, summary_text, transform=ax.transAxes,
                    bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8),
                    fontsize=10, verticalalignment='bottom')
-    
+
     plt.tight_layout()
-    
+
     if save:
         filename = f'atom_count_map_{element_name or "all"}.png'
         plt.savefig(filename, dpi=300, bbox_inches='tight')
         logging.info(f"Atom count map saved as {filename}")
-    
+
     plt.show()
 
 def plot_region(self):
@@ -473,18 +472,18 @@ def _plot_domain_analysis(
     Enhanced plotting with polygon boundaries and region indices.
     """
     fig, axes = plt.subplots(1, 3, figsize=(24, 12))
-    
+
     # Original image
     axes[0].imshow(self.image, cmap='gray')
     axes[0].set_title('Original Image')
     axes[0].axis('off')
-    
+
     # Boundary strength
     im1 = axes[1].imshow(boundary_strength, cmap='viridis')
     axes[1].set_title('Boundary Strength')
     axes[1].axis('off')
     plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
-    
+
     # Continuous domain separation
     domain_map = domain_label.copy()
     domain_map[vacuum_mask] = -1  # Background
@@ -493,18 +492,18 @@ def _plot_domain_analysis(
     axes[2].set_title('Domain Map\n(-1=Background, 0=Bulk, >1=Domains)')
     axes[2].axis('off')
     plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
-    
+
     # Polygon boundaries
     if polygon_data:
         for region_id, region_info in polygon_data.items():
             vertices = region_info['vertices']
             axes[2].plot(vertices[:, 1], vertices[:, 0], linewidth=2)
             centroid = region_info['centroid']
-            axes[2].text(centroid[1], centroid[0], str(region_id), 
+            axes[2].text(centroid[1], centroid[0], str(region_id),
                           color='white', fontsize=8, ha='center', va='center')
     axes[2].set_title('Polygon Boundaries')
     axes[2].axis('off')
-    
+
     plt.tight_layout()
     plt.show()
 

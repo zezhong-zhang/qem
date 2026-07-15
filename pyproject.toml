@@ -45,7 +45,13 @@ dependencies = [
     "torch>=2.0",
     "matscipy>=1.0",
     "python-dotenv>=1.0",
+    "tk>=0.1.0",
+    "pyqt6>=6.11.0",
+    "tcl>=0.2",
 ]
+
+[tool.uv.sources]
+matplotlib-scalebar = { git = "https://github.com/zezhong-zhang/matplotlib-scalebar" }
 
 [project.urls]
 Homepage = "https://github.com/zezhong-zhang/qem"

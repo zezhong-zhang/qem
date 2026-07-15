@@ -5,8 +5,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 from sklearn.ensemble import IsolationForest
 
-from qem.io.statstem import read_statstem
 from qem.fit.fitter import Fitter
+from qem.io.statstem import read_statstem
 from qem.utils.tensors import to_numpy
 
 
@@ -76,7 +76,7 @@ def goodness_of_fit(image, prediction, *, noise_var=None):
     idx = np.digitize(r, r_bins) - 1
     radial = np.zeros(len(r_bins))
     counts = np.zeros(len(r_bins))
-    for i, p in zip(idx, psd_flat):
+    for i, p in zip(idx, psd_flat, strict=False):
         if 0 <= i < len(r_bins):
             radial[i] += p
             counts[i] += 1
@@ -363,10 +363,10 @@ class Benchmark:
                 self.input_coordinates = legacyStatSTEM["coordinates"]
             if "model" in legacyStatSTEM.keys():
                 self.model_statstem = legacyStatSTEM["model"]
-        except:
+        except Exception as e:
             raise ValueError(
                 "InputStatSTEM dictionary does not have correct keys in the input file."
-            )
+            ) from e
 
     @time_it
     def refine(
@@ -593,7 +593,7 @@ class Benchmark:
                 np.argmin(
                     np.sqrt((pos_x_statstem - x) ** 2 + (pos_y_statstem - y) ** 2)
                 )
-                for x, y in zip(pos_x, pos_y)
+                for x, y in zip(pos_x, pos_y, strict=False)
             ]
         )
         pos_x_statstem = pos_x_statstem[index_statstem_in_qem]
@@ -680,7 +680,7 @@ class Benchmark:
                     np.argmin(
                         np.sqrt((pos_x_statstem - x) ** 2 + (pos_y_statstem - y) ** 2)
                     )
-                    for x, y in zip(pos_x, pos_y)
+                    for x, y in zip(pos_x, pos_y, strict=False)
                 ]
             )
             volume_statstem = volume_statstem[index_statstem_in_qem]

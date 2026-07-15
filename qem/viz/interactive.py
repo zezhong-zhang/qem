@@ -23,7 +23,7 @@ import this module — the bottom-of-file ``_bind`` is wired in
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -56,7 +56,7 @@ def _atoms_per_type(self):
 # image / model / residual triptych
 # --------------------------------------------------------------------------
 
-def plot_fitting_interactive(self, *, save: Optional[str] = None):
+def plot_fitting_interactive(self, *, save: str | None = None):
     """Interactive image / model / residual triptych (plotly).
 
     Linked pan + zoom across the three panels; hover shows pixel
@@ -97,7 +97,7 @@ def plot_fitting_interactive(self, *, save: Optional[str] = None):
 # atom-position scatter on the image
 # --------------------------------------------------------------------------
 
-def plot_coordinates_interactive(self, *, save: Optional[str] = None):
+def plot_coordinates_interactive(self, *, save: str | None = None):
     """Image with atomic columns overlaid, coloured by element (plotly).
 
     Hover shows ``(x, y, element)`` per atom. Box-select / lasso-select
@@ -130,7 +130,7 @@ def plot_coordinates_interactive(self, *, save: Optional[str] = None):
 # scattering cross-section histogram
 # --------------------------------------------------------------------------
 
-def plot_scs_histogram_interactive(self, *, save: Optional[str] = None):
+def plot_scs_histogram_interactive(self, *, save: str | None = None):
     """Per-element scattering cross-section histogram (plotly).
 
     Hover shows the bin edges and counts; legend toggles element

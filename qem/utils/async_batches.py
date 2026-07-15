@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, Dataset, get_worker_info
+from torch.utils.data import DataLoader, Dataset
 
 
 class _RandomBatchDataset(Dataset):

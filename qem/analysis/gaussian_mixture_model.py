@@ -3,7 +3,7 @@ import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.optimize import curve_fit, minimize
+from scipy.optimize import curve_fit
 from tqdm import tqdm
 
 logging.basicConfig(level=logging.INFO)
@@ -100,14 +100,14 @@ class GaussianMixtureModel:
             if initial_means is None:
                 num_components[0] = 1
             self.component_range = np.arange(num_components[0], num_components[-1] + 1)
-        
+
         # Add negative log-likelihood to scoring methods
         if "nllh" not in scoring_methods:
             scoring_methods.append("nllh")
         self.scoring_methods = scoring_methods
         self.convergence_tolerance = convergence_tolerance
         self.max_iterations = max_iterations
-        
+
         # Determine data channels to use
         if data_channels is None:
             num_channels = self.cross_sections.shape[1] if len(self.cross_sections.shape) > 1 else 1
@@ -120,25 +120,25 @@ class GaussianMixtureModel:
                 data_channels = [0]
         elif isinstance(data_channels, int):
             data_channels = [data_channels]
-        
+
         self.active_channels = data_channels
         self.num_dimensions = len(self.active_channels)
         self.selected_data = self.cross_sections[:, self.active_channels]
         self.data_bounds = np.array([self.selected_data.min(0), self.selected_data.max(0)])
-        
+
         # Store fitting parameters
         self.optimization_metric = optimization_metric
         self.initial_weights = initial_weights
         self.initial_means = initial_means
         self.initial_widths = initial_widths
-        
+
         # Set up curve fitting for 2D case
         if self.selected_data.shape[1] == 2:
             self.curve_function = self._polynomial_curve_5th_order
             self.curve_parameters, _ = curve_fit(
                 self.curve_function, self.selected_data[:, 0], self.selected_data[:, 1]
             )
-        
+
         self.initialization_method = initialization_method
         self.step_sizes = step_sizes
         self.constraints = constraints
@@ -188,7 +188,7 @@ class GaussianMixtureModel:
             step_sizes = [1, [1, 1], [1, 1]]
         if scoring_methods is None:
             scoring_methods = ["icl"]
-        
+
         self.initialize_fitting_conditions(
             num_components,
             data_channels,
@@ -203,7 +203,7 @@ class GaussianMixtureModel:
             step_sizes,
             constraints,
         )
-        
+
         gmm_results = self._initialize_results_dictionary(
             self.component_range, scoring_methods, self.num_dimensions == 2
         )
@@ -218,10 +218,10 @@ class GaussianMixtureModel:
             gmm_results["weight"].append(parameters[0])
             gmm_results["mean"].append(parameters[1])
             gmm_results["width"].append(parameters[2])
-            
+
             for score_name, score_value in scores.items():
                 gmm_results["score"][score_name].append(score_value)
-            
+
             previous_parameters = parameters
 
         self.fit_result = GmmResult(
@@ -233,7 +233,7 @@ class GaussianMixtureModel:
             self.selected_data,
             self.curve_parameters,
         )
-        
+
         # Store component selection recommendation
         if use_first_local_minimum:
             self.recommended_components = self._find_first_local_minimum(
@@ -243,9 +243,9 @@ class GaussianMixtureModel:
             self.recommended_components = np.argmin(
                 gmm_results["score"][optimization_metric]
             ) + 1
-        
+
         logging.info(f"Recommended number of components: {self.recommended_components}")
-    
+
     def _find_first_local_minimum(self, scores):
         """Find the first local minimum in the scores array.
         
@@ -256,16 +256,16 @@ class GaussianMixtureModel:
             int: Component number (1-indexed) corresponding to first local minimum
         """
         scores = np.array(scores)
-        
+
         # Start from component 2 (index 1) to have neighbors
         for i in range(1, len(scores) - 1):
             # Check if this is a local minimum
             if scores[i] < scores[i-1] and scores[i] < scores[i+1]:
                 return i + 1  # Convert to 1-indexed
-        
+
         # If no local minimum found, return global minimum
         return np.argmin(scores) + 1
-    
+
     def get_optimal_components(self, method="recommendation"):
         """Get the optimal number of components.
         
@@ -280,7 +280,7 @@ class GaussianMixtureModel:
         """
         if not hasattr(self, 'fit_result') or self.fit_result is None:
             raise ValueError("Please run fit_gaussian_mixture_model first")
-        
+
         if method == "recommendation":
             return self.recommended_components
         elif method == "global_min":
@@ -289,23 +289,23 @@ class GaussianMixtureModel:
             return self._interactive_component_selection()
         else:
             raise ValueError(f"Unknown method: {method}")
-    
+
     def _interactive_component_selection(self):
         """Allow user to interactively select the number of components."""
         print(f"\\nRecommended number of components: {self.recommended_components}")
         print("\\nScoring summary:")
-        
+
         for method_name, scores in self.fit_result.score.items():
             min_idx = np.argmin(scores)
             print(f"{method_name.upper()}: minimum at {min_idx + 1} components (score: {scores[min_idx]:.3f})")
-        
+
         while True:
             try:
                 user_choice = input(f"\\nEnter number of components (1-{len(self.component_range)}) or 'r' for recommendation: ")
-                
+
                 if user_choice.lower() == 'r':
                     return self.recommended_components
-                
+
                 choice = int(user_choice)
                 if 1 <= choice <= len(self.component_range):
                     return choice
@@ -327,31 +327,31 @@ class GaussianMixtureModel:
         candidate_means = self._initialize_means(
             self.initialization_method, last_means, num_components
         )
-        
+
         if self.num_dimensions == 2 and candidate_means[0].shape[1] != 2:
             candidate_means = self._add_second_channel(
                 candidate_means, self.curve_function, self.curve_parameters
             )
-        
+
         parameter_candidates = []
         score_candidates = {method: [] for method in self.scoring_methods}
-        
+
         for mean_candidate in candidate_means:
             weights = self._initialize_weights(num_components)
             widths = self._initialize_widths(num_components)
-            
+
             optimized_params, final_scores = self._expectation_maximization(
                 weights, mean_candidate, widths
             )
             parameter_candidates.append(optimized_params)
-            
+
             for method_name, score_value in final_scores.items():
                 score_candidates[method_name].append(score_value)
-        
+
         # Select best parameters based on optimization metric
         best_index = np.argmin(score_candidates[self.optimization_metric])
         best_scores = {method: scores[best_index] for method, scores in score_candidates.items()}
-        
+
         return parameter_candidates[best_index], best_scores
 
     def _initialize_weights(self, num_components):
@@ -382,7 +382,7 @@ class GaussianMixtureModel:
         """
         default_width = ((self.data_bounds[1] - self.data_bounds[0]) / (2 * num_components)) ** 2
         default_width = np.expand_dims(default_width, axis=0)  # Add component dimension
-        
+
         if self.initial_widths is None:
             return default_width
         else:
@@ -390,7 +390,7 @@ class GaussianMixtureModel:
                 widths = self.initial_widths[num_components - 1]
             else:
                 widths = self.initial_widths[:num_components]
-            
+
             # Handle 2D case
             if default_width.shape[2] == 2:
                 if widths.shape[0] > 1:
@@ -411,20 +411,20 @@ class GaussianMixtureModel:
             list: List of candidate mean initializations
         """
         data_min, data_max = self.data_bounds[0][0], self.data_bounds[1][0]
-        
+
         if num_components == 1 and method != "initvalue":
             mean = np.zeros((1, 1))
             mean[0, 0] = (data_min + data_max) / 2
             return [mean]
-        
+
         # Use only first channel for initialization
         previous_means = np.expand_dims(previous_means[:, 0], -1)
-        
+
         if method == "equionce":
             return [np.expand_dims(
                 np.linspace(data_min, data_max, num_components + 1, endpoint=False)[1:], -1
             )]
-        
+
         elif method == "equimul":
             num_trials = 20
             base_means = np.expand_dims(
@@ -438,7 +438,7 @@ class GaussianMixtureModel:
             candidate_means = delta + base_means
             candidate_means = np.clip(candidate_means, data_min, data_max)
             return list(candidate_means)
-        
+
         elif method == "middle":
             boundary_points = np.insert(previous_means, (0, num_components - 1), [data_min, data_max])
             mean_candidates = []
@@ -446,7 +446,7 @@ class GaussianMixtureModel:
                 new_mean = (boundary_points[i] + boundary_points[i + 1]) / 2
                 mean_candidates.append(np.insert(previous_means, i, new_mean, axis=0))
             return mean_candidates
-        
+
         elif method == "finegrid":
             grid_points = np.linspace(
                 data_min, data_max, self.component_range[-1] + 1, endpoint=False
@@ -455,13 +455,13 @@ class GaussianMixtureModel:
             for point in grid_points:
                 mean_candidates.append(np.sort(np.insert(previous_means, 0, point, axis=0)))
             return mean_candidates
-        
+
         elif method == "initvalue":
             if isinstance(self.initial_means, list):
                 return [self.initial_means[num_components - 1][:, self.active_channels]]
             else:
                 return [self.initial_means[:num_components, self.active_channels]]
-        
+
         else:
             raise ValueError(f"Unknown initialization method: {method}")
 
@@ -479,31 +479,31 @@ class GaussianMixtureModel:
         gaussian_components = GaussianComponents(
             weights, means, widths, self.selected_data, self.electron_dose
         )
-        
+
         if gaussian_components.has_failed:
             return [weights, means, widths], self._create_failed_scores()
-        
+
         current_log_likelihood = self._calculate_log_likelihood(gaussian_components.component_array)
         convergence_rate = 1
         iteration_count = 0
-        
+
         while (
             convergence_rate > self.convergence_tolerance
             and iteration_count < self.max_iterations
         ):
             gaussian_components.maximization_step(self.step_sizes, self.constraints)
-            
+
             if self._means_have_coincided(gaussian_components.means) or gaussian_components.has_failed:
                 break
-            
+
             new_log_likelihood = self._calculate_log_likelihood(gaussian_components.component_array)
             convergence_rate = abs(new_log_likelihood - current_log_likelihood) / abs(current_log_likelihood)
             current_log_likelihood = new_log_likelihood
             iteration_count += 1
-        
+
         if iteration_count == self.max_iterations:
             logging.info("GMM fitting did not converge within maximum iterations\n")
-        
+
         # Sort components by mean values
         final_weights, final_means, final_widths = [
             gaussian_components.weights, gaussian_components.means, gaussian_components.variances
@@ -511,11 +511,11 @@ class GaussianMixtureModel:
         sort_indices = np.argsort(final_means[:, 0])
         final_means = np.take_along_axis(final_means, np.expand_dims(sort_indices, -1), axis=0)
         final_weights = np.take_along_axis(final_weights, sort_indices, axis=0)
-        
+
         final_scores = self._calculate_information_criteria(
             gaussian_components.responsibilities, current_log_likelihood
         )
-        
+
         return [final_weights, final_means, final_widths], final_scores
 
     def import_coordinates(self, coordinate):
@@ -665,18 +665,18 @@ class GaussianMixtureModel:
             np.ndarray: Component probability array
         """
         normalization_factors = weights * np.prod(widths * 2 * np.pi, axis=-1) ** (-0.5)
-        
+
         if means.shape[1] == 2:
             squared_distances = np.sum(
-                (data_values - np.expand_dims(means, 1)) ** 2 
+                (data_values - np.expand_dims(means, 1)) ** 2
                 / np.expand_dims(widths, 1) / 2, axis=-1
             )
         else:
             squared_distances = np.squeeze(
-                (data_values - np.expand_dims(means, 1)) ** 2 
+                (data_values - np.expand_dims(means, 1)) ** 2
                 / np.expand_dims(widths, 1) / 2
             )
-        
+
         exponential_terms = np.exp(-squared_distances)
         component_array = normalization_factors.reshape((len(normalization_factors), 1)) * exponential_terms
         return component_array
@@ -707,32 +707,32 @@ class GaussianMixtureModel:
             scoring_methods = self.scoring_methods
         penalty_factor = 2
         num_components, num_data_points = responsibilities.shape
-        
+
         # Calculate number of parameters
         # Weights (minus 1 for constraint that weights sum to 1)
         num_weight_params = (self.step_sizes[0] != 0) * (num_components - 1)
-        
+
         # Means
         num_mean_params = num_components * self.num_dimensions
-        
+
         # Widths/Variances
         num_width_params = [1, num_components]  # [dimensions_per_component, num_components]
-        
+
         if "uni_width" in self.constraints:
             num_width_params[1] = 1  # Uniform width across components
-        
+
         if self.num_dimensions == 2:
             num_width_params[0] = 3  # 2x2 covariance matrix has 3 unique elements
             if ("45deg" in self.constraints) or ("no_cov" in self.constraints):
                 num_width_params[0] = 2  # Simplified covariance structure
-        
+
         total_params = num_weight_params + num_mean_params + (num_width_params[0] * num_width_params[1])
-        
+
         # Calculate entropy
         safe_responsibilities = responsibilities * safe_ln(responsibilities)
         safe_responsibilities[responsibilities == 0] = 0
         entropy = -np.sum(safe_responsibilities)
-        
+
         # Define scoring functions
         score_functions = {
             "aic": lambda: -2 * log_likelihood / self.num_dimensions + 2 * total_params,
@@ -752,17 +752,17 @@ class GaussianMixtureModel:
             "nllh": lambda: -log_likelihood,
             "en": lambda: entropy,
         }
-        
+
         calculated_scores = {}
         for method_name in scoring_methods:
             if method_name in score_functions:
                 calculated_scores[method_name] = score_functions[method_name]()
             else:
                 logging.warning(f"Unknown scoring method: {method_name}. Available methods: {list(score_functions.keys())}")
-        
+
         return calculated_scores
-        
-    def plot_interactive_gmm_selection(self, cross_sections, element_name="GMM", 
+
+    def plot_interactive_gmm_selection(self, cross_sections, element_name="GMM",
                                       save_results=False, interactive_selection=True):
         """Plot GMM fitting results with interactive component selection and colored areas.
         
@@ -779,7 +779,7 @@ class GaussianMixtureModel:
         import matplotlib.pyplot as plt
 
         try:
-            from matplotlib.widgets import Button, Slider
+            from matplotlib.widgets import Button, Slider  # noqa: F401  (availability probe)
         except ImportError:
             logging.warning("Interactive widgets not available. Using non-interactive mode.")
             interactive_selection = False
@@ -797,16 +797,16 @@ class GaussianMixtureModel:
                     "skipping interactive component-selection prompt.", backend,
                 )
                 interactive_selection = False
-        
+
         # Create color palette for components
         colors = plt.cm.Set3(np.linspace(0, 1, 12))  # Get 12 distinct colors
-        
+
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        
+
         # Plot histogram
-        n, bins, patches = ax1.hist(cross_sections.flatten(), bins=50, alpha=0.8, density=True, 
+        n, bins, patches = ax1.hist(cross_sections.flatten(), bins=50, alpha=0.8, density=True,
                                    color='lightgray', edgecolor='black', label='Data')
-        
+
         # Store plotting state
         plot_state = {
             'current_components': self.recommended_components,
@@ -818,45 +818,45 @@ class GaussianMixtureModel:
             'element_name': element_name,
             'plot_closed': False
         }
-        
+
         # Initial plot
         self._update_gmm_plot(plot_state)
-        
+
         # Plot information criteria
         self._plot_information_criteria(plot_state)
-        
+
         if interactive_selection:
             # Add interactive controls
             self._add_interactive_controls(fig, plot_state)
-            
+
             plt.tight_layout()
             plt.subplots_adjust(bottom=0.15)  # Make room for slider and controls
-            
+
             def on_close(event):
                 plot_state['plot_closed'] = True
-            
+
             fig.canvas.mpl_connect('close_event', on_close)
-            
+
             # Show plot and wait for user interaction
             plt.show(block=False)
-            
+
             # Wait for user to close the plot
             while not plot_state['plot_closed']:
                 plt.pause(0.1)
-            
+
             return plot_state['current_components']
         else:
             # Non-interactive mode
             plt.tight_layout()
-            
+
             if save_results:
                 filename = f'gmm_analysis_{element_name}.png'
                 plt.savefig(filename, dpi=300, bbox_inches='tight')
                 logging.info(f"GMM analysis plot saved as {filename}")
-            
+
             plt.show()
             return self.recommended_components
-    
+
     def _update_gmm_plot(self, plot_state):
         """Update the GMM plot with current component selection."""
         ax1 = plot_state['ax1']
@@ -864,131 +864,131 @@ class GaussianMixtureModel:
         current_components = plot_state['current_components']
         cross_sections = plot_state['cross_sections']
         element_name = plot_state['element_name']
-        
+
         # Simple approach: clear everything except the first collection (histogram) and redraw
         # Keep only the histogram (first collection)
         while len(ax1.lines) > 0:
             ax1.lines[0].remove()
         while len(ax1.collections) > 1:
             ax1.collections[-1].remove()
-        
+
         # Get current model parameters
         component_idx = current_components - 1
         weights = self.fit_result.weight[component_idx]
         means = self.fit_result.mean[component_idx]
         widths = self.fit_result.width[component_idx]
-        
+
         # Use cached x_range if available, otherwise create and cache it
         if 'x_range' not in plot_state:
             plot_state['x_range'] = np.linspace(cross_sections.min(), cross_sections.max(), 300)
         x_range = plot_state['x_range']
-        
+
         mixture_pdf = np.zeros_like(x_range)
-        
+
         # Plot each component
-        for i, (w, m, var) in enumerate(zip(weights.flatten(), means.flatten(), widths.flatten())):
+        for i, (w, m, var) in enumerate(zip(weights.flatten(), means.flatten(), widths.flatten(), strict=False)):
             std = np.sqrt(var)
             component_pdf = w * (1 / (std * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x_range - m) / std) ** 2)
             mixture_pdf += component_pdf
-            
+
             # Plot component curve
             color = colors[i % len(colors)]
-            ax1.plot(x_range, component_pdf, '--', color=color, linewidth=2, alpha=0.8, 
+            ax1.plot(x_range, component_pdf, '--', color=color, linewidth=2, alpha=0.8,
                     label=f'Component {i+1} (N={i+1})')
-            
+
             # Fill area under curve with transparent color
             ax1.fill_between(x_range, 0, component_pdf, color=color, alpha=0.8)
-        
+
         # Plot mixture
         ax1.plot(x_range, mixture_pdf, 'r-', linewidth=3, label='GMM Fit')
-        
+
         # Get the handles and labels from the plot
         legend_result = ax1.get_legend_handles_labels()
         if len(legend_result) == 2:
-            handles, labels = legend_result
+            handles, _ = legend_result
         else:
-            handles, labels = [], []
-        
+            handles, _ = [], []
+
         items_per_column = 5 # Decide how many items you want per column
 
         # Calculate the number of columns needed
         num_columns = np.ceil(len(handles) / items_per_column) if handles else 1
-        
+
         # Set labels and title
         ax1.set_xlabel('Scattering Cross-Section')
         ax1.set_ylabel('Probability Density')
         ax1.legend(loc='upper right', ncol=num_columns, fontsize='small')
         ax1.grid(True, alpha=0.8)
-        
+
         # Update title to show current selection
         recommended_text = " (Recommended)" if current_components == self.recommended_components else ""
         ax1.set_title(f'GMM Fitting - {element_name} ({current_components} components{recommended_text})')
-        
+
         # Don't call draw here - let the main callback handle it
-    
+
     def _plot_information_criteria(self, plot_state):
         """Plot information criteria for model selection."""
         ax2 = plot_state['ax2']
         current_components = plot_state['current_components']
-        
+
         # Clear and redraw the whole plot each time for simplicity
         ax2.clear()
-        
+
         scores = self.fit_result.score
         component_range = np.arange(1, len(scores['icl']) + 1)
-        
+
         # Plot the curves
         ax2.plot(component_range, scores['icl'], 'o-', linewidth=2, markersize=8, label='ICL', color='blue')
         if 'aic' in scores:
             ax2.plot(component_range, scores['aic'], 's-', linewidth=2, markersize=6, label='AIC', color='green')
         if 'bic' in scores:
             ax2.plot(component_range, scores['bic'], '^-', linewidth=2, markersize=6, label='BIC', color='orange')
-        
+
         # Highlight current selection
         current_score = scores['icl'][current_components - 1]
-        ax2.plot(current_components, current_score, 'ro', label='Your Choice',markersize=15, 
+        ax2.plot(current_components, current_score, 'ro', label='Your Choice',markersize=15,
                 markerfacecolor='lightgreen', markeredgecolor='darkred', markeredgewidth=3, zorder=10)
-        
-        # Highlight recommended selection  
+
+        # Highlight recommended selection
         recommended_score = scores['icl'][self.recommended_components - 1]
         ax2.plot(self.recommended_components, recommended_score, 'go', label='First Local Minimum', markersize=12,
                 markerfacecolor='red', markeredgecolor='darkgreen', markeredgewidth=2, zorder=9)
-        
+
         # Add vertical line for current selection
         ax2.axvline(self.recommended_components, color='red', linestyle='--', alpha=0.8, linewidth=2)
-        
+
         # Set labels and formatting
         ax2.set_xlabel('Number of Components')
         ax2.set_ylabel('Information Criterion')
         ax2.set_title('Model Selection')
         ax2.legend()
         ax2.grid(True, alpha=0.8)
-        
+
         # Don't call draw here - let the main callback handle it
-    
+
     def _add_interactive_controls(self, fig, plot_state):
-        """Add interactive controls to the plot.""" 
+        """Add interactive controls to the plot."""
         try:
-            from matplotlib.widgets import Button, Slider
+            from matplotlib.widgets import Button, Slider  # noqa: F401  (availability probe)
         except ImportError:
             logging.warning("Interactive widgets not available.")
             return
-            
+
         # Create component selection slider
         max_components = len(self.fit_result.score['icl'])
-        
+
         # Add slider for component selection
         ax_slider = plt.axes([0.2, 0.02, 0.5, 0.03])
         slider = Slider(
-            ax_slider, 
-            'Components', 
-            1, 
-            max_components, 
+            ax_slider,
+            'Components',
+            1,
+            max_components,
             valinit=plot_state['current_components'],
             valstep=1,
             valfmt='%d'
         )
-        
+
         # Add debugging and ensure slider works
         def on_component_change(val):
             new_components = int(val)
@@ -1000,46 +1000,50 @@ class GaussianMixtureModel:
                     # Update both plots
                     self._update_gmm_plot(plot_state)
                     self._plot_information_criteria(plot_state)
-                    
+
                     # Single draw call at the end
                     fig.canvas.draw()
                     print("Plot update completed")  # Debug print
-                except Exception as e:
-                    print(f"Error updating plots: {e}")  # Debug print
+                except (ValueError, RuntimeError, KeyError, IndexError) as e:
+                    # Conservative set of errors realistically raised while
+                    # re-fitting the GMM and redrawing the plots.
+                    logging.warning(
+                        f"Error updating plots ({type(e).__name__}): {e}"
+                    )
                     import traceback
                     traceback.print_exc()
-        
+
         slider.on_changed(on_component_change)
-        
+
         # Store slider reference in plot_state so it doesn't get garbage collected
         plot_state['slider'] = slider
-        
+
         # # Add accept button
         # ax_accept = plt.axes([0.85, 0.02, 0.1, 0.05])
         # accept_button = Button(ax_accept, 'Accept', color='lightgreen', hovercolor='green')
-        
+
         # def on_accept(event):
         #     plt.close(fig)
-        
+
         # accept_button.on_clicked(on_accept)
-        
+
         # # Add reset to recommendation button
         # ax_reset = plt.axes([0.02, 0.02, 0.15, 0.05])
         # reset_button = Button(ax_reset, 'Use Recommended', color='lightyellow', hovercolor='yellow')
-        
+
         # def on_reset(event):
         #     slider.reset()
         #     slider.set_val(self.recommended_components)
         #     plot_state['current_components'] = self.recommended_components
         #     self._update_gmm_plot(plot_state)
         #     self._plot_information_criteria(plot_state)
-        
+
         # reset_button.on_clicked(on_reset)
-        
+
         # Add text showing recommendation
-        fig.text(0.5, 0.08, f'Recommended: {self.recommended_components} components (first local minimum)', 
+        fig.text(0.5, 0.08, f'Recommended: {self.recommended_components} components (first local minimum)',
                 ha='center', va='bottom', fontsize=12, bbox=dict(boxstyle="round,pad=0.3", facecolor="lightyellow"))
-    
+
     def _create_failed_scores(self):
         """Create scores dictionary for failed fitting attempts.
         
@@ -1065,13 +1069,13 @@ class GaussianMixtureModel:
             for dim_idx in range(self.num_dimensions):
                 constraint_mask[:, dim_idx, dim_idx] = 1
             widths = widths * constraint_mask
-        
+
         if ("45deg" in self.constraints) and self.num_dimensions == 2:
             # Force diagonal covariance with equal variances
             max_variance = np.max([widths[:, 0, 0], widths[:, 1, 1]])
             for dim_idx in range(self.num_dimensions):
                 widths[:, dim_idx, dim_idx] = max_variance
-        
+
         return weights, means, widths
 
     @staticmethod
@@ -1226,7 +1230,7 @@ class GaussianComponents:
     This class handles the expectation and maximization steps for
     individual Gaussian components during GMM fitting.
     """
-    
+
     def __init__(self, weights, means, variances, data_values, electron_dose=None):
         """Initialize Gaussian components.
         
@@ -1245,12 +1249,12 @@ class GaussianComponents:
         self.num_data_points, self.num_dimensions = self.data_values.shape
         self.electron_dose = electron_dose
         self.has_failed = False
-        
+
         self._responsibilities = None
         self._responsibility_sums = None
         self._expanded_responsibilities = None
         self._expanded_responsibility_sums = None
-        
+
         self._calculate_component_probabilities()
 
     def _calculate_component_probabilities(self):
@@ -1258,12 +1262,12 @@ class GaussianComponents:
         expanded_variances = np.expand_dims(self.variances, axis=1)
         expanded_means = np.expand_dims(self.means, 1)
         expanded_weights = np.expand_dims(self.weights, 1)
-        
+
         component_probabilities = self._compute_gaussian_probabilities(
             expanded_variances, expanded_means, expanded_weights, self.data_values
         )
         self._perform_expectation_step(component_probabilities)
-        
+
         if not self.has_failed:
             self.component_array = component_probabilities
 
@@ -1282,16 +1286,16 @@ class GaussianComponents:
         """
         num_dimensions = means.shape[-1]
         squared_distances = (data_values - means) ** 2
-        
+
         if (variances == 0).any():
             logging.warning("Zero variance detected in Gaussian components")
-        
+
         gaussian_probabilities = (
             (2 * np.pi) ** (-num_dimensions / 2)
             * np.prod(variances, axis=-1) ** (-0.5)
             * np.exp(-0.5 * (squared_distances / variances).sum(axis=-1))
         )
-        
+
         return gaussian_probabilities * weights
 
     @property
@@ -1315,7 +1319,7 @@ class GaussianComponents:
         """
         total_probabilities = np.sum(component_probabilities, axis=0)
         self.responsibilities = component_probabilities / total_probabilities
-        
+
         # Check for degenerate components (very low responsibility)
         if (self._responsibility_sums < 1).any():
             self.has_failed = True
@@ -1363,7 +1367,7 @@ class GaussianComponents:
         """
         weighted_data = (self._expanded_responsibilities * self.data_values).sum(1)
         new_means = weighted_data / self._expanded_responsibility_sums
-        
+
         # Apply step sizes (may be different per dimension)
         step_array = np.array(step_sizes[:self.num_dimensions])
         self.means = (new_means - self.means) * step_array + self.means
@@ -1378,7 +1382,7 @@ class GaussianComponents:
         expanded_means = np.expand_dims(self.means, 1)
         expanded_variances = np.expand_dims(self.variances, 1)
         squared_distances = (self.data_values - expanded_means) ** 2
-        
+
         if "uni_width" in constraints:
             if "dose_width" in constraints:
                 dose_variances = expanded_means / self.electron_dose
@@ -1387,7 +1391,7 @@ class GaussianComponents:
                 ).sum((0, 1)) / (self._expanded_responsibilities / expanded_variances**2).sum((0, 1))
                 individual_variance[individual_variance < 0] = 0
                 new_variances = dose_variances.sum(1) + np.expand_dims(individual_variance, 0)
-                
+
             elif "dose_width_simplified" in constraints:
                 dose_variances = expanded_means / self.electron_dose
                 individual_variance = (
@@ -1395,12 +1399,12 @@ class GaussianComponents:
                 ).sum((0, 1)) / self.num_data_points
                 individual_variance[individual_variance < 0] = 0
                 new_variances = dose_variances.sum(1) + np.expand_dims(individual_variance, 0)
-                
+
             elif "dose_width_fit" in constraints:
                 dose_variances = expanded_means / self.electron_dose
                 individual_variance = (expanded_variances - dose_variances).mean((0, 1))
                 individual_variance[individual_variance < np.finfo("double").eps] = np.finfo("double").eps
-                
+
                 # For now, use simplified approach - full optimization would require minimize import
                 new_variances = dose_variances.sum(1) + np.expand_dims(individual_variance, 0)
             else:
@@ -1411,8 +1415,8 @@ class GaussianComponents:
             new_variances = (
                 self._expanded_responsibilities * squared_distances
             ).sum(1) / self._expanded_responsibility_sums
-        
-        # Apply step sizes (may be different per dimension) 
+
+        # Apply step sizes (may be different per dimension)
         step_array = np.array(step_sizes[:self.num_dimensions])
         self.variances = (new_variances - self.variances) * step_array + self.variances
 

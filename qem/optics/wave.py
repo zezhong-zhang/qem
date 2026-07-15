@@ -9,12 +9,12 @@ they're not on the optimisation hot path; for PSFs and fitting use
 from __future__ import annotations
 
 import copy
-import math
 
 import numpy as np
 import torch
 
-from qem.optics import Aberrations, chi as _chi, wavelength, wavev
+from qem.optics import Aberrations, wavev
+from qem.optics import chi as _chi
 from qem.processing import q_space_array
 
 
@@ -246,7 +246,7 @@ def simulation_result_with_Cc(
                         average[k] = average[k] + result[k] / ndf
         else:
             average = ([x / ndf for x in result] if average is None
-                       else [a + x / ndf for a, x in zip(average, result)])
+                       else [a + x / ndf for a, x in zip(average, result, strict=False)])
     return average
 
 

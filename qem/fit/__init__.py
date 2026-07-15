@@ -10,16 +10,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .background import Background, estimate_background
-from .solver import (
-    build_local_peaks,
-    build_sparse_matrix,
-    solve_system,
-    validate_params,
-    validate_solution,
-    process_height_scaling,
-    process_background,
-    linear_estimator,
-)
 from .model import GaussianKernel, GaussianModel, ImageModel, LorentzianModel, VoigtModel
 from .potential import (
     ConvolutionImageModel,
@@ -30,8 +20,17 @@ from .potential import (
 )
 from .ptycho import PtychoOptimizer
 from .refine import calculate_center_of_mass, fit_gaussian, gauss2d
+from .solver import (
+    build_local_peaks,
+    build_sparse_matrix,
+    linear_estimator,
+    process_background,
+    process_height_scaling,
+    solve_system,
+    validate_params,
+    validate_solution,
+)
 from .voronoi import voronoi_integrate, voronoi_point_record
-
 
 # Lazy attributes — these all transitively require fitter.py
 # (ConvFit / AdfConvFit / PtychoFit subclass Fitter), so we defer

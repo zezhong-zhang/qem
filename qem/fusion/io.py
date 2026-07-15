@@ -4,14 +4,13 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Union
 
 import numpy as np
 
 from .route_b_joint_ls import FusionResult
 
 
-def save_fusion_result(result: FusionResult, path: Union[str, Path]) -> None:
+def save_fusion_result(result: FusionResult, path: str | Path) -> None:
     """Save a fusion result to a compressed ``.npz`` file."""
 
     target = Path(path)
@@ -24,7 +23,7 @@ def save_fusion_result(result: FusionResult, path: Union[str, Path]) -> None:
     )
 
 
-def load_fusion_result(path: Union[str, Path]) -> FusionResult:
+def load_fusion_result(path: str | Path) -> FusionResult:
     """Load a fusion result saved by :func:`save_fusion_result`."""
 
     with np.load(str(path), allow_pickle=True) as data:

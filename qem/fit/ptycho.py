@@ -11,28 +11,24 @@ This implementation follows the PyTorch optimization pattern used in QEM
 (Adam, AdamW, SGD optimizers).
 """
 
-import copy
-from dataclasses import dataclass
-from typing import Optional, Tuple, Union, List, Callable
 
 import numpy as np
 import torch
 
+from qem.fit.potential import (
+    PointPotentialModel,
+    correlation_coefficient,
+    normalized_root_mean_square_error,
+)
 from qem.optics import (
     Aberrations,
     Grid,
     Probe,
     adf_psf,
+    calculate_psf_width,
     epie_psf,
     icom_psf,
     ssb_psf,
-)
-from qem.optics import calculate_psf_width
-from qem.fit.potential import (
-    PointPotentialModel,
-    correlation_coefficient,
-    normalized_root_mean_square_error,
-    calculate_residual,
 )
 from qem.utils.tensors import to_numpy, to_tensor
 
@@ -100,7 +96,9 @@ def _fft_convolve_same(image: torch.Tensor, kernel: torch.Tensor) -> torch.Tenso
 # OptimizationResult was duplicated here and in convolve.py (with slightly
 # different field names: this version had `phases`, convolve's has `values`
 # with a `phases` alias). Single source of truth lives in convolve.py.
-from qem.fit.convolve import OptimizationResult  # noqa: E402  (top-of-file import would create a cycle)
+from qem.fit.convolve import (
+    OptimizationResult,  # noqa: E402  (top-of-file import would create a cycle)
+)
 
 
 class ConvolutionModel(torch.nn.Module):
@@ -266,11 +264,11 @@ class PtychoOptimizer:
         alpha: float = 20.0,
         eV: float = 60e3,
         df: float = 0.0,
-        aberrations: Optional[list] = None,
-        detector_inner: Optional[float] = None,
-        detector_outer: Optional[float] = None,
-        high_pass_cutoff: Optional[float] = None,
-        psf_kernel: Optional[np.ndarray] = None,
+        aberrations: list | None = None,
+        detector_inner: float | None = None,
+        detector_outer: float | None = None,
+        high_pass_cutoff: float | None = None,
+        psf_kernel: np.ndarray | None = None,
     ):
         """
         Initialize the optimizer.
@@ -327,10 +325,10 @@ class PtychoOptimizer:
         alpha: float,
         eV: float,
         df: float,
-        aberrations: Optional[list],
-        detector_inner: Optional[float],
-        detector_outer: Optional[float],
-        high_pass_cutoff: Optional[float],
+        aberrations: list | None,
+        detector_inner: float | None,
+        detector_outer: float | None,
+        high_pass_cutoff: float | None,
     ) -> np.ndarray:
         """Build a real-space PSF for the requested STEM imaging mode."""
         if aberrations is None or len(aberrations) == 0:
@@ -450,7 +448,6 @@ class PtychoOptimizer:
         result : OptimizationResult
             Optimization results
         """
-        n_atoms = len(initial_phases)
         initial_positions = np.asarray(initial_positions)
         initial_phases = np.asarray(initial_phases)
 

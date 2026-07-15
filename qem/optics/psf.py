@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import math
 import os
-from typing import Optional
 
 import numpy as np
 import torch
@@ -40,7 +39,6 @@ from .chi import chi
 from .envelopes import partial_coherence_envelope
 from .grid import Grid
 from .probe import Probe, probe_wave_q
-
 
 # torch.compile gating — skip on MPS (graph compilation not supported) and
 # respect QEM_COMPILE=0 opt-out.
@@ -333,7 +331,7 @@ def calculate_psf_width(psf: np.ndarray, dx: float = 1.0) -> float:
 
 def extract_psf_from_atom_image(
     atom_image: np.ndarray,
-    background: Optional[np.ndarray] = None,
+    background: np.ndarray | None = None,
 ) -> np.ndarray:
     """Estimate a PSF from a single isolated atom in an image.
 

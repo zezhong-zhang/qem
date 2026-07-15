@@ -1,8 +1,6 @@
 from os.path import exists as file_exists
 
-import numpy as np
 import scipy.io as sio
-from PIL import Image
 
 
 def read_statstem(filename):

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import logging
 from contextlib import nullcontext
-from typing import Any, Optional
 
 import numpy as np
 import torch
@@ -29,6 +28,10 @@ from qem.utils.exceptions import DataError, ParameterError
 from qem.utils.tensors import release_memory, to_numpy, to_tensor
 
 log = logging.getLogger(__name__)
+
+# Local render window half-width, in units of the peak width (σ). 5σ
+# captures ~100% of a Gaussian's mass while keeping the window compact.
+PEAK_WINDOW_SIGMA_EXTENT = 5
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +60,7 @@ def build_local_peaks(model, params: dict, same_width: bool, atom_types):
     """
     pos_x, pos_y = params["pos_x"], params["pos_y"]
     width = params["width"]
-    ratio = params.get("ratio", None)
+    ratio = params.get("ratio")
 
     # All tensors share pos_x's device — params can come from any
     # accelerator (MPS / CUDA / CPU). atom_types is sometimes a numpy
@@ -79,7 +82,7 @@ def build_local_peaks(model, params: dict, same_width: bool, atom_types):
     # width, position; not on height).
     unit_height = torch.ones_like(pos_x)
 
-    window_size = (torch.max(width) * 5).to(dtype=torch.int32)
+    window_size = (torch.max(width) * PEAK_WINDOW_SIGMA_EXTENT).to(dtype=torch.int32)
     x = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32, device=device)
     y = torch.arange(-window_size, window_size + 1, 1, dtype=torch.float32, device=device)
     local_x, local_y = torch.meshgrid(x, y, indexing="xy")
@@ -106,7 +109,7 @@ def build_sparse_matrix(
     num_coordinates: int,
     x_grid,
     y_grid,
-    background_2d: Optional[np.ndarray] = None,
+    background_2d: np.ndarray | None = None,
 ) -> coo_matrix:
     """Stack ``(peak, x, y)`` into a scipy ``coo_matrix``.
 
@@ -217,7 +220,7 @@ def solve_system(
         b = np.concatenate([b, np.zeros(n, dtype=np.float32)])
     try:
         return lsqr(A, b)[0].astype(np.float32)
-    except Exception as exc:
+    except (RuntimeError, ValueError, np.linalg.LinAlgError) as exc:
         raise DataError(f"lsqr failed: {exc}") from exc
 
 
@@ -349,7 +352,7 @@ def process_background(
 
 def linear_estimator(
     self,
-    params: Optional[dict] = None,
+    params: dict | None = None,
     *,
     non_negative: bool = True,
     ridge: float = 1e-4,
@@ -404,10 +407,17 @@ def linear_estimator(
             return _run()
         try:
             return _run()
-        except Exception as exc:
+        # Conservative set covering the linear-estimation path: QEM solver
+        # failures (DataError/ParameterError), bad shapes/values/indices,
+        # and LinAlgError from the LS solve.
+        except (
+            DataError, ParameterError, RuntimeError, ValueError, IndexError,
+            np.linalg.LinAlgError,
+        ) as exc:
             log.warning(
-                "linear_estimator failed in best_effort mode; "
-                "returning input parameters unchanged: %s", exc,
+                "linear_estimator failed in best_effort mode (%s); "
+                "returning input parameters unchanged: %s",
+                type(exc).__name__, exc,
             )
             return params
 

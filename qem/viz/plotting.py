@@ -3,7 +3,6 @@ Plotting utilities for QEM visualization.
 """
 
 import matplotlib.pyplot as plt
-import numpy as np
 
 
 def plot_image(image, x_labels, y_labels, colormap="gray", colorbar=True):

@@ -28,7 +28,7 @@ def zoom_on_pixel(input_array, coordinates, upsample_factor=1, output_shape=None
         output_shape = input_shape
 
     coordinate_grid = np.zeros((input_array.ndim,) + tuple(output_shape), dtype='float')
-    for dim, (_input_size, output_size, target) in enumerate(zip(input_shape, output_shape, coordinates)):
+    for dim, (_input_size, output_size, target) in enumerate(zip(input_shape, output_shape, coordinates, strict=False)):
         zoom_range = np.linspace(
             target - (output_size - 1) / (2 * upsample_factor),
             target + (output_size - 1) / (2 * upsample_factor),
@@ -71,7 +71,7 @@ def zoom_nd(input_array, offsets=(), center_convention=float, **kwargs):
 
     center_coordinates = [
         center_convention((size - 1) / 2) + offset
-        for size, offset in zip(input_array.shape, offsets)
+        for size, offset in zip(input_array.shape, offsets, strict=False)
     ]
 
     return zoom_on_pixel(input_array, center_coordinates, **kwargs)

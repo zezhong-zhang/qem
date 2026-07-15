@@ -10,7 +10,6 @@ For small tilt angles, the shift is approximately:
 where z is the height/thickness of the atomic layer.
 """
 
-from typing import Optional, Tuple, Union
 
 import numpy as np
 
@@ -24,7 +23,7 @@ class SampleTilt:
         tilt_x: float,
         tilt_y: float,
         thickness: float = 6.0,
-        center: Optional[Tuple[float, float]] = None,
+        center: tuple[float, float] | None = None,
     ) -> np.ndarray:
         """
         Apply sample tilt to 2D projected positions.
@@ -131,7 +130,7 @@ class SampleTilt:
         tilt_x: float,
         tilt_y: float,
         thickness: float = 6.0,
-        center: Optional[Tuple[float, float]] = None,
+        center: tuple[float, float] | None = None,
     ) -> np.ndarray:
         """
         Apply inverse tilt to recover untilted positions.
@@ -164,8 +163,8 @@ class SampleTilt:
         positions_ref: np.ndarray,
         positions_observed: np.ndarray,
         thickness: float = 6.0,
-        initial_tilt: Tuple[float, float] = (0.0, 0.0),
-    ) -> Tuple[float, float, float]:
+        initial_tilt: tuple[float, float] = (0.0, 0.0),
+    ) -> tuple[float, float, float]:
         """
         Find the tilt that best maps reference positions to observed positions.
 
@@ -248,7 +247,7 @@ class SampleTilt:
 def tilt_from_affine(
     affine_matrix: np.ndarray,
     thickness: float = 6.0,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """
     Estimate tilt angles from an affine transformation matrix.
 
@@ -267,9 +266,7 @@ def tilt_from_affine(
         Estimated tilt around y-axis in mrad
     """
     # Extract translation components
-    if affine_matrix.shape == (2, 3):
-        tx, ty = affine_matrix[0, 2], affine_matrix[1, 2]
-    elif affine_matrix.shape == (3, 3):
+    if affine_matrix.shape == (2, 3) or affine_matrix.shape == (3, 3):
         tx, ty = affine_matrix[0, 2], affine_matrix[1, 2]
     else:
         raise ValueError(f"Unexpected affine matrix shape: {affine_matrix.shape}")

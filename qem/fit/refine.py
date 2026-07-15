@@ -50,7 +50,7 @@ def calculate_center_of_mass(arr):
 
 
 @jit(nopython=True)
-def gauss2d(xy_meshgrid: np.ndarray, amplitude: float, x0: float, y0: float, 
+def gauss2d(xy_meshgrid: np.ndarray, amplitude: float, x0: float, y0: float,
             sigma_x: float, sigma_y: float, theta: float, offset: float) -> np.ndarray:
     """2D Gaussian function for fitting.
     

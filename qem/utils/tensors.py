@@ -13,7 +13,6 @@ from typing import Any
 import numpy as np
 import torch
 
-
 _DTYPE_MAP: dict[str, torch.dtype] = {
     "float32": torch.float32,
     "float64": torch.float64,

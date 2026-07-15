@@ -1,4 +1,4 @@
-import torch
+
 """Convolution-based fitting for STEM images.
 
 This module implements correlation-based optimization for different STEM imaging modes:
@@ -20,7 +20,6 @@ native PyTorch optimization.
 """
 
 from dataclasses import dataclass
-from typing import Optional, Tuple, Union, List
 
 import numpy as np
 
@@ -29,12 +28,12 @@ from qem.optics import (
     Grid,
     Probe,
     adf_psf,
+    calculate_psf_width,
     epie_psf,
     focal_spread_from_chromatic,
     icom_psf,
     ssb_psf,
 )
-from qem.optics import calculate_psf_width
 
 
 # Light-weight replacement for the legacy ProbeParameters dataclass.
@@ -125,15 +124,13 @@ def create_probe_parameters(**kwargs) -> ProbeParameters:
         )
         kwargs["aberrations"] = ab
     return ProbeParameters(**kwargs)
+from qem.fit.fitter import Fitter
 from qem.fit.potential import (
-    PointPotentialModel,
     ConvolutionImageModel,
     correlation_coefficient,
     normalized_root_mean_square_error,
-    calculate_residual,
 )
-from qem.fit.fitter import Fitter
-from qem.utils.tensors import to_numpy, to_tensor
+from qem.utils.tensors import to_numpy
 
 
 @dataclass
@@ -149,7 +146,7 @@ class OptimizationResult:
     psf_width: float  # PSF width used
     n_iterations: int  # Number of iterations performed
     converged: bool  # Whether optimization converged
-    history: Optional[dict]  # Optimization history
+    history: dict | None  # Optimization history
 
     @property
     def phases(self) -> np.ndarray:
@@ -220,9 +217,9 @@ class ConvFit(Fitter):
         image: np.ndarray,
         dx: float = 1.0,
         units: str = "A",
-        elements: List[str] = None,
+        elements: list[str] = None,
         ctf_type: str = "SSB",
-        probe_params: Union[ProbeParameters, dict] = None,
+        probe_params: ProbeParameters | dict = None,
         psf_kernel: np.ndarray = None,
         **kwargs
     ):
@@ -315,7 +312,7 @@ class ConvFit(Fitter):
     def init_params_from_positions(
         self,
         positions: np.ndarray,
-        initial_values: Optional[np.ndarray] = None,
+        initial_values: np.ndarray | None = None,
         background: float = 0.0,
     ) -> dict:
         """
@@ -364,7 +361,7 @@ class ConvFit(Fitter):
     def fit_positions(
         self,
         positions: np.ndarray,
-        initial_values: Optional[np.ndarray] = None,
+        initial_values: np.ndarray | None = None,
         maxiter: int = 100,
         step_size: float = 0.001,
         optimizer: str = "adam",
@@ -502,9 +499,9 @@ class PtychoFit(ConvFit):
         image: np.ndarray,
         dx: float = 1.0,
         units: str = "A",
-        elements: List[str] = None,
+        elements: list[str] = None,
         ctf_type: str = "SSB",
-        probe_params: Union[ProbeParameters, dict] = None,
+        probe_params: ProbeParameters | dict = None,
         psf_kernel: np.ndarray = None,
         **kwargs
     ):
@@ -568,7 +565,7 @@ class PtychoFit(ConvFit):
     def fit_positions(
         self,
         positions: np.ndarray,
-        initial_phases: Optional[np.ndarray] = None,
+        initial_phases: np.ndarray | None = None,
         maxiter: int = 100,
         step_size: float = 0.001,
         optimizer: str = "adam",
@@ -651,11 +648,11 @@ class AdfConvFit(ConvFit):
         detector_inner: float,
         detector_outer: float,
         df: float = 0.0,
-        aberrations: Optional[list] = None,
+        aberrations: list | None = None,
         dx: float = 1.0,
         units: str = "A",
-        elements: List[str] = None,
-        probe_params: Union[ProbeParameters, dict] = None,
+        elements: list[str] = None,
+        probe_params: ProbeParameters | dict = None,
         **kwargs
     ):
         """
@@ -711,7 +708,7 @@ class AdfConvFit(ConvFit):
     def fit_positions(
         self,
         positions: np.ndarray,
-        initial_intensities: Optional[np.ndarray] = None,
+        initial_intensities: np.ndarray | None = None,
         maxiter: int = 100,
         step_size: float = 0.001,
         optimizer: str = "adam",
@@ -766,11 +763,11 @@ class AdfConvFit(ConvFit):
 def fit_ssb_ptychography(
     image: np.ndarray,
     positions: np.ndarray,
-    initial_phases: Optional[np.ndarray] = None,
+    initial_phases: np.ndarray | None = None,
     alpha: float = 20.0,
     eV: float = 60e3,
     df: float = 0.0,
-    aberrations: Optional[list] = None,
+    aberrations: list | None = None,
     maxiter: int = 100,
     step_size: float = 0.001,
     verbose: bool = True,
@@ -842,7 +839,7 @@ def fit_ssb_ptychography(
 def fit_adf_image(
     image: np.ndarray,
     positions: np.ndarray,
-    initial_intensities: Optional[np.ndarray] = None,
+    initial_intensities: np.ndarray | None = None,
     alpha: float = 20.0,
     eV: float = 60e3,
     detector_inner: float = 50,

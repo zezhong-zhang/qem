@@ -35,9 +35,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any
 
-import numpy as np
 import torch
 
 from qem.utils.tensors import to_numpy, to_tensor
@@ -190,7 +188,6 @@ def fit_per_atom_varpro(
     from tqdm.auto import tqdm
     device = fitter.device
     image_t = fitter.image_tensor.to(device)
-    H, W = int(fitter.ny), int(fitter.nx)
 
     pos_x = fitter.params["pos_x"].detach().clone().to(device)
     pos_y = fitter.params["pos_y"].detach().clone().to(device)

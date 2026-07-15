@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 import scipy.io as sio
@@ -21,7 +21,7 @@ def _as_float_array(data: np.ndarray, name: str) -> np.ndarray:
     return arr
 
 
-def _axis_values(signal, axis_index: int = -1) -> Optional[np.ndarray]:
+def _axis_values(signal, axis_index: int = -1) -> np.ndarray | None:
     try:
         axis = signal.axes_manager.signal_axes[axis_index]
         return axis.axis.astype(np.float64)
@@ -29,7 +29,7 @@ def _axis_values(signal, axis_index: int = -1) -> Optional[np.ndarray]:
         return None
 
 
-def _load_hspy(path: Path, lazy: bool = False) -> Tuple[np.ndarray, Optional[np.ndarray], object]:
+def _load_hspy(path: Path, lazy: bool = False) -> tuple[np.ndarray, np.ndarray | None, object]:
     try:
         import hyperspy.api as hs
     except ImportError as exc:
@@ -52,7 +52,7 @@ def _normalize_columns(matrix: np.ndarray) -> np.ndarray:
 def _gaussian_reference_from_calibration(
     calibration_path: Path,
     elements: Sequence[str],
-    energy_axis: Optional[np.ndarray],
+    energy_axis: np.ndarray | None,
     channels: int,
 ) -> np.ndarray:
     mat = sio.loadmat(str(calibration_path), simplify_cells=True)
@@ -113,14 +113,14 @@ class MultiModalDataset:
     """
 
     adf: np.ndarray
-    edx: Optional[np.ndarray] = None
-    eels: Optional[np.ndarray] = None
-    elements: List[str] = field(default_factory=list)
-    edx_reference: Optional[np.ndarray] = None
-    eels_reference: Optional[np.ndarray] = None
-    edx_energy: Optional[np.ndarray] = None
-    eels_energy: Optional[np.ndarray] = None
-    metadata: Dict[str, object] = field(default_factory=dict)
+    edx: np.ndarray | None = None
+    eels: np.ndarray | None = None
+    elements: list[str] = field(default_factory=list)
+    edx_reference: np.ndarray | None = None
+    eels_reference: np.ndarray | None = None
+    edx_energy: np.ndarray | None = None
+    eels_energy: np.ndarray | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.adf = _as_float_array(self.adf, "adf")
@@ -150,7 +150,7 @@ class MultiModalDataset:
                 raise DataError("eels_reference column count must match elements")
 
     @property
-    def spatial_shape(self) -> Tuple[int, int]:
+    def spatial_shape(self) -> tuple[int, int]:
         return tuple(self.adf.shape)
 
     @classmethod
@@ -158,8 +158,8 @@ class MultiModalDataset:
         cls,
         adf: np.ndarray,
         chemical_maps: Mapping[str, np.ndarray],
-        elements: Optional[Sequence[str]] = None,
-    ) -> "MultiModalDataset":
+        elements: Sequence[str] | None = None,
+    ) -> MultiModalDataset:
         """
         Build a dataset from tutorial-style elemental maps and ADF.
 
@@ -195,12 +195,12 @@ class MultiModalDataset:
         adf_file: str = "adf_aligned.hspy",
         edx_file: str = "edx_aligned.hspy",
         eels_high_loss_file: str = "eels_hl_aligned_bin.hspy",
-        eels_low_loss_file: Optional[str] = None,
-        edx_calibration: Optional[str] = "edx_calibration.mat",
-        eels_reference: Optional[str] = "eels_element_maps.mat",
+        eels_low_loss_file: str | None = None,
+        edx_calibration: str | None = "edx_calibration.mat",
+        eels_reference: str | None = "eels_element_maps.mat",
         adf_reducer: str = "mean",
         lazy: bool = False,
-    ) -> "MultiModalDataset":
+    ) -> MultiModalDataset:
         """
         Load pre-aligned HSPY files and optional calibration references.
 
@@ -252,13 +252,13 @@ class MultiModalDataset:
         cls,
         concentrations: np.ndarray,
         elements: Sequence[str],
-        edx_reference: Optional[np.ndarray] = None,
-        eels_reference: Optional[np.ndarray] = None,
-        adf_weights: Optional[Iterable[float]] = None,
+        edx_reference: np.ndarray | None = None,
+        eels_reference: np.ndarray | None = None,
+        adf_weights: Iterable[float] | None = None,
         gamma: float = 1.6,
         noise: float = 0.0,
-        random_state: Optional[int] = None,
-    ) -> "MultiModalDataset":
+        random_state: int | None = None,
+    ) -> MultiModalDataset:
         """Create a synthetic dataset for examples and tests."""
 
         conc = _as_float_array(concentrations, "concentrations")

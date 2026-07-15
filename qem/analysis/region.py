@@ -1,13 +1,14 @@
-from dataclasses import dataclass, field
-from typing import Optional
-import numpy as np
-from qem.analysis.crystal_analyzer import CrystalAnalyzer
-from matplotlib.path import Path
-from qem.analysis.atomic_column import AtomicColumns
-import matplotlib.pyplot as plt
-from qem.viz.color import get_unique_colors
-from ase.visualize import view
 import logging
+from dataclasses import dataclass, field
+
+import matplotlib.pyplot as plt
+import numpy as np
+from ase.visualize import view
+from matplotlib.path import Path
+
+from qem.analysis.atomic_column import AtomicColumns
+from qem.analysis.crystal_analyzer import CrystalAnalyzer
+from qem.viz.color import get_unique_colors
 from qem.viz.select import GetRegionSelection
 
 
@@ -17,8 +18,8 @@ class Region:
     index: int = None
     path: Path = None
     image_shape: tuple[int, int] = None
-    analyzer: Optional[CrystalAnalyzer] = None
-    columns: Optional[AtomicColumns] = None
+    analyzer: CrystalAnalyzer | None = None
+    columns: AtomicColumns | None = None
 
     def __str__(self):
         return f"Region data: {self.name}"
@@ -26,9 +27,9 @@ class Region:
     def __repr__(self):
         return f"Region data: {self.name}"
 
-    def view_3d(self):
+    def view_3d(self) -> None:
         view(self.columns.lattice)
-    
+
     @property
     def lattice(self):
         return self.columns.lattice
@@ -49,20 +50,20 @@ class Regions:
         ])
         self.region_dict = {0: Region(name="init", index=0, path=init_region_path, image_shape=image.shape)}
 
-    def add_region(self, region: Region):
+    def add_region(self, region: Region) -> None:
         self.region_dict[region.index] = region
 
-    def remove_region(self, region: Region):
+    def remove_region(self, region: Region) -> None:
         if region.index in self.region_dict:
             del self.region_dict[region.index]
-    
+
     def get_region(self, idx: int) -> Region:
         return self.region_dict.get(idx)
-    
-    def reset_regions(self):
+
+    def reset_regions(self) -> None:
         self.region_dict = {}
 
-    def plot_regions(self):
+    def plot_regions(self) -> None:
         plt.imshow(self.image, cmap='gray')
         for idx, region in self.region_dict.items():
             color = get_unique_colors()
@@ -82,8 +83,8 @@ class Regions:
             if region.path is not None:
                 region_map[region.path.contains_points(np.indices(self.image.shape).T.reshape(-1, 2)).reshape(self.image.shape)] = region.index
         return region_map
-    
-    def plot(self):
+
+    def plot(self) -> None:
         plt.figure()
         plt.imshow(self.image, cmap="gray")
         plt.imshow(self.region_map, alpha=0.5)
@@ -114,7 +115,7 @@ class Regions:
     def lattice(self, index: int = None):
         if index is None:
             # combine all the regional atomic columns
-            for region_index in self.region_dict.keys():
+            for region_index in self.region_dict:
                 atomic_column = self.region_dict[region_index].columns
                 lattice = atomic_column.lattice
                 if region_index == list(self.region_dict.keys())[0]:
@@ -123,16 +124,17 @@ class Regions:
                     lattice_total += lattice
             return lattice_total
         else:
-            assert index in self.region_dict.keys(), "The region index is not in the regions."
+            if index not in self.region_dict:
+                raise KeyError(f"Region index {index} not in {list(self.region_dict.keys())}")
             return self.region_dict[index].columns.lattice
-    
-    def view_3d(self, index: int = None):
+
+    def view_3d(self, index: int = None) -> None:
         view(self.lattice(index))
 
     @property
     def num_regions(self):
         return len(self.region_dict.keys())
-    
+
     def __getitem__(self, idx):
         return self.region_dict[idx]
 

@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Mapping, Optional
 
 import numpy as np
 import torch
 from torch import nn
 
 from qem.fit.loop import fit_loop, make_optimizer
-from qem.utils.exceptions import DataError, ParameterError
 from qem.utils.elements import chemical_symbols
+from qem.utils.exceptions import DataError, ParameterError
 from qem.utils.tensors import best_device
 
 from .dataset import MultiModalDataset
-
 
 # torch.compile gating — skip on MPS (graph compilation not supported) and
 # respect QEM_COMPILE=0 opt-out.
@@ -36,11 +35,11 @@ class FusionResult:
     """Result returned by :class:`JointLeastSquaresRoute`."""
 
     concentrations: np.ndarray
-    elements: List[str]
-    cost_history: Dict[str, List[float]]
-    metadata: Dict[str, object] = field(default_factory=dict)
+    elements: list[str]
+    cost_history: dict[str, list[float]]
+    metadata: dict[str, object] = field(default_factory=dict)
 
-    def as_maps(self) -> Dict[str, np.ndarray]:
+    def as_maps(self) -> dict[str, np.ndarray]:
         return {
             element: self.concentrations[..., index]
             for index, element in enumerate(self.elements)
@@ -90,7 +89,7 @@ class JointLeastSquaresRoute:
 
     def __init__(
         self,
-        elements: List[str],
+        elements: list[str],
         gamma: float = 1.6,
         lambda_adf: float = 1.0,
         lambda_edx: float = 1.0,
@@ -99,7 +98,7 @@ class JointLeastSquaresRoute:
         step_size: float = 0.05,
         max_iter: int = 100,
         tolerance: float = 1e-6,
-        adf_weights: Optional[Iterable[float]] = None,
+        adf_weights: Iterable[float] | None = None,
         normalize_inputs: bool = True,
         resize_modalities: bool = True,
     ) -> None:
@@ -126,7 +125,7 @@ class JointLeastSquaresRoute:
         )
         self.normalize_inputs = bool(normalize_inputs)
         self.resize_modalities = bool(resize_modalities)
-        self.result_: Optional[FusionResult] = None
+        self.result_: FusionResult | None = None
 
         if self.adf_weights.shape != (len(self.elements),):
             raise ParameterError("adf_weights length must match elements", "adf_weights")
@@ -134,8 +133,8 @@ class JointLeastSquaresRoute:
     def fit(
         self,
         dataset: MultiModalDataset,
-        initial: Optional[np.ndarray] = None,
-    ) -> "JointLeastSquaresRoute":
+        initial: np.ndarray | None = None,
+    ) -> JointLeastSquaresRoute:
         self._validate_dataset(dataset)
         adf = _normalise_signal(dataset.adf) if self.normalize_inputs else dataset.adf.copy()
 
@@ -291,7 +290,7 @@ class JointLeastSquaresRoute:
         if dataset.eels is not None and dataset.eels_reference is None:
             raise DataError("eels_reference is required when eels data is present")
 
-    def _normalise_reference(self, reference: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    def _normalise_reference(self, reference: np.ndarray | None) -> np.ndarray | None:
         if reference is None:
             return None
         ref = np.asarray(reference, dtype=np.float64)
@@ -304,11 +303,11 @@ class JointLeastSquaresRoute:
     def _initial_concentrations(
         self,
         dataset: MultiModalDataset,
-        edx: Optional[np.ndarray],
-        eels: Optional[np.ndarray],
-        edx_ref: Optional[np.ndarray],
-        eels_ref: Optional[np.ndarray],
-        initial: Optional[np.ndarray],
+        edx: np.ndarray | None,
+        eels: np.ndarray | None,
+        edx_ref: np.ndarray | None,
+        eels_ref: np.ndarray | None,
+        initial: np.ndarray | None,
     ) -> np.ndarray:
         if initial is not None:
             x = np.asarray(initial, dtype=np.float64)

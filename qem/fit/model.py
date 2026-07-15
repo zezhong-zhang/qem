@@ -12,7 +12,8 @@ from __future__ import annotations
 
 import os
 from abc import abstractmethod
-from typing import Any, Mapping
+from collections.abc import Mapping
+from typing import Any, TypedDict
 
 import numpy as np
 import torch
@@ -21,6 +22,23 @@ from torch import nn
 
 from qem.utils.tensors import to_numpy, to_tensor
 
+
+class FitParams(TypedDict, total=False):
+    """Schema of the parameter dict passed around the fitting pipeline.
+
+    Values are torch tensors (or array-likes coerced to tensors). ``N`` is the
+    number of atomic columns; ``K`` is ``num_atom_types`` when ``same_width`` is
+    set, otherwise ``N``. All per-atom arrays are aligned with ``Fitter.coordinates``.
+    """
+
+    pos_x: Any        # (N,) column x positions, pixels
+    pos_y: Any        # (N,) column y positions, pixels
+    height: Any       # (N,) peak heights
+    width: Any        # (K,) Gaussian/Lorentzian widths
+    ratio: Any        # (K,) Voigt Lorentzian/Gaussian mix (Voigt model only)
+    background: Any   # scalar background level
+    atom_types: Any   # (N,) int64 element index per column (config)
+    same_width: Any   # bool — share width across atoms of the same type (config)
 
 # torch.compile gating — skip on MPS (graph compilation not supported) and
 # respect QEM_COMPILE=0 opt-out.
@@ -191,7 +209,10 @@ class ImageModel(nn.Module):
         only atom positions vary between fit-loop iterations, so we keep
         the static window grid and skip the per-call allocation.
         """
-        assert self.input_params is not None
+        if self.input_params is None:
+            raise RuntimeError(
+                "input_params not set; call set_params()/build() first"
+            )
         # Cache window_size at set_params time. Recomputing every
         # forward pass triggers a CPU sync via .item() — on MPS each
         # sync costs hundreds of µs, dominating the fit-loop overhead.

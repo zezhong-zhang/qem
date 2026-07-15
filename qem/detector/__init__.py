@@ -6,7 +6,6 @@ in :mod:`qem.optics`, not here.
 
 from __future__ import annotations
 
-from .detector import Calibrate_Detector, Calibrate_Dose, Detector
 from ..optics.tilt import SampleTilt, tilt_from_affine
 from ..optics.wave import (
     Cc_defocus_spread,
@@ -19,6 +18,7 @@ from ..optics.wave import (
     plane_wave_illumination,
     simulation_result_with_Cc,
 )
+from .detector import Calibrate_Detector, Calibrate_Dose, Detector
 
 __all__ = [
     # detector

@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from typing import Dict, List
 
 import numpy as np
 from ase import Atoms
@@ -24,10 +23,10 @@ class AtomicColumns:
     """
     lattice: Atoms
     lattice_ref: Atoms
-    elements: List[str] = field(default_factory=list)
+    elements: list[str] = field(default_factory=list)
     tol: float = 0
     pixel_size: float = 0.1
-    reference: Dict[str, np.ndarray] = field(default_factory=lambda: {
+    reference: dict[str, np.ndarray] = field(default_factory=lambda: {
         'origin': np.array([0, 0]),
         'vector_a': np.array([1, 0]),
         'vector_b': np.array([0, 1])
@@ -139,7 +138,7 @@ class AtomicColumns:
         return atomic_numbers
 
     @property
-    def column_elements(self) -> List[str]:
+    def column_elements(self) -> list[str]:
         """Return a list of column elements."""
         return [chemical_symbols[atomic_number] for atomic_number in self.atomic_numbers]
 
@@ -208,52 +207,52 @@ class AtomicColumns:
         """
         if not atom_count_estimates:
             return self.lattice, self.lattice_ref
-            
+
         # Determine Z-spacing from existing lattice structure
         z_spacing = self._determine_z_spacing_from_lattice()
-        
+
         new_lattice = self.lattice.copy()
         new_lattice_ref = self.lattice_ref.copy()
-        
+
         # Get unique columns based on 2D positions
         unique_positions_2d, unique_indices = np.unique(
             self.lattice.positions[:, :2], axis=0, return_index=True
         )
-        
+
         atoms_to_add = []
         atoms_to_add_ref = []
-        
+
         for column_idx, unique_idx in enumerate(unique_indices):
             # Get the original atom at this column
             original_atom = self.lattice[unique_idx]
             original_atom_ref = self.lattice_ref[unique_idx]
-            
+
             # Get element symbol
             element_symbol = original_atom.symbol
-            
+
             # Check if we have GMM estimates for this element
             if element_symbol not in atom_count_estimates:
                 continue
-                
+
             # Get the estimated atom count for this column
             estimated_count = int(atom_count_estimates[element_symbol][column_idx])
-            
+
             # Add additional atoms if count > 1
             if estimated_count > 1:
                 additional_atoms = estimated_count - 1
-                
+
                 # Calculate symmetric Z positions around the original position
                 original_z = original_atom.position[2]
                 z_positions = self._calculate_symmetric_z_positions(
                     original_z, additional_atoms, z_spacing
                 )
-                
+
                 # Add atoms at calculated Z positions
                 for z_pos in z_positions:
                     # Create new atom at same X,Y but different Z
                     new_position = [
                         original_atom.position[0],
-                        original_atom.position[1], 
+                        original_atom.position[1],
                         z_pos
                     ]
                     new_position_ref = [
@@ -261,25 +260,25 @@ class AtomicColumns:
                         original_atom_ref.position[1],
                         z_pos  # Use same Z for reference
                     ]
-                    
+
                     atoms_to_add.append((element_symbol, new_position))
                     atoms_to_add_ref.append((element_symbol, new_position_ref))
-        
+
         # Add all new atoms to the lattices
         for symbol, position in atoms_to_add:
             new_lattice.append(symbol)
             new_lattice.positions[-1] = position
-            
+
         for symbol, position in atoms_to_add_ref:
             new_lattice_ref.append(symbol)
             new_lattice_ref.positions[-1] = position
-            
+
         # Update the lattice objects
         self.lattice = new_lattice
         self.lattice_ref = new_lattice_ref
-        
+
         return new_lattice, new_lattice_ref
-    
+
     def _determine_z_spacing_from_lattice(self):
         """Determine appropriate Z-spacing from the existing lattice structure.
         
@@ -291,10 +290,10 @@ class AtomicColumns:
         """
         if len(self.lattice) == 0:
             return 2.0  # Default fallback
-            
+
         # Get all Z positions
         z_positions = self.lattice.positions[:, 2]
-        
+
         if len(np.unique(z_positions)) == 1:
             # All atoms at same Z - use unit cell c-axis if available
             if hasattr(self.lattice, 'cell') and self.lattice.cell is not None:
@@ -312,7 +311,7 @@ class AtomicColumns:
                 return np.median(z_differences)
             else:
                 return 2.0
-    
+
     def _calculate_symmetric_z_positions(self, center_z: float, num_atoms: int, spacing: float):
         """Calculate symmetric Z positions around a center position.
         
@@ -335,7 +334,7 @@ class AtomicColumns:
         else:
             # Multiple atoms distributed symmetrically
             positions = []
-            
+
             # Calculate spacing to distribute atoms evenly
             if num_atoms % 2 == 0:
                 # Even number of atoms: place pairs symmetrically around center
@@ -353,5 +352,5 @@ class AtomicColumns:
                     offset = i * spacing * 0.5
                     positions.append(center_z + offset)
                     positions.append(center_z - offset)
-                    
+
             return positions

@@ -17,7 +17,6 @@ import logging
 import logging.handlers
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, Union
 
 from tqdm import tqdm
 
@@ -34,8 +33,8 @@ class TqdmLoggingHandler(logging.Handler):
 
 
 def setup_logging(
-    level: Union[str, int] = "INFO",
-    log_file: Optional[Union[str, Path]] = None,
+    level: str | int = "INFO",
+    log_file: str | Path | None = None,
 ) -> None:
     """Configure the root QEM logger. Idempotent."""
     if isinstance(level, str):

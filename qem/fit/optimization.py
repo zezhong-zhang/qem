@@ -30,16 +30,16 @@ from __future__ import annotations
 
 import logging
 import math
+from collections.abc import Callable
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import torch
-from tqdm.auto import tqdm   # auto picks the JS bar in Jupyter, ASCII in TTY
+from tqdm.auto import tqdm  # auto picks the JS bar in Jupyter, ASCII in TTY
 
 from qem.utils.arrays import get_random_indices_in_batches
 from qem.utils.tensors import clone_params, release_memory, stop_grad, to_numpy
-
 
 # Inverse golden-ratio squared, used as Brent's golden-section fallback step.
 _INV_PHI2: float = 0.5 * (3.0 - math.sqrt(5.0))   # ≈ 0.381966
@@ -181,13 +181,13 @@ class FitterOptimizationMixin:
     device: torch.device
     x_grid_batched: torch.Tensor
     y_grid_batched: torch.Tensor
-    memory_monitor: "MemoryMonitor | None"
+    memory_monitor: MemoryMonitor | None
     params: dict[str, Any]
     same_width: bool
     num_coordinates: int
     converged: bool
     prediction: Any
-    _optimization_model: "ImageModel | None"
+    _optimization_model: ImageModel | None
 
     # ------------------------------------------------------------------
     # Core dispatch
@@ -195,7 +195,7 @@ class FitterOptimizationMixin:
 
     def optimize(
         self,
-        model: "ImageModel",
+        model: ImageModel,
         image_tensor: torch.Tensor | None = None,
         params: dict | None = None,
         maxiter: int = 1000,
@@ -247,7 +247,7 @@ class FitterOptimizationMixin:
                     gtol=optimizer_kwargs.get("gtol", 1e-9),
                     lam_init=optimizer_kwargs.get("lam_init", 1e-3),
                     loss=optimizer_kwargs.get("loss", "l2"),
-                    loss_scale=optimizer_kwargs.get("loss_scale", None),
+                    loss_scale=optimizer_kwargs.get("loss_scale"),
                     scale=optimizer_kwargs.get("scale", True),
                     verbose=optimizer_kwargs.get("verbose", False),
                     progress=optimizer_kwargs.get("progress", True),
@@ -586,8 +586,13 @@ class FitterOptimizationMixin:
                 return 1e30
             try:
                 r = self._residual_sum_for_width(float(sigma_val))
-            except Exception as exc:
-                log.warning("fit_width_first: failed at σ=%.3f: %s", sigma_val, exc)
+            # Numerical/shape failures in the estimator + predict path;
+            # torch surfaces these as RuntimeError, numpy as ValueError.
+            except (RuntimeError, ValueError, IndexError, np.linalg.LinAlgError) as exc:
+                log.warning(
+                    "fit_width_first: failed at σ=%.3f (%s): %s",
+                    sigma_val, type(exc).__name__, exc,
+                )
                 bar.update(1)
                 return 1e30
             history.append((float(sigma_val), r))

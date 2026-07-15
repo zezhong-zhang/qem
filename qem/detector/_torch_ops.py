@@ -8,7 +8,6 @@ where possible.  Falls back to CPU/cv2/scipy when torch/cuda is unavailable.
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import numpy as np
 import torch
@@ -23,14 +22,16 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from cv2 import GaussianBlur as _cv2_gaussian_blur, moments as _cv2_moments
+    from cv2 import GaussianBlur as _cv2_gaussian_blur
+    from cv2 import moments as _cv2_moments
 except ImportError:
     _cv2_gaussian_blur = None  # type: ignore[assignment]
     _cv2_moments = None  # type: ignore[assignment]
 
 
 try:
-    from skimage import filters as _skimage_filters, segmentation as _skimage_segmentation
+    from skimage import filters as _skimage_filters
+    from skimage import segmentation as _skimage_segmentation
     from skimage.feature import canny as _skimage_canny
 except ImportError:
     _skimage_filters = None  # type: ignore[assignment]
@@ -95,11 +96,11 @@ def _gaussian_blur(image: np.ndarray, kernel_size: int = 5, sigma: float = 2.0, 
         t = to_tensor(image, dtype="float32").to(device)
         blurred = torch_gaussian_blur(t, kernel_size=kernel_size, sigma=sigma)
         return to_numpy(blurred)
-    except Exception:
+    except Exception as e:
         if _cv2_gaussian_blur is not None:
             k = (kernel_size, kernel_size)
             return _cv2_gaussian_blur(image.astype(np.float32), k, sigmaX=sigma, sigmaY=sigma)
-        raise RuntimeError("No Gaussian blur backend available (torch or cv2)")
+        raise RuntimeError("No Gaussian blur backend available (torch or cv2)") from e
 
 
 # ---------------------------------------------------------------------------
@@ -178,13 +179,13 @@ def torch_otsu_mask(image: np.ndarray | torch.Tensor, normalized: bool = False, 
                 regions += (t > thr).long()
             mask = regions == 1
         return to_numpy(mask) if not is_torch_input else mask
-    except Exception:
+    except Exception as e:
         if _skimage_filters is not None:
             thresholds = _skimage_filters.threshold_multiotsu(to_numpy(t), classes=2)
             regions = np.digitize(to_numpy(t), bins=thresholds)
             mask = regions == 1
             return mask
-        raise RuntimeError("No Otsu backend available")
+        raise RuntimeError("No Otsu backend available") from e
 
 
 def torch_watershed_mask(image: np.ndarray | torch.Tensor, device: torch.device | None = None) -> np.ndarray:
@@ -211,7 +212,7 @@ def torch_watershed_mask(image: np.ndarray | torch.Tensor, device: torch.device 
         # Very basic approximation: just return the marker boundary
         mask = markers == 2
         return to_numpy(mask) if not is_torch_input else mask
-    except Exception:
+    except Exception as e:
         if _skimage_segmentation is not None:
             np_img = to_numpy(t)
             markers_np = np.zeros_like(np_img)
@@ -220,7 +221,7 @@ def torch_watershed_mask(image: np.ndarray | torch.Tensor, device: torch.device 
             markers_np[np_img > threshold_value] = 2
             mask = _skimage_segmentation.watershed(np_img, markers_np)
             return mask
-        raise RuntimeError("No watershed backend available")
+        raise RuntimeError("No watershed backend available") from e
 
 
 def torch_edge_mask(image: np.ndarray | torch.Tensor, sigma: float = 3.0, device: torch.device | None = None) -> np.ndarray:
@@ -254,14 +255,14 @@ def torch_edge_mask(image: np.ndarray | torch.Tensor, sigma: float = 3.0, device
             return mask
         # Pure-torch approximation: no hole filling, just edges
         return to_numpy(edges) if not is_torch_input else edges
-    except Exception:
+    except Exception as e:
         if _skimage_canny is not None and _scipy_ndi is not None:
             np_img = to_numpy(t)
             edges = _skimage_canny(np_img, sigma=sigma)
             fill_detector = _scipy_ndi.binary_fill_holes(edges)
             mask = _scipy_ndi.binary_erosion(fill_detector, iterations=1)
             return mask
-        raise RuntimeError("No edge mask backend available")
+        raise RuntimeError("No edge mask backend available") from e
 
 
 # ---------------------------------------------------------------------------

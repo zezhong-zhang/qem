@@ -130,7 +130,6 @@ def pg_nnls(
         A_T_scaled.shape,
     )
     inv_norms_t = torch.as_tensor(inv_norms)
-    col_norms_t = torch.as_tensor(col_norms)
 
     M, N = A_csr.shape
     if isinstance(b, np.ndarray):
